@@ -76,7 +76,7 @@ Node ESM + 原生 HTML/CSS/JS（沿用上游 `public/styles.css` 的类名与配
 - [x] 社区名单：拉取 / 指纹自动命名 / 生成投稿
 - [x] 依赖自检、运行日志、问题反馈
 - [x] 脱敏门禁 + 指纹去重合并
-- [ ] 发布：把 `midi/community-catalog.js`、`public/listen-naming-feedback.js` 里的 `<owner>/<repo>` 换成自己的仓库
+- [x] 发布：社区仓库地址已写入 `midi/community-catalog.js`、`public/listen-naming-feedback.js`、`server.js`（guvgr2/OliviaSoul-community）
 
 ---
 
@@ -106,3 +106,14 @@ Node ESM + 原生 HTML/CSS/JS（沿用上游 `public/styles.css` 的类名与配
 
 想彻底解决只能给程序买代码签名证书（大约 $10/月起，例如 Azure Trusted Signing）——
 签过名的程序不会显示"未知发布者"，信誉也会逐步建立起来。
+
+## 致谢
+
+- **Clously** —— 开源项目《OliviaSoul》，一切从这里开始
+- **yilangren** —— [OliviaSoul](https://github.com/yilangren/OliviaSoul) 上游仓库的持续维护
+- **coderscsy** —— [linli](https://github.com/coderscsy/linli) 分支，本仓库自它分叉而来（已获上游授权）
+- **挥手再见** —— 玩家上传歌曲库，社区名单里最初的曲名来源
+- **Node.js、FFmpeg、WebView2、Inno Setup** —— 随包分发的开源组件，许可证见 [开源软件声明.md](开源软件声明.md)
+
+还要谢谢每一位帮忙试听、起名、报 Bug、提建议的朋友：
+社区名单里的每一个曲名，都是这样一首一首听出来、攒起来的。
