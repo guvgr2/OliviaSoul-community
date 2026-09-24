@@ -87,6 +87,15 @@ Node ESM + 原生 HTML/CSS/JS（沿用上游 `public/styles.css` 的类名与配
 这个程序**没有代码签名证书**，而且它会启动 `node.exe`、调用 `ffmpeg`、扫描你本地的视频文件，
 这些行为特征和某些恶意软件相似，所以杀软（尤其卡巴斯基）经常误报。程序本身不含恶意代码，源码全部公开可查。
 
+**第三方检测结果（2026-09-25，版本 `2008.2.7-linli9-g04`）**
+
+| 文件 | VirusTotal 结果 |
+| --- | --- |
+| 安装包 `OliviaSoul-2008.2.7-linli9-g04-Setup.exe` | **51 家引擎全部未检出** —— [报告](https://www.virustotal.com/gui/file/879ebbf9481d69c086e51e9bb90c450f0f4b08456c394bed5aa5599daf90103c) |
+| 便携包 `OliviaSoul-2008.2.7-linli9-g04-Portable.zip` | **60 家中 59 家未检出**；唯一报毒的 ViRobot 报的是 `Win95.Marburg`（1995 年的 DOS 病毒名），属于老特征库误报 —— [报告](https://www.virustotal.com/gui/file/5b97aab0f3242d49951d7d943b4950e224dc30e0a251fe2d3a730384fd14b205) |
+
+也就是说：**内容层面没有恶意代码**，报毒来自“程序没有代码签名 + 会启动随包的 node/ffmpeg + 大量读写本地文件”这套行为与信誉判断。
+
 三件事可以做：
 
 **1. 加排除项（立刻见效）**
