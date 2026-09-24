@@ -20,7 +20,7 @@ import { createNativeLyricsObserver } from './lyrics/native.js';
 import { createNativeLyricsControl } from './lyrics/native-control.js';
 import { createHash, randomUUID } from "node:crypto";
 import { copyFile, readFile, writeFile, mkdir, open, rename, rm, stat, statfs } from "node:fs/promises";
-import { createReadStream, createWriteStream, existsSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { Transform } from "node:stream";
@@ -90,7 +90,16 @@ const BULK_SUMMARY_PROMPT_VERSION = "v4-source-attribution";
 const MAX_VIDEO_BYTES = 512 * 1024 * 1024;
 const MAX_TRANSCRIPTION_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024;
 const DEFAULT_UPDATE_REPOSITORY = "guvgr2/OliviaSoul-community";
-const DEFAULT_UPDATE_TAG = "2008.2.7-linli.9";
+const DEFAULT_UPDATE_TAG = (() => {
+  // 当前版本标记：优先读随包的 package.json（打包脚本每次都会写入版本号），
+  // 读不到才退回内置值。这样以后升版本号，升级检测的"当前版本"自动跟着走，不会漏改。
+  try {
+    const pkg = JSON.parse(readFileSync(join(here, "package.json"), "utf8"));
+    return String(pkg?.version ?? "").trim() || "2008.2.7-linli.9";
+  } catch {
+    return "2008.2.7-linli.9";
+  }
+})();
 const INJECTION_PATTERNS = [
   /ignore\s+(all\s+)?previous\s+instructions?/i,
   /system\s*prompt/i,
@@ -140,8 +149,11 @@ function modelIdsFromPayload(payload) {
 }
 
 function releaseVersion(tag) {
-  const match = /^(\d+)\.(\d+)\.(\d+)-linli\.(\d+)$/u.exec(String(tag ?? "").trim());
-  return match ? match.slice(1).map(Number) : null;
+  // 同时接受 -linli.9（上游老格式）与 -linli9-g04（本分支格式）。
+  const match = /^(\d+)\.(\d+)\.(\d+)-linli\.?(\d+)(?:-g(\d+))?$/u.exec(String(tag ?? "").trim());
+  if (!match) return null;
+  // 固定 5 段：[主, 次, 补丁, linli 大版本, g 小版本]；没有 g 的按 0 算，两者才能比较
+  return [Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4]), Number(match[5] ?? 0)];
 }
 
 function isNewerRelease(currentTag, latestTag) {
@@ -676,6 +688,8 @@ export async function createOliviaService(options = {}) {
         "X-GitHub-Api-Version": "2022-11-28",
       },
     });
+    if (response.status === 404)
+      throw new Error("这个仓库还没有发布任何版本（Releases 里是空的），所以查不到更新");
     if (!response.ok) throw new Error(`GitHub HTTP ${response.status}`);
     const release = await response.json();
     const latestTag = String(release?.tag_name ?? "").trim();

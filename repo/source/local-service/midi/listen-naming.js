@@ -383,7 +383,8 @@ export async function createListenNamingRoutes(options = {}) {
     // 兼容两种调用写法：(req, res, url) 与旧的 (req, url)——只传两个参数时 res 其实是 URL。
     if (res && typeof res.writeHead !== "function") { url = res; res = null; }
       const path = routePathOf(url).replace(/^\/toy/u, "").replace(/^\/admin\/api/u, "");
-      if (path.startsWith("/listen-naming")) {
+      const OWNED = ["/listen-naming/list", "/listen-naming/clip", "/listen-naming/name", "/listen-naming/status"];
+      if (OWNED.includes(path)) {
         return { needsLibrary: true, message: "还没设置曲目存储路径。请到「基础设置」里设置后，再回来使用本功能。" };
       }
       return null;
@@ -723,7 +724,11 @@ export async function createListenNamingRoutes(options = {}) {
     if (req.method === "POST" && path === "/listen-naming/name") return await handleName(req, res, url);
     if (req.method === "GET" && path === "/listen-naming/status")
       return { named: session.named, backupFile: session.backupFile, databasePath, libraryRoot, clipsDir, ffmpeg: ffmpegPath() };
-    throw httpError(404, "接口不存在", "LISTEN_NAMING_NOT_FOUND");
+    // 不是本模块的接口：必须 return null 交回给后面的挂载点。
+    // 依赖自检（/listen-naming/dependencies）、画面识别（/listen-naming/time-of-day/*）、
+    // 社区名单（/listen-naming/community/*）都与本模块共用 /listen-naming/ 前缀，
+    // 这里一旦抛 404，就会把它们的请求全部截胡（表现为「检查失败：接口不存在」）。
+    return null;
   };
 }
 

@@ -45,7 +45,7 @@ const DEFAULT_DATABASE_PATH = join(DEFAULT_DATA_DIR, "database", "olivia-local.s
 // ---------------------------------------------------------------- 配置
 
 // 社区仓库地址：发布版已填好；以后换仓库只改这一行。
-// （这里是占位符，故意不指向任何真实仓库，免得写死一个会变的地址。）
+// 换仓库只改这一行；改完记得同步 public/listen-naming-feedback.js 与 server.js 里的同名字段。
 export const DEFAULT_CATALOG_URL = "https://raw.githubusercontent.com/guvgr2/OliviaSoul-community/main/data/catalog.json";
 
 export const CATALOG_VERSION = 1;
@@ -58,7 +58,7 @@ export const BACKUP_PREFIX = "backup-community-";
 const HTTP_TIMEOUT_MS = 30_000;
 const MAX_CATALOG_BYTES = 8 * 1024 * 1024;
 
-let USER_DATA_DIR = process.env.OLIVIA_USER_DATA || "";
+let USER_DATA_DIR = process.env.OLIVIA_USER_DATA || DEFAULT_DATA_DIR;
 let DATABASE_PATH = process.env.OLIVIA_COMMUNITY_DB || process.env.OLIVIA_LISTEN_DB || DEFAULT_DATABASE_PATH;
 let BACKUP_DIR = process.env.OLIVIA_COMMUNITY_BACKUP || join(DEFAULT_DATA_DIR, "database");
 let LIBRARY_ROOT = process.env.OLIVIA_COMMUNITY_LIBRARY_ROOT || process.env.OLIVIA_LISTEN_LIBRARY_ROOT || "";
@@ -962,6 +962,7 @@ export async function createCommunityRoutes(options = {}) {
     if (req.method === "GET" && path === "/listen-naming/community/consent") {
       return { share: await shareConsent(shared), settingsPath: settingsPathOf(shared) };
     }
-    throw httpError(404, "接口不存在", "COMMUNITY_NOT_FOUND");
+    // 不是本模块的接口 → 交回给后面的挂载点（不要抛 404 截胡）。
+    return null;
   };
 }

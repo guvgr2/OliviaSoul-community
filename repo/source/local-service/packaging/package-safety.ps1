@@ -1,4 +1,4 @@
-function Assert-EmptyPackageDirectory {
+﻿function Assert-EmptyPackageDirectory {
     param([Parameter(Mandatory = $true)][string]$Path, [string[]]$ProtectedRoots = @())
     $full = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
     $root = [IO.Path]::GetPathRoot($full).TrimEnd('\', '/')

@@ -790,6 +790,7 @@ export async function createTimeOfDayRoutes(options = {}) {
         thresholds: { brightnessDay: TOD_BRIGHT_DAY, brightnessNight: TOD_BRIGHT_NIGHT, warmthDusk: TOD_WARM_DUSK },
       };
     }
-    throw httpError(404, "接口不存在", "TIME_OF_DAY_NOT_FOUND");
+    // 不是本模块的接口 → 交回给后面的挂载点（不要抛 404 截胡）。
+    return null;
   };
 }

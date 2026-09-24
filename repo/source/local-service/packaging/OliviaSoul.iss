@@ -1,4 +1,4 @@
-#define AppVersion GetEnv("OLIVIA_SOUL_VERSION")
+﻿#define AppVersion GetEnv("OLIVIA_SOUL_VERSION")
 #define StageDir GetEnv("OLIVIA_SOUL_STAGE")
 #define OutputDir GetEnv("OLIVIA_SOUL_OUTPUT")
 
