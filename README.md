@@ -93,6 +93,7 @@ Node ESM + 原生 HTML/CSS/JS（沿用上游 `public/styles.css` 的类名与配
 | --- | --- |
 | 安装包 `OliviaSoul-2008.2.7-linli9-g04-Setup.exe` | **51 家引擎全部未检出** —— [报告](https://www.virustotal.com/gui/file/879ebbf9481d69c086e51e9bb90c450f0f4b08456c394bed5aa5599daf90103c) |
 | 便携包 `OliviaSoul-2008.2.7-linli9-g04-Portable.zip` | **60 家中 59 家未检出**；唯一报毒的 ViRobot 报的是 `Win95.Marburg`（1995 年的 DOS 病毒名），属于老特征库误报 —— [报告](https://www.virustotal.com/gui/file/5b97aab0f3242d49951d7d943b4950e224dc30e0a251fe2d3a730384fd14b205) |
+| `OliviaSoul.exe`（主程序本体，1.31 MB） | 卡巴斯基 OpenTip **动态分析：干净**（探测 0 / 可疑活动 0 / 网络活动 0，未提取到任何威胁） —— [报告](https://opentip.kaspersky.com/E502707CF7C3CEE0D00855E8786D53B01C2629B4DF2C11C4031BECD5C282B331/results) |
 
 也就是说：**内容层面没有恶意代码**，报毒来自“程序没有代码签名 + 会启动随包的 node/ffmpeg + 大量读写本地文件”这套行为与信誉判断。
 
