@@ -1,0 +1,37 @@
+# 依赖与构建产物
+node_modules/
+dist-native/
+build/
+repo/build/
+*.log
+
+# 本地数据与隐私：绝不入库
+记录/
+备份/
+临时/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*queue.json
+clips/
+*.mp3
+*.mp4
+
+# 个人环境
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+# 编译产物与中间文件（会包含本机路径 / 用户名，绝不入库）
+native-host/obj/
+native-host/bin/
+**/obj/
+**/bin/
+dist-native/
+installer-output/
+*.nuget.dgspec.json
+project.assets.json
+*.user
+repo/build*/
+*.zip
+package-work/

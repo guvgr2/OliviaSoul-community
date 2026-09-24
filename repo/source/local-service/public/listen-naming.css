@@ -1,0 +1,140 @@
+/* 「曲名与时段」等新增页面的样式
+   上游 styles.css 里没有这些类，之前一直缺失，导致页面元素全是无样式的裸标签。
+   配色沿用应用本身那套深色值。 */
+.ln-statusChips { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ln-chip { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12.5px;
+  color: #c8ccd1; background: #262a31; border: 1px solid #2c3138; white-space: nowrap; }
+.ln-card { margin-top: 14px; }
+.ln-folder { font: 13px/1.6 Consolas, "Courier New", monospace; color: #8ab4f8; word-break: break-all; }
+.ln-meta { margin: 6px 0 0; }
+.ln-audio { width: 100%; margin: 12px 0; }
+.ln-nameBlock { margin-top: 12px; }
+.ln-nameRow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.ln-nameRow input[type="text"] { flex: 1 1 320px; min-width: 220px; padding: 11px 14px;
+  font: inherit; font-size: 16px; line-height: 1.4; border: 1px solid #3a4048; border-radius: 9px;
+  background: #0f1114; color: #ffffff; outline: none; }
+.ln-nameRow input[type="text"]::placeholder { color: #6f757c; }
+.ln-nameRow input[type="text"]:focus { border-color: #8ab4f8; }
+.ln-nameRow button { flex: 0 0 auto; padding: 11px 18px; font: inherit; font-size: 14px;
+  border: 1px solid #3a4048; border-radius: 9px; background: #262a31; color: #e8eaed; cursor: pointer; }
+.ln-nameRow button:hover { background: #2f343c; }
+.ln-nameRow button:disabled { opacity: .5; cursor: not-allowed; }
+.ln-submitHint { display: block; margin-top: 8px; color: #8b9198; font-size: 12.5px; line-height: 1.6; }
+.ln-sameNumber { margin: 10px 0 0; padding-left: 18px; color: #c8ccd1; font-size: 13px; line-height: 1.8; }
+.ln-sameNumberFolder { color: #8b9198; margin-right: 6px; font-family: Consolas, "Courier New", monospace; }
+.ln-path { display: block; margin-top: 8px; color: #6f757c; font-size: 12px; word-break: break-all; }
+/* 运行日志查看器：之前用 <pre> 但没有任何样式，浏览器默认等宽小字与整体不一致 */
+.ln-logViewer {
+  display: block;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 420px;
+  overflow-y: auto;
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  background: #0f1114;
+  border: 1px solid #2c3138;
+  border-radius: 9px;
+  color: #c8ccd1;
+  text-align: left;
+}
+.ln-logPath {
+  display: block;
+  margin-top: 8px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: #8b9198;
+  word-break: break-all;
+}
+/* ==========================================================================
+   新功能页面的文字排版（只作用于本分支新增页面，不影响上游原有页面）
+   起因：反馈表单里的 select / textarea 之前只设了尺寸、没设字体，
+   会落回浏览器默认的等宽小字，与应用其它地方不一致。
+   ========================================================================== */
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) h2 {
+  font-size: 19px; line-height: 1.5; font-weight: 600; margin: 0 0 4px;
+}
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) h3 {
+  font-size: 15.5px; line-height: 1.6; font-weight: 600; margin: 0 0 6px;
+}
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) p {
+  margin: 6px 0; line-height: 1.75;
+}
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) small {
+  font-size: 12.5px; line-height: 1.6;
+}
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) label {
+  font-size: 13.5px; line-height: 1.6;
+}
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) select,
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) textarea,
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) input[type="text"] {
+  font-family: inherit; font-size: 14px; line-height: 1.6;
+  color: #e8eaed; background: #0f1114;
+  border: 1px solid #3a4048; border-radius: 9px;
+  padding: 9px 12px; box-sizing: border-box;
+}
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) textarea {
+  width: 100%; min-height: 120px; resize: vertical;
+}
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) select {
+  min-width: 200px; margin-bottom: 10px;
+}
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) select:focus,
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) textarea:focus {
+  outline: none; border-color: #8ab4f8;
+}
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) table {
+  width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px;
+}
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) th,
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) td {
+  text-align: left; padding: 8px 10px; vertical-align: top; line-height: 1.7;
+  border-bottom: 1px solid #2c3138; color: #c8ccd1;
+}
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) th {
+  color: #9aa0a6; font-weight: 600;
+}
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) ul {
+  margin: 8px 0; padding-left: 20px; line-height: 1.8;
+}
+/* 反馈表单里的预览区、以及任何我们页面里的 pre：同样不能落回浏览器等宽小字 */
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) pre {
+  font-family: inherit; font-size: 13px; line-height: 1.75;
+  white-space: pre-wrap; word-break: break-all;
+  max-height: 300px; overflow-y: auto; text-align: left;
+  margin: 10px 0 0; padding: 12px 14px;
+  background: #0f1114; border: 1px solid #2c3138; border-radius: 9px;
+  color: #c8ccd1;
+}
+/* ==========================================================================
+   禁止横向溢出：新增页面必须只在竖直方向滚动
+   起因：页面里某个元素撑宽了容器（或长文本不换行），导致能用鼠标左右拖动、
+   右侧文字被切掉。这里统一收口。
+   ========================================================================== */
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) {
+  max-width: 100%;
+  overflow-x: hidden;
+  box-sizing: border-box;
+}
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) * {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) p,
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) div,
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) h2,
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) h3,
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) li,
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) span {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+/* 页头里的状态胶囊不换行、但也不能把标题挤出去 */
+:is([data-page="listen-naming"], [data-page="legal"], [data-page="dependency-check"], [data-page="logs"], [data-page="feedback"]) .ln-statusChips {
+  flex: 0 1 auto;
+  max-width: 45%;
+}

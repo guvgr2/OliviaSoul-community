@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "fingerprint": {
+    "algo": "chroma4x64",
+    "version": 1,
+    "threshold": 0.9
+  },
+  "updatedAt": "",
+  "license": "CC0-1.0",
+  "note": "社区曲目名单：文件夹编号 → {曲名, 音乐指纹, 校验哈希}。只含这三项，经 tools/sanitize.js 门禁校验。",
+  "entries": {}
+}
