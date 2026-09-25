@@ -268,8 +268,11 @@ namespace OliviaSoul
             _webView.CoreWebView2.NewWindowRequested += delegate(object sender, CoreWebView2NewWindowRequestedEventArgs args)
             {
                 args.Handled = true;
-                if (Uri.IsWellFormedUriString(args.Uri, UriKind.Absolute))
-                    Process.Start(new ProcessStartInfo(args.Uri) { UseShellExecute = true });
+                // 兜底：面板改走 openExternal 通道了，这里只放行同样的 https 白名单域名
+                string target;
+                try { target = DesktopBridge.ExternalLinkTarget(args.Uri); }
+                catch { WriteRuntimeLog("blocked-open-url " + Convert.ToString(args.Uri)); return; }
+                Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
             };
             _webView.CoreWebView2.NavigationStarting += delegate(object sender, CoreWebView2NavigationStartingEventArgs args)
             {

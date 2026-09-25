@@ -172,6 +172,111 @@ function Assert-PackageTextContent {
     }
 }
 
+# 大文件精查阈值：≥32 MB 的成品（安装包 / 便携包这类压缩产物）走精查路径。
+# 严格模式：把环境变量 OLIVIA_SOUL_FULL_SCAN 设为 1，即可恢复原来"6 种解码 × 10 条正则"的全量扫描。
+$script:LargeBinaryFastScanThresholdBytes = 32MB
+
+function Assert-LargeBinaryTextContent {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$RelativePath,
+        [string[]]$ForbiddenNeedles = @()
+    )
+
+    # 大文件（安装包 / 便携包这类压缩产物）精查路径。为什么需要它：
+    #   这两个文件是压缩产物，把整包按 1 MB 分块、每块解码 6 次再跑 10 条未编译正则，
+    #   实测 520 MB 要 486 秒，而同一文件哈希只要 0.4 秒 —— 十几分钟空转全在这里。
+    #   而它们的内容全部来自 stage 树，stage 树在打包前已经逐文件做过完整正则扫描。
+    # 本函数保留真正会命中的检查，且只用 Ordinal 查找（区分大小写 + 少量大小写变体）：
+    #   · 禁用值（调用方给的私密路径/账号等）
+    #   · C:\Users\<名>\ 、/Users/<名>/ 、/home/<名>/（名 != YOUR_NAME 即判负）
+    #   · sk- 密钥、内网地址 / ts.net / IPv6 ULA
+    #   · token / secret / api_key 等凭据词 —— 命中即整块交回原来的全量正则
+    #     （那三条凭据正则的必要条件就是这些词，所以凭据检测能力与原实现一致）
+    # 需要原样全量扫描时设环境变量 OLIVIA_SOUL_FULL_SCAN=1。
+    foreach ($needle in @($ForbiddenNeedles)) {
+        if ([string]::IsNullOrEmpty($needle)) { continue }
+        if ($Text.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            throw "[PRIVACY_CONTENT] Package privacy check rejected private content: $RelativePath"
+        }
+        # UTF-16LE / UTF-16BE 形态：在 Latin-1 解码串里表现为字符间夹 NUL，等价于原来单独解码再匹配
+        $le = ($needle.ToCharArray() | ForEach-Object { [string]$_ + [char]0 }) -join ''
+        $be = ([string][char]0 + ($needle.ToCharArray() | ForEach-Object { [string]$_ + [char]0 })) -join ''
+        if ($Text.IndexOf($le, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+            $Text.IndexOf($be, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            throw "[PRIVACY_CONTENT] Package privacy check rejected private content: $RelativePath"
+        }
+    }
+
+    foreach ($form in $script:LargeBinaryUserProbes) {
+        $index = $Text.IndexOf($form, [StringComparison]::Ordinal)
+        while ($index -ge 0) {
+            $start = $index + $form.Length
+            $cursor = $start
+            while ($cursor -lt $Text.Length -and
+                   $Text[$cursor] -ne '\' -and $Text[$cursor] -ne '/' -and $Text[$cursor] -ne '"' -and
+                   $Text[$cursor] -ne "'" -and $Text[$cursor] -ne '<' -and $Text[$cursor] -ne '>' -and
+                   -not [char]::IsWhiteSpace($Text[$cursor])) { $cursor += 1 }
+            $name = $Text.Substring($start, $cursor - $start)
+            if ($name -and $name -ine 'YOUR_NAME') {
+                throw "[PRIVACY_CONTENT] Package privacy check rejected private content: $RelativePath"
+            }
+            $index = $Text.IndexOf($form, $cursor, [StringComparison]::Ordinal)
+        }
+    }
+
+    $skIndex = $Text.IndexOf('sk-', [StringComparison]::Ordinal)
+    while ($skIndex -ge 0) {
+        $cursor = $skIndex + 3
+        while ($cursor -lt $Text.Length -and ($cursor - $skIndex - 3) -lt 128 -and
+               ([char]::IsLetterOrDigit($Text[$cursor]) -or $Text[$cursor] -eq '_' -or $Text[$cursor] -eq '-')) { $cursor += 1 }
+        if (($cursor - $skIndex - 3) -ge 16) {
+            throw "[PRIVACY_CONTENT] Package privacy check rejected private content: $RelativePath"
+        }
+        $skIndex = $Text.IndexOf('sk-', $cursor, [StringComparison]::Ordinal)
+    }
+
+    foreach ($probe in $script:LargeBinaryUrlProbes) {
+        if ($Text.IndexOf($probe, [StringComparison]::Ordinal) -ge 0) {
+            throw "[PRIVACY_CONTENT] Package privacy check rejected private content: $RelativePath"
+        }
+    }
+    $ulaIndex = $Text.IndexOf('://[', [StringComparison]::Ordinal)
+    while ($ulaIndex -ge 0) {
+        $cursor = $ulaIndex + 4
+        if ($cursor + 1 -lt $Text.Length) {
+            $pair = $Text.Substring($cursor, 2).ToLowerInvariant()
+            if ($pair -match '^(?:fd|fc|fe)') {
+                throw "[PRIVACY_CONTENT] Package privacy check rejected private content: $RelativePath"
+            }
+        }
+        $ulaIndex = $Text.IndexOf('://[', $cursor, [StringComparison]::Ordinal)
+    }
+
+    foreach ($word in $script:LargeBinaryCredentialWords) {
+        if ($Text.IndexOf($word, [StringComparison]::Ordinal) -ge 0) {
+            Assert-PackageTextContent -Text $Text -RelativePath $RelativePath -ForbiddenNeedles @()
+            return
+        }
+    }
+}
+
+# 精查用的固定探测词（只建一次）。都用 Ordinal 查找，所以大小写变体要显式列出。
+$script:LargeBinaryUserProbes = @(
+    ':\Users\', ':\users\', ':\USERS\',
+    ':\Users/', ':\users/',
+    '/Users/', '/users/', '/USERS/',
+    '/home/', '/HOME/', '/Home/'
+)
+$script:LargeBinaryUrlProbes = @(
+    '://10.', '://192.168.', '://172.', '://100.', '.ts.net', '.TS.net', '.Ts.net'
+)
+$script:LargeBinaryCredentialWords = @(
+    'token', 'Token', 'TOKEN',
+    'secret', 'Secret', 'SECRET',
+    'api_key', 'API_KEY', 'api-key', 'API-KEY', 'apikey', 'ApiKey'
+)
+
 function Get-PackageStreamHash {
     [CmdletBinding()]
     param(
@@ -185,6 +290,16 @@ function Get-PackageStreamHash {
     $buffer = New-Object byte[] (1024 * 1024)
     [byte[]]$carry = @()
     $carryLimit = 65536
+
+    # 大文件（安装包 / 便携包）走精查；OLIVIA_SOUL_FULL_SCAN=1 可强制全量扫描
+    $fastLargeBinaryScan = $false
+    if (-not $SkipContent -and $Stream.CanSeek) {
+        try {
+            $fastLargeBinaryScan = ($Stream.Length -ge $script:LargeBinaryFastScanThresholdBytes) -and
+                [string]::IsNullOrWhiteSpace($env:OLIVIA_SOUL_FULL_SCAN)
+        }
+        catch { $fastLargeBinaryScan = $false }
+    }
     try {
         while (($read = $Stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
             $null = $sha256.TransformBlock($buffer, 0, $read, $buffer, 0)
@@ -194,17 +309,28 @@ function Get-PackageStreamHash {
             if ($carry.Length -gt 0) { [Array]::Copy($carry, 0, $combined, 0, $carry.Length) }
             [Array]::Copy($buffer, 0, $combined, $carry.Length, $read)
 
-            foreach ($encoding in @(
-                [Text.Encoding]::GetEncoding(28591),
-                [Text.Encoding]::UTF8,
-                [Text.Encoding]::Unicode,
-                [Text.Encoding]::BigEndianUnicode
-            )) {
-                Assert-PackageTextContent -Text $encoding.GetString($combined) -RelativePath $RelativePath -ForbiddenNeedles $ForbiddenNeedles
+            if ($fastLargeBinaryScan) {
+                foreach ($encoding in @(
+                    [Text.Encoding]::GetEncoding(28591),
+                    [Text.Encoding]::Unicode,
+                    [Text.Encoding]::BigEndianUnicode
+                )) {
+                    Assert-LargeBinaryTextContent -Text $encoding.GetString($combined) -RelativePath $RelativePath -ForbiddenNeedles $ForbiddenNeedles
+                }
             }
-            if ($combined.Length -gt 1) {
-                Assert-PackageTextContent -Text ([Text.Encoding]::Unicode.GetString($combined, 1, $combined.Length - 1)) -RelativePath $RelativePath -ForbiddenNeedles $ForbiddenNeedles
-                Assert-PackageTextContent -Text ([Text.Encoding]::BigEndianUnicode.GetString($combined, 1, $combined.Length - 1)) -RelativePath $RelativePath -ForbiddenNeedles $ForbiddenNeedles
+            else {
+                foreach ($encoding in @(
+                    [Text.Encoding]::GetEncoding(28591),
+                    [Text.Encoding]::UTF8,
+                    [Text.Encoding]::Unicode,
+                    [Text.Encoding]::BigEndianUnicode
+                )) {
+                    Assert-PackageTextContent -Text $encoding.GetString($combined) -RelativePath $RelativePath -ForbiddenNeedles $ForbiddenNeedles
+                }
+                if ($combined.Length -gt 1) {
+                    Assert-PackageTextContent -Text ([Text.Encoding]::Unicode.GetString($combined, 1, $combined.Length - 1)) -RelativePath $RelativePath -ForbiddenNeedles $ForbiddenNeedles
+                    Assert-PackageTextContent -Text ([Text.Encoding]::BigEndianUnicode.GetString($combined, 1, $combined.Length - 1)) -RelativePath $RelativePath -ForbiddenNeedles $ForbiddenNeedles
+                }
             }
 
             $carryCount = [Math]::Min($carryLimit, $combined.Length)

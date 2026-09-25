@@ -138,3 +138,76 @@
   flex: 0 1 auto;
   max-width: 45%;
 }
+/* ==========================================================================
+   「一键投稿」小节（挂在「社区曲目名单」区块内部，所以用分隔线而不是再套一层卡片）
+   沿用上面的深色配色：主文字 #c8ccd1 / 次要 #8b9198 / 高亮 #8ab4f8。
+   ========================================================================== */
+.ln-contribution { margin-top: 18px; padding-top: 16px; border-top: 1px solid #292a2f; }
+.ln-contribution .panelHead { margin-bottom: 12px; padding-bottom: 10px; }
+.ln-contributionCounts { margin: 0 0 2px; color: #c8ccd1; font-size: 13.5px; line-height: 1.7; }
+.ln-contributionActions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 10px; }
+.ln-contributionFile:empty { display: none; }
+.ln-contributionFile { display: block; margin-top: 8px; padding: 8px 10px; color: #8ab4f8;
+  font-family: Consolas, "Courier New", monospace; font-size: 12.5px; line-height: 1.7;
+  word-break: break-all; background: #0f1114; border: 1px solid #2c3138; border-radius: 9px; }
+.ln-contributionHint { display: block; margin-top: 8px; color: #8b9198; font-size: 12.5px; line-height: 1.6; }
+
+/* 数据搬家（g05） */
+.ln-migrateCard{margin:8px 0;padding:10px}
+.ln-migrateOut{margin-top:8px}
+
+/* 试听卡片布局整理（g06） */
+/* 卡片内统一纵向节奏，间距不再忽大忽小 */
+[data-page="listen-naming"] .ln-card{display:flex;flex-direction:column;gap:10px;padding:14px 16px}
+/* 当前作品：做成醒目的标题条 */
+[data-page="listen-naming"] .ln-folder{font-size:15px;font-weight:600;letter-spacing:.2px;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.05);overflow-wrap:anywhere}
+[data-page="listen-naming"] .ln-meta{margin:0;font-size:12px;opacity:.75}
+/* 曲名输入 + 写库按钮同一行 */
+[data-page="listen-naming"] .ln-nameRow{display:flex;gap:8px;align-items:stretch}
+[data-page="listen-naming"] .ln-nameBlock{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:4px}
+[data-page="listen-naming"] #lnNameInput{width:100%;height:38px;padding:0 12px;font-size:14px}
+[data-page="listen-naming"] .ln-nameRow > button{height:38px;padding:0 18px;white-space:nowrap;font-weight:600}
+[data-page="listen-naming"] .ln-submitHint{font-size:11px;opacity:.6;line-height:1.4}
+/* 四个操作按钮：等宽网格，不再挤成三行 */
+[data-page="listen-naming"] .ln-actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+[data-page="listen-naming"] .ln-actions button{height:36px;padding:0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:900px){
+  [data-page="listen-naming"] .ln-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+/* 播放器与进度条铺满整行 */
+[data-page="listen-naming"] .ln-audio{width:100%;margin:0}
+[data-page="listen-naming"] .ln-segment{margin:0}
+/* 状态与线索区：弱化、收口，别抢视线 */
+[data-page="listen-naming"] .ln-status{margin:0;font-size:12px}
+[data-page="listen-naming"] .ln-info{gap:6px}
+[data-page="listen-naming"] .ln-sameNumber{margin:0;padding-left:18px;font-size:12px;line-height:1.6}
+[data-page="listen-naming"] .ln-help{margin:0;font-size:11px;opacity:.6;line-height:1.5}
+[data-page="listen-naming"] .ln-path{font-size:11px;opacity:.5;overflow-wrap:anywhere}
+/* 试听工具页：面板之间留一致的间距 */
+/* 只在没被隐藏时才用弹性布局：CSS 的 display 会盖过 hidden 属性，写死会导致该页永远显示 */
+[data-page="listen-tools"]:not([hidden]){display:flex;flex-direction:column;gap:14px}
+
+/* 固定面板顺序（g09）：两个模块各自挂载，谁先谁后看时机，导致面板"乱蹦"。
+   容器是 flex，所以用 order 把顺序钉死，跟挂载先后无关。
+   g10 起 DOM 顺序已由装配器保证（锚点之后按注册表顺序），这两条只作兜底。 */
+[data-page="listen-tools"] .ln-playerBox{order:1}
+[data-page="listen-tools"] .ln-todInspect{order:2}
+[data-page="listen-tools"] > .panelHead{order:0}
+
+/* 「更新说明」（g05 新增，g10 重排版式）：正文用 pre 等宽显示，只读、不接受远端排版 */
+[data-page="update"] .ln-updateNotesBody {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 46vh;
+  overflow: auto;
+  background: #0f1114;
+  border: 1px solid #2c3138;
+  border-radius: 9px;
+  color: #c8ccd1;
+  font: 12.5px/1.75 Consolas, "Courier New", monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+[data-page="update"] .ln-updateNotes .settingsBlockHead small { color: #8b9198; font-size: 12px; }
+[data-page="update"] .ln-updateNotes .actions { flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+[data-page="update"] .ln-updateNotes > .fieldHint:empty { display: none; }

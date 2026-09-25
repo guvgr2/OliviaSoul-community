@@ -303,7 +303,8 @@
 
   function renderChips() {
     if (!elements) return;
-    const remain = Math.max(0, state.songs.length - state.index);
+    // 用服务端返回的总数（不是本次收到的条数），否则会被分页上限截断
+    const remain = Math.max(0, (state.total || state.songs.length) - state.index);
     elements.remainChip.textContent = `还剩 ${remain} 首没名字`;
     elements.namedChip.textContent = `本次已命名 ${state.named} 首`;
     if (state.backupFile) elements.namedChip.title = `数据库备份：${state.backupFile}`;

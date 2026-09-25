@@ -1,4 +1,4 @@
-// 「时段识别」后端模块（OliviaSoul 内嵌功能）
+﻿// 「时段识别」后端模块（OliviaSoul 内嵌功能）
 //
 // 做什么：读曲库里每首歌的 3 个视频画面，判断哪一段是白天 / 傍晚 / 夜晚，
 // 生成 time_of_day_mapping（如 {"TOD12":"DEFAULT","TOD1730":"DEFAULT_2","TOD20":"DEFAULT_3"}）。
@@ -29,9 +29,9 @@
 //
 // 本文件是"加法式"新增，不修改、不覆盖任何既有函数。
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, rename, unlink } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -56,6 +56,13 @@ const DEFAULT_DATABASE_PATH = join(DEFAULT_DATA_DIR, "database", "olivia-local.s
 
 export const TOD_SLOTS = Object.freeze(["TOD12", "TOD1730", "TOD20"]);
 export const TOD_LABELS = Object.freeze({ TOD12: "白天", TOD1730: "傍晚", TOD20: "夜晚" });
+
+// 「时段可视化」用：缩略图缓存目录名与宽度（截帧只用于人工复核，不参与判定）
+const THUMB_DIR_NAME = "time-of-day-thumbs";
+const THUMB_WIDTH = 160;
+const THUMB_TIMEOUT_MS = 20_000;
+// 与 listen-naming 一致的文件夹名校验
+const TOD_FOLDER_PATTERN = /^midi_\d+_\d+$/u;
 
 // 抽取画面的参数（改动前请重跑标定，见文件头注释）
 export const TOD_SAMPLE_INTERVAL_SECONDS = 12;   // fps=1/12：每 12 秒一帧
@@ -685,6 +692,132 @@ export async function createTimeOfDayRoutes(options = {}) {
     return written;
   }
 
+  /** 缩略图绝对路径（按文件夹 + 段号缓存）。 */
+  function thumbnailPath(folder, segment) {
+    return join(USER_DATA_DIR || DEFAULT_DATA_DIR, THUMB_DIR_NAME, `${folder}__${segment}.jpg`);
+  }
+
+  /**
+   * 「时段可视化」：返回某首歌 3 段视频的判定依据（亮度、色温、判定、缩略图地址）。
+   * 数值全部来自现有算法（classifyVideo），不另写一套。
+   */
+  async function handleInspect(req, res, url) {
+    void req; void res;
+    const folder = String(url.searchParams.get("folder") ?? "").trim();
+    if (!TOD_FOLDER_PATTERN.test(folder)) throw httpError(400, "文件夹名无效", "TIME_OF_DAY_FOLDER_INVALID");
+
+    const db = openReadOnly(databasePath);
+    let rows = [];
+    try {
+      rows = db.prepare(
+        "SELECT video_path FROM user_songs WHERE removed_at IS NULL AND video_path LIKE ? ESCAPE '\\'"
+      ).all(`%/${folder}/%`);
+      if (!rows.length) {
+        rows = db.prepare(
+          "SELECT video_path FROM user_songs WHERE removed_at IS NULL AND video_path LIKE ? ESCAPE '\\'"
+        ).all(`%${folder}%`);
+      }
+    } finally {
+      db.close();
+    }
+
+    const videos = rows
+      .map((row) => toAbsoluteVideoPath(row.video_path, libraryRoot))
+      .filter(Boolean)
+      .map((video) => ({ video, key: variantKeyOf(video) }))
+      .sort((a, b) => a.key.localeCompare(b.key, "en"));
+
+    const segments = [];
+    for (let index = 0; index < videos.length; index += 1) {
+      const item = videos[index];
+      let result = null;
+      try {
+        result = await classifyVideo(item.video, { libraryRoot });
+      } catch (error) {
+        result = { period: null, brightness: null, warmth: null, reason: String(error?.message ?? error) };
+      }
+      segments.push({
+        index,
+        video: item.key,
+        brightness: result?.brightness ?? null,
+        warmth: result?.warmth ?? null,
+        period: result?.period ?? null,
+        verdictLabel: result?.period ? (TOD_LABELS[result.period] ?? result.period) : "无法判断",
+        frameCount: result?.frameCount ?? 0,
+        reason: result?.reason ?? "",
+        thumbnailUrl: `/admin/api/listen-naming/time-of-day/thumbnail?folder=${encodeURIComponent(folder)}&seg=${index}`,
+      });
+    }
+
+    // 整体判定沿用写入时用的排序法（与"写入时段"结果一致）
+    let mapping = null;
+    try {
+      mapping = mappingFromVideos(segments.map((segment) => ({
+        key: segment.video,
+        period: segment.period,
+        brightness: segment.brightness,
+        warmth: segment.warmth,
+      })));
+    } catch {
+      mapping = null;
+    }
+
+    return {
+      folder,
+      segments,
+      mapping,
+      thresholds: {
+        brightnessDay: TOD_BRIGHT_DAY,
+        brightnessNight: TOD_BRIGHT_NIGHT,
+        warmthDusk: TOD_WARM_DUSK,
+      },
+    };
+  }
+
+  /** 抽一帧做缩略图，落盘缓存；第二次直接读缓存。 */
+  async function handleThumbnail(req, res, url) {
+    const folder = String(url.searchParams.get("folder") ?? "").trim();
+    const segment = Math.max(0, Math.trunc(Number(url.searchParams.get("seg") ?? 0)) || 0);
+    if (!TOD_FOLDER_PATTERN.test(folder)) throw httpError(400, "文件夹名无效", "TIME_OF_DAY_FOLDER_INVALID");
+
+    const target = thumbnailPath(folder, segment);
+    if (!existsSync(target)) {
+      const db = openReadOnly(databasePath);
+      let rows = [];
+      try {
+        rows = db.prepare(
+          "SELECT video_path FROM user_songs WHERE removed_at IS NULL AND video_path LIKE ? ESCAPE '\\'"
+        ).all(`%${folder}%`);
+      } finally {
+        db.close();
+      }
+      const videos = rows
+        .map((row) => toAbsoluteVideoPath(row.video_path, libraryRoot))
+        .filter(Boolean)
+        .map((video) => ({ video, key: variantKeyOf(video) }))
+        .sort((a, b) => a.key.localeCompare(b.key, "en"));
+      const picked = videos[segment];
+      if (!picked) throw httpError(404, "这首歌没有这一段视频", "TIME_OF_DAY_THUMBNAIL_MISSING");
+      await mkdir(dirname(target), { recursive: true });
+      // 用 spawnSync + stdio:ignore：不经过管道，避免沙箱与杀软对管道子进程的干扰
+      const args = [
+        "-v", "error", "-y", "-ss", "5", "-i", picked.video,
+        "-frames:v", "1", "-vf", `scale=${THUMB_WIDTH}:-1`, "-q:v", "5", target,
+      ];
+      spawnSync(resolveFfmpegPath(FFMPEG_PATH), args, { stdio: "ignore", timeout: THUMB_TIMEOUT_MS, windowsHide: true });
+      if (!existsSync(target)) throw httpError(404, "抽帧失败（视频过短或 ffmpeg 不可用）", "TIME_OF_DAY_THUMBNAIL_FAILED");
+    }
+
+    const data = await readFile(target);
+    res.writeHead(200, {
+      "Content-Type": "image/jpeg",
+      "Content-Length": String(data.length),
+      "Cache-Control": "private, max-age=86400",
+    });
+    res.end(req.method === "HEAD" ? undefined : data);
+    return { mediaResponse: true };
+  }
+
   async function handleApply(req, res, url) {
     void res;
     const body = req.method === "POST" ? await readJson(req) : {};
@@ -776,6 +909,10 @@ export async function createTimeOfDayRoutes(options = {}) {
     const rawPath = routePathOf(url);
     const path = rawPath.replace(/^\/toy/u, "").replace(/^\/admin\/api/u, "");
     if (!path.startsWith("/listen-naming/time-of-day/")) return null;
+    if (req.method === "GET" && path === "/listen-naming/time-of-day/inspect")
+      return await handleInspect(req, res, url);
+    if ((req.method === "GET" || req.method === "HEAD") && path === "/listen-naming/time-of-day/thumbnail")
+      return await handleThumbnail(req, res, url);
     if (req.method === "GET" && path === "/listen-naming/time-of-day/preview") return await handlePreview(req, res, url);
     if (req.method === "POST" && path === "/listen-naming/time-of-day/apply") return await handleApply(req, res, url);
     if (req.method === "GET" && path === "/listen-naming/time-of-day/status") {

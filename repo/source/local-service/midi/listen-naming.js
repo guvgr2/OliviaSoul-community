@@ -1,4 +1,4 @@
-// 「试听起名」后端模块（OliviaSoul 内嵌功能）
+﻿// 「试听起名」后端模块（OliviaSoul 内嵌功能）
 //
 // 设计约定（与仓库既有代码保持一致）：
 //   * 模块风格：ESM（package.json 里 "type": "module"），同目录其他 midi/*.js 一致。
@@ -19,7 +19,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { appendFile, copyFile, mkdir, readFile, readdir, rename, stat } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -90,6 +90,11 @@ const BUNDLED_FFMPEG_CANDIDATES = [
 ];
 
 const FOLDER_PATTERN = /^midi_\d+_\d+$/u;
+// 切片缓存上限（默认 500 MB，可用 OLIVIA_CLIP_CACHE_MB 覆盖；0 表示不清理）
+const CLIP_CACHE_MAX_BYTES = Math.max(0, Number(process.env.OLIVIA_CLIP_CACHE_MB ?? 500) || 0) * 1024 * 1024;
+// 一次预取最多同时生成几个片段，避免用户机器被 ffmpeg 占满
+const CLIP_WARM_CONCURRENCY = 1;
+
 const SEGMENT_SECONDS = 15;
 const SEGMENT_START = 20;
 const MAX_SEGMENTS = 6;
@@ -370,6 +375,8 @@ export async function createListenNamingRoutes(options = {}) {
 
   }
   const clipsDir = resolve(options.clipsDir ?? CLIPS_DIR);
+  // 启动时后台清一次超额缓存：不 await，绝不拖慢程序启动
+  setTimeout(() => { pruneClipCache().catch(() => {}); }, 5000);
   const backupDir = resolve(options.backupDir ?? BACKUP_DIR);
   const featurePath = options.featurePath ?? FEATURE_CSV;
   const groupPath = options.groupPath ?? GROUP_CSV;
@@ -384,6 +391,7 @@ export async function createListenNamingRoutes(options = {}) {
     if (res && typeof res.writeHead !== "function") { url = res; res = null; }
       const path = routePathOf(url).replace(/^\/toy/u, "").replace(/^\/admin\/api/u, "");
       const OWNED = ["/listen-naming/list", "/listen-naming/clip", "/listen-naming/name", "/listen-naming/status"];
+      if (path.startsWith("/listen-naming/migrate/")) return null;   // 数据搬家与曲库无关，交给后面的挂载点
       if (OWNED.includes(path)) {
         return { needsLibrary: true, message: "还没设置曲目存储路径。请到「基础设置」里设置后，再回来使用本功能。" };
       }
@@ -503,6 +511,88 @@ export async function createListenNamingRoutes(options = {}) {
     } catch {
       return "";
     }
+  }
+
+  /** 切片缓存现状：文件数、占用字节、最旧/最新时间。 */
+  async function clipCacheStats() {
+    let files = [];
+    try {
+      files = await readdir(clipsDir, { withFileTypes: true });
+    } catch {
+      return { files: 0, bytes: 0, oldest: "", newest: "", limitBytes: CLIP_CACHE_MAX_BYTES, clipsDir };
+    }
+    let bytes = 0;
+    let oldest = 0;
+    let newest = 0;
+    let count = 0;
+    for (const entry of files) {
+      if (!entry.isFile() || !entry.name.endsWith(".mp3")) continue;
+      try {
+        const info = await stat(join(clipsDir, entry.name));
+        bytes += info.size;
+        count += 1;
+        const at = info.mtimeMs;
+        if (!oldest || at < oldest) oldest = at;
+        if (at > newest) newest = at;
+      } catch { /* 文件刚被删掉就算了 */ }
+    }
+    return {
+      files: count,
+      bytes,
+      oldest: oldest ? new Date(oldest).toISOString() : "",
+      newest: newest ? new Date(newest).toISOString() : "",
+      limitBytes: CLIP_CACHE_MAX_BYTES,
+      clipsDir,
+    };
+  }
+
+  /**
+   * 缓存超限时按"最久没用过"删到上限的 80%。
+   * 只动 .mp3 文件，不碰目录里其它东西；返回删除统计。
+   */
+  async function pruneClipCache(limitBytes = CLIP_CACHE_MAX_BYTES) {
+    const stats = await clipCacheStats();
+    if (!limitBytes || stats.bytes <= limitBytes) return { removed: 0, freedBytes: 0, ...stats };
+    const target = Math.floor(limitBytes * 0.8);
+    let entries = [];
+    try {
+      entries = await readdir(clipsDir, { withFileTypes: true });
+    } catch {
+      return { removed: 0, freedBytes: 0, ...stats };
+    }
+    const files = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".mp3")) continue;
+      try {
+        const info = await stat(join(clipsDir, entry.name));
+        files.push({ name: entry.name, size: info.size, atime: info.atimeMs || info.mtimeMs });
+      } catch { /* 忽略 */ }
+    }
+    files.sort((a, b) => a.atime - b.atime);
+    let bytes = stats.bytes;
+    let removed = 0;
+    let freed = 0;
+    for (const file of files) {
+      if (bytes <= target) break;
+      try {
+        await rm(join(clipsDir, file.name), { force: true });
+        bytes -= file.size;
+        freed += file.size;
+        removed += 1;
+      } catch { /* 被占用就跳过 */ }
+    }
+    logInfo("清理切片缓存", `删除 ${removed} 个文件，释放 ${(freed / 1048576).toFixed(1)} MB`);
+    return { removed, freedBytes: freed, bytes, files: stats.files - removed, limitBytes, clipsDir };
+  }
+
+  /** 预取：把片段生成好但不返回音频（前端"听这首时顺手把下一首切好"）。 */
+  async function warmClip(folder, segment) {
+    if (!FOLDER_PATTERN.test(folder)) return { warmed: false, reason: "文件夹名无效" };
+    const path = await makeClip(folder, segment);
+    if (!path) return { warmed: false, reason: "取不到片段" };
+    let bytes = 0;
+    try { bytes = (await stat(path)).size; } catch { /* 忽略 */ }
+    return { warmed: true, folder, segment, bytes };
   }
 
   async function makeClip(folder, segment) {
@@ -636,10 +726,138 @@ export async function createListenNamingRoutes(options = {}) {
     }
   }
 
-  async function handleList(req, res, url) {
+  // 列表结果短时缓存：同一份曲库在 20 秒内重复进页面/切页签不必重扫。
+  // 任何写库动作（命名、时段写入）都会 bump listCacheEpoch 让缓存立刻失效。
+  let listCache = { at: 0, payload: null, epoch: -1 };
+  let listCacheEpoch = 0;
+  const LIST_CACHE_TTL_MS = 20_000;
+
+  async function cachedBuildList() {
+    const now = Date.now();
+    if (listCache.payload && listCache.epoch === listCacheEpoch && now - listCache.at < LIST_CACHE_TTL_MS) {
+      return listCache.payload;
+    }
     const payload = await buildList();
+    listCache = { at: now, payload, epoch: listCacheEpoch };
+    return payload;
+  }
+
+  function invalidateListCache() {
+    listCacheEpoch += 1;
+    listCache = { at: 0, payload: null, epoch: -1 };
+  }
+
+  // ---------------------------------------------------------------- 数据搬家（g05）
+  // 只读探测本机其它 OliviaSoul / linli 安装的数据目录；apply 只允许复制"探测到的候选"，
+  // 复制前先备份当前数据库。绝不移动、绝不删除对方目录里的任何东西。
+
+  function fixedDrives() {
+    const list = [];
+    for (const letter of "CDEFGHIJ") {
+      try { if (existsSync(letter + ":\\")) list.push(letter + ":\\"); } catch { /* 忽略 */ }
+    }
+    return list;
+  }
+
+  function currentUserDataDir() {
+    return resolve(USER_DATA_DIR || DEFAULT_DATA_DIR);
+  }
+
+  async function describeCandidate(candidatePath) {
+    const dir = resolve(candidatePath);
+    const databasePath = join(dir, "database", "olivia-local.sqlite");
+    const info = {
+      path: dir,
+      databasePath,
+      exists: existsSync(databasePath),
+      sizeBytes: 0,
+      songCount: 0,
+      namedCount: 0,
+      libraryRoot: "",
+      isCurrent: dir.toLowerCase() === currentUserDataDir().toLowerCase(),
+    };
+    if (!info.exists) return info;
+    try { info.sizeBytes = (await stat(databasePath)).size; } catch { /* 忽略 */ }
+    try {
+      const db = openReadOnly(databasePath);
+      try {
+        info.songCount = Number(db.prepare("SELECT COUNT(*) AS c FROM user_songs WHERE removed_at IS NULL").get()?.c ?? 0);
+        info.namedCount = Number(db.prepare(
+          "SELECT COUNT(*) AS c FROM user_songs WHERE removed_at IS NULL AND custom_name IS NOT NULL AND custom_name <> ''"
+        ).get()?.c ?? 0);
+        try {
+          info.libraryRoot = String(db.prepare("SELECT value FROM settings WHERE key = 'midi_library_root'").get()?.value ?? "");
+        } catch { info.libraryRoot = ""; }
+      } finally { db.close(); }
+    } catch (error) {
+      info.error = String(error?.message ?? error).slice(0, 120);
+    }
+    return info;
+  }
+
+  /** 只扫"盘根下一层"，不递归全盘；命中 OliviaSoul / linli 之类的目录名再看它的 UserData。 */
+  async function detectCandidates(budgetMs = 1500) {
+    const started = Date.now();
+    const found = new Map();
+    const interesting = /(olivia|linli|soul)/iu;
+    for (const root of fixedDrives()) {
+      if (Date.now() - started > budgetMs) break;
+      let entries = [];
+      try { entries = await readdir(root, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        if (Date.now() - started > budgetMs) break;
+        if (!entry.isDirectory()) continue;
+        if (entry.name === "UserData") { found.set(join(root, entry.name), join(root, entry.name)); continue; }
+        if (!interesting.test(entry.name)) continue;
+        const base = join(root, entry.name);
+        for (const sub of ["UserData", ""]) {
+          const candidate = sub ? join(base, sub) : base;
+          const databasePath = join(candidate, "database", "olivia-local.sqlite");
+          try { if (existsSync(databasePath)) found.set(resolve(candidate), candidate); } catch { /* 忽略 */ }
+        }
+      }
+    }
+    const items = [];
+    for (const candidate of found.values()) items.push(await describeCandidate(candidate));
+    logInfo("扫描本机其它安装的数据", `发现 ${items.length} 个候选目录，用时 ${Date.now() - started} 毫秒`);
+    items.sort((a, b) => (b.isCurrent ? 1 : 0) - (a.isCurrent ? 1 : 0) || b.songCount - a.songCount);
+    return { items, scannedMs: Date.now() - started, current: currentUserDataDir() };
+  }
+
+  /** 只允许复制"探测到的候选"里的数据库文件；复制前把当前库另存一份。 */
+  async function applyMigration(sourcePath) {
+    const wanted = String(sourcePath ?? "").trim();
+    if (!wanted) throw httpError(400, "请指定要搬过来的数据目录", "MIGRATE_SOURCE_REQUIRED");
+    const detected = await detectCandidates(3000);
+    const match = detected.items.find((item) => resolve(item.path).toLowerCase() === resolve(wanted).toLowerCase() && item.exists);
+    if (!match) throw httpError(400, "这个目录不在本机探测结果里，拒绝复制（防止路径穿越）", "MIGRATE_SOURCE_NOT_DETECTED");
+    if (match.isCurrent) throw httpError(400, "这就是当前正在使用的数据目录", "MIGRATE_SOURCE_IS_CURRENT");
+
+    const targetDir = join(currentUserDataDir(), "database");
+    await mkdir(targetDir, { recursive: true });
+    const targetDb = join(targetDir, "olivia-local.sqlite");
+    const backup = join(targetDir, `backup-before-migrate-${stamp()}.sqlite`);
+    if (existsSync(targetDb)) await copyFile(targetDb, backup);
+
+    const copied = [];
+    for (const name of ["olivia-local.sqlite", "olivia-local.sqlite-wal", "olivia-local.sqlite-shm"]) {
+      const from = join(match.path, "database", name);
+      if (!existsSync(from)) continue;
+      await copyFile(from, join(targetDir, name));
+      copied.push(name);
+    }
+    if (!copied.length) throw httpError(400, "对方目录里没有可复制的数据库文件", "MIGRATE_NOTHING_TO_COPY");
+    logInfo("数据搬家完成", `从候选目录复制 ${copied.length} 个数据库文件（${match.songCount} 首，已命名 ${match.namedCount}），旧库已备份`);
+    return {
+      copied, backup, source: match.path, target: currentUserDataDir(),
+      songCount: match.songCount, namedCount: match.namedCount, restartRequired: true,
+    };
+  }
+
+  async function handleList(req, res, url) {
+    const payload = await cachedBuildList();
     const cursor = Math.max(0, Math.trunc(Number(url.searchParams.get("cursor") ?? 0)) || 0);
-    const pageSize = Math.min(500, Math.max(1, Math.trunc(Number(url.searchParams.get("pageSize") ?? 200)) || 200));
+    const pageSize = Math.min(5000, Math.max(1, Math.trunc(Number(url.searchParams.get("pageSize") ?? 200)) || 200));
     const slice = payload.songs.slice(cursor, cursor + pageSize);
     void req; void res;
     return {
@@ -657,6 +875,11 @@ export async function createListenNamingRoutes(options = {}) {
     const folder = String(url.searchParams.get("folder") ?? "").trim();
     const segment = Math.max(0, Math.min(MAX_SEGMENTS - 1, Math.trunc(Number(url.searchParams.get("seg") ?? 0)) || 0));
     if (!FOLDER_PATTERN.test(folder)) throw httpError(400, "文件夹名无效", "LISTEN_NAMING_FOLDER_INVALID");
+    // warm=1：只把片段生成好放进缓存，不返回音频（前端用来预取下一首）
+    if (String(url.searchParams.get("warm") ?? "") === "1") {
+      const warmed = await warmClip(folder, segment);
+      return { ...warmed, cache: await clipCacheStats() };
+    }
     const path = await makeClip(folder, segment);
     if (!path) throw httpError(404, "取不到音频片段，请检查曲库文件和 ffmpeg", "LISTEN_NAMING_CLIP_UNAVAILABLE");
     const data = await readFile(path);
@@ -722,6 +945,16 @@ export async function createListenNamingRoutes(options = {}) {
     if ((req.method === "GET" || req.method === "HEAD") && path === "/listen-naming/clip")
       return await handleClip(req, res, url);
     if (req.method === "POST" && path === "/listen-naming/name") return await handleName(req, res, url);
+    if (req.method === "GET" && path === "/listen-naming/migrate/detect")
+      return await detectCandidates();
+    if (req.method === "POST" && path === "/listen-naming/migrate/apply") {
+      const body = await readJson(req);
+      return await applyMigration(body?.path);
+    }
+    if (req.method === "GET" && path === "/listen-naming/clips/stats")
+      return { ...(await clipCacheStats()) };
+    if (req.method === "POST" && path === "/listen-naming/clips/prune")
+      return { ...(await pruneClipCache(Number(url.searchParams.get("limitMb") ?? 0) * 1024 * 1024 || undefined)) };
     if (req.method === "GET" && path === "/listen-naming/status")
       return { named: session.named, backupFile: session.backupFile, databasePath, libraryRoot, clipsDir, ffmpeg: ffmpegPath() };
     // 不是本模块的接口：必须 return null 交回给后面的挂载点。

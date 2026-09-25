@@ -31,7 +31,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
 
 
-  FP_ALGO, FP_VERSION, FP_SIMILARITY_THRESHOLD, verifyMatch, fingerprintFolder,
+  FP_ALGO, FP_VERSION, FP_SEGMENTS, FP_SIMILARITY_THRESHOLD, verifyMatch, fingerprintFolder,
 } from "./fingerprint.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -55,8 +55,20 @@ export const UPLOAD_QUEUE_FILENAME = "community-upload-queue.json";
 export const SETTINGS_FILENAME = "listen-naming-settings.json";
 export const BACKUP_PREFIX = "backup-community-";
 
+// 「一键投稿」：投稿文件固定写到 <UserData>\community-outbox\，本机"已投稿"记录单独一份。
+export const OUTBOX_DIRNAME = "community-outbox";
+export const CONTRIBUTION_LOG_FILENAME = "community-contributions.json";
+export const CONTRIBUTION_LOG_VERSION = 1;
+// 提交入口：仓库固定为 guvgr2/OliviaSoul-community，走 Issue 模板；用户自己点开、自己贴内容，程序绝不自动上传。
+export const CONTRIBUTION_TEMPLATE_URL = "https://github.com/guvgr2/OliviaSoul-community/issues/new?template=song_title.md";
+
 const HTTP_TIMEOUT_MS = 30_000;
 const MAX_CATALOG_BYTES = 8 * 1024 * 1024;
+// 算指纹要逐首解码音频（每首 3 段 × 60 秒），很慢：一次请求只补算一小批，剩下的由前端再叫一次。
+const CONTRIBUTION_BATCH_LIMIT = 20;
+const CONTRIBUTION_BUDGET_MS = 20_000;
+// 生成投稿文件时给指纹留的最大时间：正常路径下预览已经把指纹算好，这里只是兜底。
+const CONTRIBUTION_BUILD_BUDGET_MS = 120_000;
 
 let USER_DATA_DIR = process.env.OLIVIA_USER_DATA || DEFAULT_DATA_DIR;
 let DATABASE_PATH = process.env.OLIVIA_COMMUNITY_DB || process.env.OLIVIA_LISTEN_DB || DEFAULT_DATABASE_PATH;
@@ -70,6 +82,7 @@ const memory = {
   catalog: null,          // { entries, updatedAt, stale, source, etag, lastModified }
   fingerprints: null,     // { version, algo, entries: { folder: {key, fp, fps, name, updatedAt} } }
   settings: null,         // listen-naming-settings.json 的内容
+  contributions: null,    // community-contributions.json 的内容（本机"已投稿"记录）
   sessionBackup: "",      // 一次进程只备份一次数据库
 };
 
@@ -833,6 +846,325 @@ export async function buildContribution(options = {}) {
   };
 }
 
+// ---------------------------------------------------------------- 一键投稿
+
+// 与上面的 buildContribution（要填 GitHub 用户名、写 community-upload-queue.json）的区别：
+// 「一键投稿」按更严的隐私口径出文件 —— 文件里**只有** 文件夹编号 / 曲名 / 3 段指纹 / 校验哈希，
+// 没有 contributor、没有任何路径、没有设备信息；只写本机 <UserData>\community-outbox\，绝不自动上传。
+
+function positiveInt(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.trunc(number) : fallback;
+}
+
+/** 投稿文件目录 <UserData>\community-outbox。 */
+export function outboxDirOf(options = {}) {
+  return join(userDataDir(options), String(options.outboxDir ?? OUTBOX_DIRNAME));
+}
+
+/** 本机"已投稿"记录 <UserData>\community-contributions.json。 */
+export function contributionLogPathOf(options = {}) {
+  return join(userDataDir(options), String(options.contributionLogFilename ?? CONTRIBUTION_LOG_FILENAME));
+}
+
+/** 读本机"已投稿"记录（读不到就是空记录，不抛错）。 */
+export async function readContributionLog(options = {}) {
+  if (memory.contributions && !options.force) return memory.contributions;
+  let value = { version: CONTRIBUTION_LOG_VERSION, updatedAt: "", submitted: {} };
+  try {
+    const parsed = safeJson(await readFile(contributionLogPathOf(options), "utf8"));
+    if (parsed && typeof parsed === "object" && parsed.submitted && typeof parsed.submitted === "object") {
+      value = {
+        version: CONTRIBUTION_LOG_VERSION,
+        updatedAt: String(parsed.updatedAt ?? ""),
+        submitted: parsed.submitted,
+      };
+    }
+  } catch { /* 还没投过稿，正常 */ }
+  memory.contributions = value;
+  return value;
+}
+
+/** 把这些曲目记成"已投稿"（合并写，只加不删；记录里同样不放路径）。 */
+export async function markContributionSubmitted(items, meta = {}, options = {}) {
+  const path = contributionLogPathOf(options);
+  const current = await readContributionLog({ ...options, force: true });
+  const submitted = { ...current.submitted };
+  const at = new Date().toISOString();
+  for (const item of items) {
+    const folder = String(item?.folder ?? "").trim();
+    if (!/^midi_\d+_\d+$/u.test(folder)) continue;
+    const name = String(item?.name ?? "").trim();
+    submitted[folder] = {
+      name,
+      hash: String(item?.hash ?? "").trim() || entryHash(folder, name),
+      file: String(meta.file ?? ""),
+      at,
+    };
+  }
+  const next = { version: CONTRIBUTION_LOG_VERSION, updatedAt: at, submitted };
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  memory.contributions = next;
+  return { path, submitted, count: Object.keys(submitted).length };
+}
+
+/** 旧版投稿文件 community-upload-queue.json 里的条目也算"已投稿"，免得重复投。 */
+async function submittedFromUploadQueue(options = {}) {
+  const folders = new Set();
+  try {
+    const parsed = safeJson(await readFile(
+      join(userDataDir(options), String(options.queueFilename ?? UPLOAD_QUEUE_FILENAME)),
+      "utf8",
+    ));
+    for (const folder of Object.keys(parsed?.entries ?? {})) folders.add(folder);
+  } catch { /* 没有旧投稿文件，正常 */ }
+  return folders;
+}
+
+/** 攒投稿要用的原料：本机已命名的作品、本机"已投稿"记录、指纹缓存。 */
+async function contributionContext(options = {}) {
+  const databasePath = databasePathOf(options);
+  if (!existsSync(databasePath)) {
+    throw httpError(500, `未找到 OliviaSoul 数据库：${databasePath}`, "COMMUNITY_DATABASE_MISSING");
+  }
+  let libraryRoot = String(options.libraryRoot ?? LIBRARY_ROOT ?? "").trim();
+  if (!libraryRoot) libraryRoot = readLibraryRootFromDatabase(databasePath);
+  if (!libraryRoot) {
+    throw httpError(409, "还没设置曲目存储路径：请到「基础设置」里设置后再回来投稿", "COMMUNITY_LIBRARY_MISSING");
+  }
+  libraryRoot = resolve(libraryRoot);
+
+  // 同一首歌可能有多行（每个视频一行）：按文件夹合并，第一个曲名为准（与 buildContribution 一致）
+  const named = new Map();
+  for (const row of readLocalRows(databasePath)) {
+    const name = String(row.custom_name ?? "").trim();
+    if (!name) continue;
+    const folder = folderFromPath(row.video_path);
+    if (!folder || named.has(folder)) continue;
+    named.set(folder, name);
+  }
+
+  const submitted = new Map();
+  for (const folder of await submittedFromUploadQueue(options)) submitted.set(folder, { at: "", name: "" });
+  const log = await readContributionLog(options);
+  for (const [folder, record] of Object.entries(log.submitted ?? {})) {
+    submitted.set(folder, { at: String(record?.at ?? ""), name: String(record?.name ?? "") });
+  }
+
+  return {
+    databasePath,
+    libraryRoot,
+    named,
+    submitted,
+    cache: await loadFingerprintCache(options),
+    outboxDir: outboxDirOf(options),
+    logPath: contributionLogPathOf(options),
+  };
+}
+
+/**
+ * 逐个确认"这首能不能凑齐 3 段指纹"。
+ * 先看本机指纹缓存（快，只比 文件名+大小+mtime），缓存没有才真的解码音频算（慢）。
+ * 真的算受 limit / budgetMs 限制：这一轮算不完的记成 status:"unmeasured"，前端再叫一次接着算。
+ */
+async function resolveContributionFingerprints(context, options = {}) {
+  const batchLimit = positiveInt(options.limit, CONTRIBUTION_BATCH_LIMIT);
+  const budgetMs = positiveInt(options.budgetMs, CONTRIBUTION_BUDGET_MS);
+  const compute = options.compute !== false;      // false = 只看缓存，绝不起 ffmpeg
+  const startedAt = Date.now();
+  const ready = [];
+  const pending = [];
+  let computed = 0;
+  let attempted = 0;
+  let cacheDirty = false;
+
+  const folders = [...context.named.keys()].sort((left, right) => left.localeCompare(right, "en"));
+  for (const folder of folders) {
+    const name = String(context.named.get(folder));
+    const record = context.submitted.get(folder);
+    const base = { folder, name, alreadySubmitted: Boolean(record), submittedAt: record?.at ?? "" };
+    const absolute = join(context.libraryRoot, folder);
+
+    let fps = null;
+    const hit = context.cache.entries?.[folder];
+    if (hit && Array.isArray(hit.fps) && hit.fps.length) {
+      // 缓存键含文件大小与 mtime：文件换了就重算，绝不拿旧指纹顶替
+      const signature = await folderSignature(absolute);
+      if (signature && hit.signature === signature) fps = hit.fps;
+    }
+    if (!fps) {
+      // 真算很慢（每首要起 3 次 ffmpeg），所以批量与时间都封顶；算失败的也算一次，
+      // 免得 ffmpeg 坏掉时一个请求把几百首都试一遍。
+      if (!compute || attempted >= batchLimit || Date.now() - startedAt >= budgetMs) {
+        pending.push({ ...base, fingerprintReady: false, status: "unmeasured", segments: 0, reason: "指纹还没校验（再来一次继续）" });
+        continue;
+      }
+      attempted += 1;
+      if (!existsSync(absolute)) {
+        pending.push({ ...base, fingerprintReady: false, status: "unavailable", segments: 0, reason: "曲库里找不到这个文件夹" });
+        continue;
+      }
+      let local = null;
+      try {
+        local = await fingerprintFolderCached(absolute, { cache: context.cache, options });
+      } catch (error) {
+        pending.push({ ...base, fingerprintReady: false, status: "unavailable", segments: 0, reason: `算指纹失败：${error?.message ?? error}` });
+        continue;
+      }
+      if (local && !local.fromCache) { computed += 1; cacheDirty = true; }
+      fps = local?.fps ?? null;
+      if (!fps) {
+        pending.push({ ...base, fingerprintReady: false, status: "unavailable", segments: 0, reason: "取不到音频，算不出指纹" });
+        continue;
+      }
+    }
+
+    const segments = Array.isArray(fps) ? fps.length : 0;
+    if (segments < FP_SEGMENTS) {
+      pending.push({ ...base, fingerprintReady: false, status: "unavailable", segments, reason: `只算到 ${segments} 段指纹（需要 ${FP_SEGMENTS} 段）` });
+      continue;
+    }
+    const cleaned = sanitizeName(name);
+    if (!cleaned.ok) {
+      pending.push({ ...base, fingerprintReady: false, status: "unavailable", segments, reason: `曲名没通过脱敏检查（${cleaned.reason}）` });
+      continue;
+    }
+    ready.push({
+      ...base,
+      name: cleaned.name,
+      fingerprintReady: true,
+      segments,
+      hash: entryHash(folder, cleaned.name),
+      fps: fps.slice(0, FP_SEGMENTS),
+    });
+  }
+
+  if (cacheDirty) await saveFingerprintCache(context.cache, options);
+  return { ready, pending, computed, attempted, cacheDirty, elapsedMs: Date.now() - startedAt };
+}
+
+/**
+ * 「可以投稿的曲目」清单 = 已命名 + 能算出 3 段指纹 + 曲名通过脱敏检查。
+ *
+ * @param {object} [options]
+ * @param {number}  [options.limit]    这一轮最多补算几首指纹（默认 20）
+ * @param {number}  [options.budgetMs] 这一轮最多花多少毫秒算指纹（默认 20000）
+ * @param {boolean} [options.compute]  false = 只看缓存（界面刚打开时用，不惊动 ffmpeg）
+ * @returns {Promise<{items,pending,totals,unsent,remaining,computed,elapsedMs,libraryRoot,outboxDir,logFile,openUrl,fingerprint}>}
+ */
+export async function previewContribution(options = {}) {
+  const context = await contributionContext(options);
+  const resolved = await resolveContributionFingerprints(context, options);
+  const submittedCount = [...context.named.keys()].filter(folder => context.submitted.has(folder)).length;
+  const readySubmitted = resolved.ready.filter(item => item.alreadySubmitted).length;
+
+  return {
+    // 清单只收"可以投稿的"（已命名 + 3 段指纹 + 曲名合规）；指纹本身不放进预览，生成投稿文件时才写盘
+    items: resolved.ready.map(item => ({
+      folder: item.folder,
+      name: item.name,
+      fingerprintReady: item.fingerprintReady,
+      alreadySubmitted: item.alreadySubmitted,
+      submittedAt: item.submittedAt,
+      segments: item.segments,
+      hash: item.hash,
+    })),
+    pending: resolved.pending,
+    totals: {
+      ready: resolved.ready.length,
+      pending: resolved.pending.length,
+      submitted: submittedCount,
+      total: context.named.size,
+    },
+    unsent: Math.max(0, resolved.ready.length - readySubmitted),
+    remaining: resolved.pending.filter(item => item.status === "unmeasured").length,
+    computed: resolved.computed,
+    attempted: resolved.attempted,
+    elapsedMs: resolved.elapsedMs,
+    libraryRoot: context.libraryRoot,
+    outboxDir: context.outboxDir,
+    logFile: context.logPath,
+    openUrl: CONTRIBUTION_TEMPLATE_URL,
+    fingerprint: { algo: FP_ALGO, version: FP_VERSION, segments: FP_SEGMENTS },
+  };
+}
+
+/**
+ * 生成投稿文件（一键投稿的第二步）。
+ *
+ * 文件内容只有：文件夹编号 → { 曲名, 3 段指纹, 校验哈希 }；顶层只有 schema 版本与算法标识。
+ * **绝不写** contributor / 路径 / 用户名 / 设备信息。写到 <UserData>\community-outbox\，
+ * 并在本机记录 community-contributions.json 里标记这些曲目为"已投稿"。
+ *
+ * @param {object}  [options]
+ * @param {boolean} [options.includeSubmitted] true = 连已投稿的一起重写一份（默认只写新的）
+ * @returns {Promise<{file,fileName,count,bytes,openUrl,outboxDir,skipped,skippedSubmitted,remaining,totals,fingerprint}>}
+ */
+export async function buildContributionFile(options = {}) {
+  const context = await contributionContext(options);
+  const resolved = await resolveContributionFingerprints(context, {
+    ...options,
+    limit: positiveInt(options.limit, Number.MAX_SAFE_INTEGER),
+    budgetMs: positiveInt(options.budgetMs, CONTRIBUTION_BUILD_BUDGET_MS),
+  });
+  const includeSubmitted = options.includeSubmitted === true;
+  const chosen = resolved.ready.filter(item => includeSubmitted || !item.alreadySubmitted);
+
+  const entries = {};
+  for (const item of chosen) {
+    entries[item.folder] = {
+      name: item.name,
+      fps: item.fps.slice(0, FP_SEGMENTS),
+      hash: item.hash,
+    };
+  }
+  const count = Object.keys(entries).length;
+  if (!count) {
+    const reason = resolved.pending.some(item => item.status === "unmeasured")
+      ? "还有曲目的指纹没校验完，请再点一次「生成投稿文件」继续"
+      : (resolved.ready.length
+        ? "这些曲目都已经生成过投稿文件了（本地记录里已标记为已投稿）"
+        : "本机还没有「已命名 + 能算出 3 段指纹」的曲目");
+    throw httpError(409, `没有可投稿的内容：${reason}`, "COMMUNITY_NOTHING_TO_SUBMIT");
+  }
+
+  const document = {
+    version: CATALOG_VERSION,
+    algo: FP_ALGO,
+    algoVersion: FP_VERSION,
+    segments: FP_SEGMENTS,
+    entries,
+  };
+  const fileName = `contribution-${stamp()}.json`;
+  const file = join(context.outboxDir, fileName);
+  await mkdir(context.outboxDir, { recursive: true });
+  const text = `${JSON.stringify(document, null, 2)}\n`;
+  await writeFile(file, text, "utf8");
+
+  // 本机记录：这些编号已经投稿（只是本地标记，用户随时可以再生成一份）
+  await markContributionSubmitted(chosen, { file: fileName }, options);
+
+  return {
+    file,
+    fileName,
+    count,
+    bytes: Buffer.byteLength(text, "utf8"),
+    openUrl: CONTRIBUTION_TEMPLATE_URL,
+    outboxDir: context.outboxDir,
+    skipped: resolved.pending.map(item => ({ folder: item.folder, name: item.name, reason: item.reason })),
+    skippedSubmitted: resolved.ready.length - chosen.length,
+    remaining: resolved.pending.filter(item => item.status === "unmeasured").length,
+    totals: {
+      written: count,
+      ready: resolved.ready.length,
+      skipped: resolved.pending.length,
+      submitted: chosen.filter(item => item.alreadySubmitted).length,
+    },
+    fingerprint: { algo: FP_ALGO, version: FP_VERSION, segments: FP_SEGMENTS },
+  };
+}
+
 // ---------------------------------------------------------------- 路由
 
 /**
@@ -939,6 +1271,29 @@ export async function createCommunityRoutes(options = {}) {
     return await buildContribution({ ...shared, contributor: body.contributor });
   }
 
+  /** GET /listen-naming/community/contribution/preview?limit=&budgetMs=&cacheOnly=1 */
+  async function handleContributionPreview(req, res, url) {
+    void req; void res;
+    const params = url?.searchParams ?? new URLSearchParams();
+    return await previewContribution({
+      ...shared,
+      limit: params.get("limit") ?? 0,
+      budgetMs: params.get("budgetMs") ?? 0,
+      compute: params.get("cacheOnly") === "1" ? false : true,
+    });
+  }
+
+  /** POST /listen-naming/community/contribution/build { includeSubmitted?, limit?, budgetMs? } */
+  async function handleContributionBuild(req) {
+    const body = req.method === "POST" ? await readJson(req) : {};
+    return await buildContributionFile({
+      ...shared,
+      includeSubmitted: body.includeSubmitted === true,
+      limit: body.limit ?? 0,
+      budgetMs: body.budgetMs ?? 0,
+    });
+  }
+
   async function handleConsent(req) {
     const body = req.method === "POST" ? await readJson(req) : {};
     if (typeof body.share !== "boolean") throw httpError(400, "share 必须是 true 或 false", "COMMUNITY_CONSENT_INVALID");
@@ -958,6 +1313,8 @@ export async function createCommunityRoutes(options = {}) {
     if (req.method === "POST" && path === "/listen-naming/community/refresh") return await handleRefresh();
     if (req.method === "POST" && path === "/listen-naming/community/auto-name") return await handleAutoName(req);
     if (req.method === "POST" && path === "/listen-naming/community/build-contribution") return await handleBuildContribution(req);
+    if (req.method === "GET" && path === "/listen-naming/community/contribution/preview") return await handleContributionPreview(req, res, url);
+    if (req.method === "POST" && path === "/listen-naming/community/contribution/build") return await handleContributionBuild(req);
     if (req.method === "POST" && path === "/listen-naming/community/consent") return await handleConsent(req);
     if (req.method === "GET" && path === "/listen-naming/community/consent") {
       return { share: await shareConsent(shared), settingsPath: settingsPathOf(shared) };

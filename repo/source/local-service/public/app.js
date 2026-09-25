@@ -1579,7 +1579,24 @@ $("#memoryList").addEventListener("click", safely(async event => {
 }));
 
 function showError(error) {
-  void openNotice({ title: "操作失败", message: error.message });
+  // 浏览器抛的 TypeError（例如 "Cannot set properties of null (setting 'value')"）在 WebView2 里
+  // 没有可读堆栈，所以把名字/消息原文（含 (setting 'xxx') 这种线索）原样放进「详情」，方便定位。
+  const name = String(error?.name || "Error");
+  const raw = String(error?.message ?? error ?? "");
+  const stack = error?.stack && error.stack !== raw ? String(error.stack) : "";
+  const context = `页面动作：${location.hash || "(无)"}\n时间：${new Date().toLocaleString()}`;
+  const details = [
+    raw ? `${name}: ${raw}` : name,
+    stack && stack.includes("@") ? stack : "",
+    context,
+  ].filter(Boolean).join("\n\n");
+  console.error("[界面操作失败]", error);
+  void openNotice({
+    title: "操作失败",
+    message: raw || name,
+    details,
+    confirmText: "确定",
+  });
 }
 
 void import('./lyrics-settings.js').catch(console.error);

@@ -15,7 +15,13 @@ export async function readWindowsProxySettings() {
       "$ErrorActionPreference='Stop'; $p=Get-ItemProperty -LiteralPath 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'; @{enabled=($p.ProxyEnable -eq 1);server=[string]$p.ProxyServer;pac=[string]$p.AutoConfigURL}|ConvertTo-Json -Compress"],
     { windowsHide: true, timeout: 5000, maxBuffer: 16384, encoding: 'utf8' });
     return JSON.parse(stdout);
-  } catch { throw new Error('无法读取 Windows 系统代理，请检查代理设置后重试'); }
+  } catch (error) {
+    // 读不到代理配置 != 必须用代理：按"没配代理"处理，让直连去试。
+    // 否则完全离线的机器、或安全软件拦了 powershell 的机器，一启动就弹"操作失败"。
+    // 真正的网络错误仍会在直连时如实报出来。
+    if (error?.status != null) throw new Error('无法读取 Windows 系统代理，请检查代理设置后重试');
+    return { enabled: false, unreadable: true, reason: String(error?.code || error?.message || error) };
+  }
 }
 
 export function selectSystemProxy(settings, target) {

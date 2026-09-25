@@ -31,6 +31,18 @@
     return name === "ffmpeg.exe" || name === "ffprobe.exe";
   }
 
+  // g10：外链统一走装配器的后端通道（域名白名单 + 系统默认浏览器），便携版里 window.open 会被拦
+  async function openExternal(url, target) {
+    const host = global.OliviaSoulPanelHost;
+    try {
+      if (host && typeof host.openExternal === "function") await host.openExternal(url);
+      else global.open(url, "_blank", "noopener");
+      if (target) target.textContent = "已用系统浏览器打开：" + url;
+    } catch (error) {
+      if (target) target.textContent = "打不开链接：" + (error && error.message ? error.message : error) + "\n可手动访问：" + url;
+    }
+  }
+
   function buildCard(item, reload) {
     const card = node("section", null, "taskCard");
     const head = node("div", null, "panelHead");
@@ -64,11 +76,11 @@
           }
         });
         const manual = node("button", "打开官网下载", "secondary");
-        manual.addEventListener("click", () => global.open(WEBVIEW2_URL, "_blank", "noopener"));
+        manual.addEventListener("click", () => openExternal(WEBVIEW2_URL, result));
         actions.append(button, manual);
       } else if (isFfmpeg(item.name)) {
         button.textContent = "打开下载页（手动放置）";
-        button.addEventListener("click", () => global.open(FFMPEG_URL, "_blank", "noopener"));
+        button.addEventListener("click", () => openExternal(FFMPEG_URL, null));
         const where = node("p", "", "fieldHint");
         where.textContent = "下载后把 ffmpeg.exe / ffprobe.exe 放到程序目录的 runtime\\ffmpeg\\bin 下，再点下面的「重新检查」。";
         card.append(where);

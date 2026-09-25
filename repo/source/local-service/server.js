@@ -108,6 +108,53 @@ const INJECTION_PATTERNS = [
 ];
 const CONTROL_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/u;
 
+// 「打开外链」白名单：前端点"打开发布页 / 下载 / 反馈 / 依赖官网"时走这个接口，
+// 由本机后端交给系统默认浏览器打开。只认 https + 白名单域名，杜绝 file:/自定义协议/内网地址。
+const EXTERNAL_LINK_HOSTS = Object.freeze([
+  "github.com",
+  "objects.githubusercontent.com",
+  "api.github.com",
+  "raw.githubusercontent.com",
+  "developer.microsoft.com",
+  "www.gyan.dev",
+  "gyan.dev",
+]);
+const externalLinkLog = new Set();
+
+function externalLinkAllowed(url) {
+  try {
+    const parsed = new URL(String(url ?? "").trim());
+    if (parsed.protocol !== "https:") return false;
+    const host = parsed.hostname.toLowerCase();
+    return EXTERNAL_LINK_HOSTS.some(allowed => host === allowed || host.endsWith("." + allowed));
+  } catch {
+    return false;
+  }
+}
+
+// 交系统浏览器；不用 Start-Process / cmd start（会被安全软件拦，也容易被注入参数）。
+// 注：便携版由原生宿主 WebView2 负责（MainForm.cs 的 NewWindowRequested），这里是普通运行时的兜底。
+function openExternalLink(url) {
+  const target = String(url ?? "").trim();
+  if (!externalLinkAllowed(target)) {
+    const error = httpError(400, "只允许打开白名单里的 https 地址", "EXTERNAL_LINK_BLOCKED");
+    error.externalLinkBlocked = true;
+    throw error;
+  }
+  const child = spawn("explorer.exe", [target], { stdio: "ignore", windowsHide: true });
+  child.on("error", (error) => {
+    logError("打开外链失败", `${target} :: ${error?.message ?? error}`);
+  });
+  child.unref();
+  // 同一地址只写一次日志，避免刷屏
+  if (!externalLinkLog.has(target)) {
+    externalLinkLog.add(target);
+    if (externalLinkLog.size > 200) externalLinkLog.clear();
+    logError("打开外链", target);
+  }
+  return target;
+}
+
 function modelConfigPayload(config) {
   return {
     activeProvider: config.activeProvider,
@@ -704,6 +751,9 @@ export async function createOliviaService(options = {}) {
       latestTag,
       releaseUrl: String(release.html_url ?? `https://github.com/${updateRepository}/releases/latest`),
       publishedAt: String(release.published_at ?? ""),
+      // 更新日志：GitHub Release 的说明正文（只做展示，前端用 textContent 渲染，绝不 innerHTML）
+      notes: String(release.body ?? "").trim().slice(0, 8000),
+      releaseName: String(release.name ?? "").trim().slice(0, 200),
       asset: {
         id: asset.id,
         name: basename(String(asset.name)),
@@ -733,6 +783,9 @@ export async function createOliviaService(options = {}) {
       publishedAt: release.publishedAt,
       assetName: release.asset.name,
       assetSize: release.asset.size,
+      assetUrl: String(release.asset.url ?? ""),
+      notes: String(release.notes ?? ""),
+      releaseName: String(release.releaseName ?? ""),
     };
   }
 
@@ -2614,7 +2667,7 @@ export async function createOliviaService(options = {}) {
 
   async function serveStatic(req, res, pathname) {
     const relative = pathname === "/admin" || pathname === "/admin/" ? "index.html" : pathname.slice("/admin/".length);
-    if (!["index.html", "app.js", "game-lyrics.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "update-download-ui.js", "tab-notices.js", "listen-naming.js", "listen-naming-tools.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
+    if (!["index.html", "app.js", "game-lyrics.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "update-download-ui.js", "tab-notices.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
       throw httpError(404, "文件不存在");
     const file = join(publicRoot, relative);
     const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".png": "image/png" };
@@ -3504,6 +3557,13 @@ export async function createOliviaService(options = {}) {
       bumpLetterRevision();
       const quota = letterQuota(getLocalUser().id);
       return ok(req, res, quotaPayload(quota, true));
+    }
+
+    if (req.method === "POST" && path === "/admin/api/open-external") {
+      const body = await readJson(req);
+      // dryRun：只校验白名单并回显地址（供无头测试与排错用），不真的开浏览器
+      if (body.dryRun) return ok(req, res, { allowed: externalLinkAllowed(body.url), url: String(body.url ?? "").trim(), opened: false });
+      return ok(req, res, { url: openExternalLink(body.url) });
     }
 
     if (req.method === "GET" && path === "/admin/api/update") {

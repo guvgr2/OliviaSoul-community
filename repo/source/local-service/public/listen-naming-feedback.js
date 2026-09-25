@@ -12,7 +12,7 @@
   const BASE = "/toy/listen-naming";
   // ⚠️ 发布前改成你自己的仓库（与 midi/community-catalog.js 里的 CATALOG_URL 保持一致）
   const REPO = "guvgr2/OliviaSoul-community";
-  const APP_VERSION = "2008.2.7-linli9-g04";
+  const APP_VERSION = "2008.2.7-linli9-g10";
 
   const KINDS = [
     ["bug", "功能坏了 / 报错"],
@@ -37,17 +37,26 @@
     return Boolean(REPO) && !REPO.includes("<") && !REPO.includes(">") && REPO.includes("/");
   }
 
+  // g10：外链走后端的白名单通道（便携版 WebView2 里 window.open 会被当弹窗拦掉）
   function openIssue(url) {
     if (!repoReady()) {
       global.alert("反馈通道还没配置好：\n\n" +
         "本程序是开发版，代码里的反馈仓库地址还是占位符 " + REPO + "。\n" +
         "发布前需要把它改成你自己的 GitHub 仓库，改完这个按钮就能用了。");
-      return;
+      return Promise.resolve(false);
+    }
+    const host = global.OliviaSoulPanelHost;
+    if (host && typeof host.openExternal === "function") {
+      return host.openExternal(url).then(() => true).catch((error) => {
+        global.alert("浏览器没有打开。你可以手动访问：\n\n" + url + "\n\n（原因：" + (error && error.message ? error.message : error) + "）");
+        return false;
+      });
     }
     const opened = global.open(url, "_blank", "noopener");
     if (!opened) {
       global.alert("浏览器没有打开新窗口。你可以手动访问：\n\n" + url);
     }
+    return Promise.resolve(Boolean(opened));
   }
 
   async function api(path, options) {

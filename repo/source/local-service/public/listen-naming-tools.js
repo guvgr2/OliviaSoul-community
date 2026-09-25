@@ -1,7 +1,8 @@
 // 「曲名与时段」附加工具面板：画面识别（时段）+ 社区曲目名单
 //
 // 为什么单独一个文件：原 listen-naming.js 只负责试听起名，这里往同一个页签里
-// **追加**两块工具区，互不干扰；样式沿用 styles.css 的既有类（settingsBlock / panelHead / actions）。
+// **追加**两块工具区，互不干扰；样式沿用 styles.css 的既有类（settingsBlock / panelHead / actions），
+// 新增的少量样式（ln-contribution*）追加在 public/listen-naming.css 末尾。
 (function (global) {
   "use strict";
 
@@ -26,7 +27,10 @@
       headers: { "Content-Type": "application/json" },
     }, options));
     const body = await response.json().catch(() => ({}));
-    if (body && typeof body.code === "number" && body.code !== 0) throw new Error(body.message || `请求失败（${body.code}）`);
+    // 失败信封是 { code: "COMMUNITY_XXX", message, data: null }：code 是字符串，不能只判数字
+    const code = body && "code" in body ? body.code : 0;
+    if (code !== 0 && code != null) throw new Error((body && body.message) || `请求失败（${code}）`);
+    if (!response.ok) throw new Error((body && body.message) || `请求失败（HTTP ${response.status}）`);
     return body && "data" in body ? body.data : body;
   }
 
@@ -95,6 +99,106 @@
     return block;
   }
 
+  // ------------------------------------------------------------ 一键投稿（编号 + 曲名 + 3 段指纹）
+
+  // 只写本机 <UserData>\community-outbox\，绝不自动上传；提交动作由用户自己点开 GitHub 模板链接完成。
+  function buildContributionSection() {
+    const block = node("div", null, "ln-contribution");
+    const head = node("div", null, "panelHead");
+    head.append(
+      node("h3", "一键投稿"),
+      node("p", "把本机已经起好名的作品汇总成一个投稿文件：已命名 + 能算出 3 段指纹的才会被收进去。"),
+    );
+    const counts = node("p", "", "ln-contributionCounts");
+    const actions = node("div", null, "ln-contributionActions");
+    const build = node("button", "生成投稿文件", "secondary");
+    const open = node("button", "打开提交页面", "secondary");
+    open.disabled = true;
+    actions.append(build, open);
+    const result = node("p", "", "result");
+    const file = node("code", "", "ln-contributionFile");
+    const hint = node("p", "只上传「编号 + 曲名 + 3 段指纹」，不含任何个人信息（没有路径、用户名、设备信息）。", "ln-contributionHint");
+    block.append(head, counts, actions, result, file, hint);
+
+    let openUrl = "";
+    let totals = { total: 0, ready: 0, submitted: 0 };
+
+    function renderCounts() {
+      counts.textContent = `已命名 ${totals.total ?? 0} 首，可投稿 ${totals.ready ?? 0} 首，已投稿 ${totals.submitted ?? 0} 首`;
+    }
+
+    /** 反复调 preview 直到本机指纹都校验完：一次只补算一小批，免得一个请求卡好几分钟。 */
+    async function previewAll(onProgress) {
+      let data = null;
+      for (let round = 0; round < 40; round += 1) {
+        data = await api("/community/contribution/preview?limit=20");
+        totals = (data && data.totals) || totals;
+        renderCounts();
+        if (typeof onProgress === "function") onProgress(data);
+        if (!(Number(data && data.remaining) > 0)) break;
+      }
+      return data;
+    }
+
+    /** 只看缓存（cacheOnly）：不惊动 ffmpeg，用来显示统计数字。 */
+    async function loadCounts() {
+      try {
+        const data = await api("/community/contribution/preview?cacheOnly=1");
+        totals = (data && data.totals) || totals;
+        renderCounts();
+      } catch (error) {
+        counts.textContent = `读取投稿状态失败：${error.message}`;
+      }
+    }
+
+    build.addEventListener("click", async () => {
+      build.disabled = true;
+      open.disabled = true;
+      file.textContent = "";
+      result.textContent = "正在校验指纹…（首次要逐首解码音频，比较慢；指纹会缓存，下次就快了）";
+      try {
+        const previewData = await previewAll(info => {
+          if (info && Number(info.remaining) > 0) {
+            result.textContent = `正在校验指纹…已确认可投稿 ${(info.totals && info.totals.ready) ?? 0} 首，还剩 ${info.remaining} 首待校验`;
+          }
+        });
+        const ready = (previewData && previewData.totals && previewData.totals.ready) || 0;
+        if (!ready) {
+          const named = (previewData && previewData.totals && previewData.totals.total) || 0;
+          result.textContent = `没有可投稿的曲目：已命名 ${named} 首，其中能算出 3 段指纹的 0 首。`;
+          return;
+        }
+        const data = await api("/community/contribution/build", { method: "POST", body: JSON.stringify({}) });
+        openUrl = (data && data.openUrl) || openUrl;
+        open.disabled = !openUrl;
+        file.textContent = (data && data.file) || "";
+        result.textContent = `已生成投稿文件：${(data && data.count) ?? 0} 首，${Math.round(((data && data.bytes) || 0) / 1024)} KB。`
+          + "点「打开提交页面」，把文件内容整段贴进去即可。";
+        await loadCounts();
+      } catch (error) {
+        result.textContent = `生成失败：${error.message}`;
+      } finally {
+        build.disabled = false;
+      }
+    });
+
+    open.addEventListener("click", async () => {
+      // 必须先生成过投稿文件才允许打开提交页面（预览返回的 openUrl 不算）
+      if (!openUrl || !file.textContent) return;
+      // g10：外链走后端白名单通道（便携版 WebView2 里 window.open 会被当弹窗拦掉）
+      const host = global.OliviaSoulPanelHost;
+      try {
+        if (host && typeof host.openExternal === "function") await host.openExternal(openUrl);
+        else global.open(openUrl, "_blank", "noopener");
+      } catch (error) {
+        result.textContent = "打不开提交页面：" + (error && error.message ? error.message : error) + "\n可手动访问：" + openUrl;
+      }
+    });
+
+    void loadCounts();
+    return block;
+  }
+
   // ------------------------------------------------------------ 社区曲目名单
 
   function buildCommunitySection() {
@@ -108,10 +212,10 @@
     const actions = node("div", null, "actions");
     const refresh = node("button", "刷新名单", "secondary");
     const autoName = node("button", "自动命名", "");
-    const contribute = node("button", "生成投稿文件", "secondary");
+    const contribute = node("button", "生成投稿文件（填 GitHub 用户名）", "secondary");
     actions.append(refresh, autoName, contribute);
     const result = node("p", "", "result");
-    block.append(head, status, actions, result);
+    block.append(head, status, actions, result, buildContributionSection());
 
     async function loadStatus() {
       try {

@@ -33,6 +33,7 @@
           <button class="sideTab" type="button" data-tab="memory">记忆</button>
           <button class="sideTab" type="button" data-tab="transcription">视频转文字</button>
           <button class="sideTab" type="button" data-tab="listen-naming">曲名与时段</button>
+        <button class="sideTab" type="button" data-tab="listen-tools">试听工具</button>
           <button class="sideTab" type="button" data-tab="update">软件更新</button>
           <button class="sideTab" type="button" data-tab="dependency-check">依赖检查</button>
           <button class="sideTab" type="button" data-tab="logs">运行日志</button>
@@ -326,21 +327,23 @@
           </section>
         </section>
 
-        <section class="panel tabPage" data-page="update" hidden>
+        <!-- data-panel-mount="keep"：装配器不清空本页，只把「更新说明」插在锚点之后 -->
+        <section class="panel tabPage" data-page="update" data-panel-mount="keep" hidden>
           <div class="panelHead">
             <div>
               <h2>软件更新</h2>
               <p>仅访问公开 GitHub Release，不上传本地配置、信件或密钥</p>
             </div>
           </div>
-          <section id="updateSettings" class="settingsBlock">
+          <!-- data-panel-host-anchor：装配器把「更新说明」面板插在这一块之后（不重建这块，app.js 缓存的引用才不会失效） -->
+          <section id="updateSettings" class="settingsBlock" data-panel-host-anchor="1">
             <div class="settingsBlockHead">
               <strong>软件更新</strong>
-              <small id="updateVersion">手动检查 GitHub Release，不会上传本地配置或密钥</small>
+              <small id="updateVersion">正在读取版本信息……</small>
             </div>
             <div class="actions updateActions" aria-label="下载操作">
               <button id="checkUpdate" class="secondary" type="button">检查更新</button>
-              <button id="downloadUpdate" type="button" hidden>下载并安装更新</button>
+              <button id="downloadUpdate" type="button" hidden>下载安装包</button>
               <button id="pauseUpdateDownload" class="secondary" type="button" hidden title="暂停下载并保留已下载文件">暂停下载</button>
               <button id="cancelUpdateDownload" class="secondary" type="button" hidden title="停止下载并删除本次下载的文件">取消下载</button>
             </div>
@@ -348,7 +351,7 @@
             <div id="updateTransferResult" class="result" role="status"></div>
             <div class="updateDownloadStatus">
               <progress id="updateDownloadProgress" max="100" value="0" aria-label="安装包下载进度" hidden></progress>
-              <small id="updateDownloadDetails" aria-live="polite" hidden></small>
+              <small id="updateDownloadDetails" aria-live="polite">0.0% · 0.0 KB / 0.0 KB</small>
             </div>
           </section>
         </section>
@@ -515,7 +518,9 @@
           </section>
         </section>
 
-        <section class="panel tabPage debugPage" data-page="debug" hidden>
+        <!-- data-panel-mount="keep"：装配器只把「数据搬家」面板追加到这一页末尾，不清空页面原有内容
+             （清空会删掉 #debugDelay 等元素，app.js 点开本页时会写到 null 上并弹"操作失败"） -->
+        <section class="panel tabPage debugPage" data-page="debug" data-panel-mount="keep" hidden>
           <div class="panelHead">
             <div>
               <h2>调试</h2>
@@ -564,6 +569,7 @@
           </div>
         </section>
       <section class="panel tabPage" data-page="listen-naming" hidden></section>
+    <section class="panel tabPage" data-page="listen-tools" hidden></section>
       <section class="panel tabPage" data-page="dependency-check" hidden></section>
       <section class="panel tabPage" data-page="legal" hidden></section>
         <section class="panel tabPage" data-page="logs" hidden></section>
@@ -590,6 +596,11 @@
   </div>
   <script src="/admin/listen-naming.js"></script>
   <script src="/admin/listen-naming-tools.js"></script>
+    <script src="/admin/panel-host.js"></script>
+    <script src="/admin/listen-naming-player.js"></script>
+    <script src="/admin/time-of-day-inspect.js"></script>
+    <script src="/admin/update-notes.js"></script>
+    <script src="/admin/migrate-ui.js"></script>
   <script src="/admin/listen-naming-feedback.js"></script>
   <script src="/admin/dependency-check.js"></script>
   <script src="/admin/legal-notices.js"></script>

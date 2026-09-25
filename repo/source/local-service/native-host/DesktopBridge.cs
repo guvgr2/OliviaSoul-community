@@ -53,6 +53,7 @@ namespace OliviaSoul
     selectMediaFile: () => invoke('selectMediaFile', []),
     selectLibraryFolder: initialPath => invoke('selectLibraryFolder', [initialPath]),
     openDirectory: path => invoke('openDirectory', [path]),
+    openExternal: url => invoke('openExternal', [url]),
     getClientStatus: () => invoke('getClientStatus', []),
     mountClient: port => invoke('mountClient', [port]),
     restoreClient: () => invoke('restoreClient', []),
@@ -92,6 +93,9 @@ namespace OliviaSoul
                         break;
                     case "openDirectory":
                         result = OpenDirectory(values != null && values.Count > 0 ? Convert.ToString(values[0]) : "");
+                        break;
+                    case "openExternal":
+                        result = OpenExternal(values != null && values.Count > 0 ? Convert.ToString(values[0]) : "");
                         break;
                     case "exportSoul":
                         result = await ExportSoulAsync();
@@ -208,6 +212,42 @@ namespace OliviaSoul
             if (!Directory.Exists(fullPath)) throw new DirectoryNotFoundException("目录不存在或当前无法访问");
             Process.Start(new ProcessStartInfo(fullPath) { UseShellExecute = true });
             return new Dictionary<string, object> { { "opened", true }, { "path", fullPath } };
+        }
+
+        // 「打开外链」：只认 https + 白名单域名，再交系统默认浏览器。
+        // 前端面板一律走这里，不再自行 window.open（WebView2 会把它当弹窗拦掉）。
+        private static readonly string[] ExternalLinkHosts = new[]
+        {
+            "github.com",
+            "objects.githubusercontent.com",
+            "api.github.com",
+            "raw.githubusercontent.com",
+            "developer.microsoft.com",
+            "www.gyan.dev",
+            "gyan.dev",
+        };
+
+        internal static string ExternalLinkTarget(string value)
+        {
+            string target = (value ?? "").Trim();
+            Uri parsed;
+            if (!Uri.TryCreate(target, UriKind.Absolute, out parsed) || parsed.Scheme != Uri.UriSchemeHttps)
+                throw new InvalidOperationException("只允许打开白名单里的 https 地址");
+            string host = parsed.Host.ToLowerInvariant();
+            bool allowed = false;
+            foreach (string candidate in ExternalLinkHosts)
+            {
+                if (host == candidate || host.EndsWith("." + candidate, StringComparison.Ordinal)) { allowed = true; break; }
+            }
+            if (!allowed) throw new InvalidOperationException("只允许打开白名单里的 https 地址");
+            return target;
+        }
+
+        private object OpenExternal(string value)
+        {
+            string target = ExternalLinkTarget(value);
+            Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
+            return new Dictionary<string, object> { { "opened", true }, { "url", target } };
         }
 
         private object SelectMediaFile()

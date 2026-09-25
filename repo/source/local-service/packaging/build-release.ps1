@@ -17,7 +17,7 @@ $utf8NoBom = New-Object Text.UTF8Encoding $false
 . (Join-Path $PSScriptRoot "package-safety.ps1")
 
 $baseVersion = "2008.2.7"
-$version = "2008.2.7-linli9-g04"
+$version = "2008.2.7-linli9-g10"
 $packagePath = Join-Path $project "package.json"
 $packageText = [IO.File]::ReadAllText($packagePath, $utf8NoBom)
 $package = $packageText | ConvertFrom-Json
