@@ -703,8 +703,13 @@ export async function createOliviaService(options = {}) {
       version: DEFAULT_UPDATE_TAG,
       log: message => console.log(String(message)),
     });
-    if (prepared?.restored?.applied)
+    if (prepared?.restored?.applied) {
       console.log(`[data-safety] 已按你的安排恢复数据库：${prepared.restored.from}（恢复前留档 ${prepared.restored.kept || "无"}）`);
+      if (prepared.restored.partial)
+        console.log(`[data-safety] 注意：恢复可能不完整 —— ${prepared.restored.warning}`);
+    }
+    if (prepared?.restored && prepared.restored.applied === false)
+      console.log(`[data-safety] 本次未能恢复（${prepared.restored.reason}）：${prepared.restored.error ?? ""}`);
   } catch (error) {
     console.error(`[data-safety] 启动前处理失败（继续启动）：${error?.message ?? error}`);
   }

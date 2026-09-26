@@ -10,12 +10,22 @@
 //   2. 任何恢复/导入之前，先把当前库整体留档（连 WAL 一起改名），永远留一条退路。
 //   3. 导出包一律脱敏（清空 API Key 等凭据）：备份留完整是给本机回滚用的，导出包是可能被分享出去的。
 import { copyFile, mkdir, readdir, rename, stat, unlink, readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, basename } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { inflateRawSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { makeZip } from "./diagnostic-package.js";
+
+/** 当前程序版本：读随包的 package.json（打包脚本每次写版本号）。导出包要靠它标版本，不能是 unknown。 */
+const APP_VERSION = (() => {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
+    return String(pkg?.version ?? "").trim();
+  } catch { return ""; }
+})();
 
 const MB = 1024 * 1024;
 const MAX_EXPORT_BYTES = 512 * MB;      // 导出包上限（数据库 + 歌词，正常远小于此）
@@ -223,18 +233,47 @@ export async function applyPendingRestore({ databasePath, log = () => {} }) {
   let keptFile = "";
   if (await exists(databasePath)) {
     // 三个文件一起改名，保留的是完整状态（含 WAL 里尚未 checkpoint 的部分）
-    try { await rename(databasePath, kept); keptFile = basename(kept); } catch { /* 改不动就继续，下面复制会覆盖 */ }
+    try {
+      await rename(databasePath, kept);
+      keptFile = basename(kept);
+    } catch (error) {
+      // 留档失败 = 没有退路。宁可这次不恢复（标记留着，下次启动再试），
+      // 也不能在"覆盖掉用户唯一的库、却没有任何备份"的情况下继续。
+      const message = String(error?.message ?? error);
+      log(`[data-safety] 恢复中止：当前库无法留档（${message}）。恢复标记已保留，`
+        + `请确认没有另一个 Olivia Soul 实例 / 程序正在使用该数据库，再重新打开本程序重试。`);
+      return { applied: false, reason: "keep-failed", error: message };
+    }
     for (const suffix of ["-wal", "-shm"]) {
       const side = `${databasePath}${suffix}`;
-      if (await exists(side)) { try { await rename(side, `${kept}${suffix}`); } catch { /* 忽略 */ } }
+      if (!(await exists(side))) continue;
+      try {
+        await rename(side, `${kept}${suffix}`);
+      } catch (error) {
+        // 日志文件挪不走，说明它正被占用：此时覆盖主库会得到"新旧混杂"的库，必须停手。
+        const message = String(error?.message ?? error);
+        log(`[data-safety] 恢复中止：数据库日志文件 ${suffix} 挪不动（${message}）。`
+          + `恢复标记已保留，请关闭其他正在使用该数据库的程序后重试。`);
+        return { applied: false, reason: "sidecar-locked", error: message };
+      }
     }
   }
   await copyFile(source, databasePath);
-  // 恢复进来的是一份干净快照，旧的 WAL/SHM 不能再留（否则会拿旧日志套新库）
+  // 恢复进来的是一份干净快照，旧的 WAL/SHM 不能再留（否则会拿旧日志套新库）。
+  // 这一步如果失败，恢复会"看着成功、实际被旧日志拉回旧数据"，所以必须报出来而不是吞掉。
+  let sidecarWarning = "";
   for (const suffix of ["-wal", "-shm"]) {
-    try { await unlink(`${databasePath}${suffix}`); } catch { /* 不存在正常 */ }
+    const side = `${databasePath}${suffix}`;
+    if (!(await exists(side))) continue;
+    try { await unlink(side); }
+    catch (error) { sidecarWarning = `${suffix} 删不掉（${String(error?.message ?? error)}）`; }
   }
   await clear();
+  if (sidecarWarning) {
+    log(`[data-safety] 恢复已执行，但可能不完整：${sidecarWarning}。`
+      + `请关闭其他程序后重启本程序，并用「看内容」确认数据是否真的回到备份点。`);
+    return { applied: true, partial: true, from: pending.file, kept: keptFile, source: pending.source, warning: sidecarWarning };
+  }
   log(`[data-safety] 已应用恢复：${pending.file}（恢复前的库留档为 ${keptFile || "无"}）`);
   return { applied: true, from: pending.file, kept: keptFile, source: pending.source };
 }
@@ -324,6 +363,7 @@ async function collectLyrics(databasePath) {
  */
 export async function exportUserData({ databasePath, version } = {}) {
   if (!(await exists(databasePath))) throw httpError(404, "数据库还不存在，没有可导出的数据", "DATABASE_MISSING");
+  const appVersion = String(version ?? "").trim() || APP_VERSION || "unknown";
   const outDir = exportsDirOf(databasePath);
   await mkdir(outDir, { recursive: true });
   const snapshot = join(outDir, `.snapshot-${stamp()}.sqlite`);
@@ -336,7 +376,7 @@ export async function exportUserData({ databasePath, version } = {}) {
 
   const manifest = {
     kind: "olivia-userdata",
-    version: String(version ?? ""),
+    version: appVersion,
     exportedAt: new Date().toISOString(),
     counts: summary.counts,
     lyrics: lyrics.entries.length,
@@ -372,7 +412,7 @@ export async function exportUserData({ databasePath, version } = {}) {
   ];
   const zip = makeZip(entries);
   if (zip.length > MAX_EXPORT_BYTES) throw httpError(413, "数据太大，导出包超过上限", "EXPORT_TOO_LARGE");
-  const target = join(outDir, `olivia-userdata-${String(version || "unknown").replace(/[^\w.-]+/gu, "_")}-${stamp()}.zip`);
+  const target = join(outDir, `olivia-userdata-${appVersion.replace(/[^\w.-]+/gu, "_")}-${stamp()}.zip`);
   await writeFile(target, zip);
   return {
     file: target,
