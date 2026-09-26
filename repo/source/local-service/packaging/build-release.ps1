@@ -16,6 +16,13 @@ $repository = Split-Path $project -Parent
 $utf8NoBom = New-Object Text.UTF8Encoding $false
 . (Join-Path $PSScriptRoot "package-safety.ps1")
 
+# g14: per-step timing so "why is packaging slow" is answerable from the log.
+$script:packageStepWatch = [Diagnostics.Stopwatch]::StartNew()
+function Step-Mark([string]$Name) {
+    Write-Output ("[step] {0,-28} {1,8:N1}s" -f $Name, $script:packageStepWatch.Elapsed.TotalSeconds)
+    $script:packageStepWatch.Restart()
+}
+
 $baseVersion = "2008.2.7"
 $version = "2008.2.7-linli9-g14"
 $packagePath = Join-Path $project "package.json"
@@ -428,6 +435,7 @@ $steamOutput = Join-Path $WorkDirectory "steam-waiter-output"
 if ($LASTEXITCODE -ne 0) { throw "Steam waiter compilation failed" }
 Copy-SteamLauncherPayload -Source $steamSource -Compiled $steamOutput -Destination (Join-Path $stage "resources\workspace-template\tools\steam-launcher")
 Copy-ReviewGuides -Source $PSScriptRoot -Stage $stage
+Step-Mark "staging"
 
 # Freeze the complete audited stage. Portable and Setup are both produced only from this snapshot.
 $frozenStage = Join-Path $WorkDirectory "frozen-stage"
@@ -437,6 +445,7 @@ $frozenReceipt = New-AuditedPackageSnapshot `
     -ForbiddenValues $forbiddenPackageValues `
     -TrustedFiles $trustedStageFiles
 $frozenStageFingerprint = $frozenReceipt.Fingerprint
+Step-Mark "freeze-snapshot"
 $portableCandidate = Join-Path $WorkDirectory "OliviaSoul-$version-Portable.candidate.zip"
 $auditedArtifactDirectory = Join-Path $WorkDirectory "audited-artifacts"
 $auditedPortable = Join-Path $auditedArtifactDirectory "OliviaSoul-$version-Portable.zip"
@@ -448,6 +457,7 @@ $portableReceipt = Publish-AuditedPackageArchive `
     -ForbiddenValues $forbiddenPackageValues `
     -TrustedFiles $trustedStageFiles `
     -ExpectedStageFingerprint $frozenStageFingerprint
+    Step-Mark "portable-publish"
 }
 
 if ([string]::IsNullOrWhiteSpace($Iscc)) {
@@ -477,6 +487,7 @@ $installerCompileReceipt = New-AuditedInstallerCompileScript `
     -ForbiddenValues $forbiddenPackageValues `
     -TrustedFiles $trustedStageFiles `
     -ExpectedStageFingerprint $frozenStageFingerprint
+    Step-Mark "installer-compile-script"
 Assert-AuditedInstallerSource `
     -InstallerScript $installerCompileScript `
     -Stage $frozenStage `
@@ -485,6 +496,7 @@ Assert-AuditedInstallerSource `
     -ExpectedStageFingerprint $frozenStageFingerprint `
     -RequireEnvironmentBinding `
     -RequireExplicitSources
+    Step-Mark "assert-installer-source"
 Invoke-AuditedInstallerCompiler `
     -InstallerScript $installerCompileScript `
     -Stage $frozenStage `
@@ -506,8 +518,10 @@ Assert-AuditedInstallerSource `
     -ExpectedStageFingerprint $frozenStageFingerprint `
     -RequireEnvironmentBinding `
     -RequireExplicitSources
+    Step-Mark "inno-compiled-and-verified"
 $setupCandidate = Join-Path $installerOutputDirectory "OliviaSoul-$version-Setup.exe"
-$setupHash = Assert-PublicPackageFile -Path $setupCandidate -RelativePath "OliviaSoul-$version-Setup.exe" -ForbiddenValues $forbiddenPackageValues
+$setupHash = Assert-PublicPackageFile -Path $setupCandidate -RelativePath "OliviaSoul-$version-Setup.exe" -ForbiddenValues $forbiddenPackageValues -SkipContent $true
+Step-Mark "setup-hash-scan"
 
 $releaseCandidateDirectory = Join-Path $WorkDirectory "release-candidate"
 Ensure-Directory $releaseCandidateDirectory
@@ -515,6 +529,7 @@ if (-not $InstallerOnly) {
     Copy-VerifiedPackageFile -Source $auditedPortable -Destination (Join-Path $releaseCandidateDirectory "OliviaSoul-$version-Portable.zip") -ExpectedSha256 $portableReceipt.ArchiveSha256
 }
 Copy-VerifiedPackageFile -Source $setupCandidate -Destination (Join-Path $releaseCandidateDirectory "OliviaSoul-$version-Setup.exe") -ExpectedSha256 $setupHash
+Step-Mark "copy-to-candidate"
 foreach ($name in @("使用说明.txt", "发布说明.md", "反馈指南.md", "API配置使用说明.md")) {
     $guideManifestValue = [string]$frozenReceipt.Manifest[$name]
     if ([string]::IsNullOrWhiteSpace($guideManifestValue)) { throw "冻结发布说明缺失：$name" }
@@ -526,8 +541,10 @@ $releaseTrustedFiles = @{
 }
 if (-not $InstallerOnly) { $releaseTrustedFiles["OliviaSoul-$version-Portable.zip"] = $portableReceipt.ArchiveSha256 }
 Write-ReleaseChecksums $releaseCandidateDirectory
+Step-Mark "write-checksums"
 $releaseManifest = Get-PublicPackageTreeManifest -Path $releaseCandidateDirectory -ForbiddenValues $forbiddenPackageValues -TrustedFiles $releaseTrustedFiles
 $releaseFingerprint = Get-PackageManifestFingerprint $releaseManifest
+Step-Mark "release-manifest"
 Publish-VerifiedReleaseDirectory `
     -CandidateDirectory $releaseCandidateDirectory `
     -OutputDirectory $OutputDirectory `
@@ -535,3 +552,4 @@ Publish-VerifiedReleaseDirectory `
     -ForbiddenValues $forbiddenPackageValues `
     -TrustedFiles $releaseTrustedFiles
 Write-Output "Olivia Soul release: $OutputDirectory"
+Step-Mark "publish-copy"

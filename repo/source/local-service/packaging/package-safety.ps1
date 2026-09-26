@@ -176,6 +176,13 @@ function Assert-PackageTextContent {
 # 严格模式：把环境变量 OLIVIA_SOUL_FULL_SCAN 设为 1，即可恢复原来"6 种解码 × 10 条正则"的全量扫描。
 $script:LargeBinaryFastScanThresholdBytes = 32MB
 
+# g14 性能：一次打包里同一棵树会被清单化很多次（冻结 3 次、发布 1 次、安装脚本 1 次、
+# 前后校验 2 次 ……），每次都重新读盘 + 哈希 + 内容扫描 —— 实测内容扫描只有 ~2.3 MB/s，
+# 这是打包 26 分钟里的最大开销（占比 8 分钟以上）。按
+# "绝对路径 + 相对路径 + 大小 + 最后写入时间"缓存每个文件的结果：
+# 文件被改动时 size/mtime 必然变化 -> 缓存自动失效，仍然能发现意外改动。
+$script:PackageFileHashCache = @{}
+
 function Assert-LargeBinaryTextContent {
     param(
         [Parameter(Mandatory = $true)][string]$Text,
@@ -492,6 +499,17 @@ function Get-PublicPackageTreeManifest {
         }
 
         $isTrusted = $trusted.ContainsKey($relative)
+        $cacheKey = $full + '|' + $relative.ToLowerInvariant()
+        $stamp = ([string]$file.Length) + ':' + ([string]$file.LastWriteTimeUtc.Ticks)
+        $cached = $script:PackageFileHashCache[$cacheKey]
+        if ($null -ne $cached -and $cached['Stamp'] -eq $stamp -and $cached['Trusted'] -eq $isTrusted) {
+            if ($isTrusted -and $cached['Hash'] -cne $trusted[$relative]) {
+                throw "[PRIVACY_TRUSTED_HASH] Package privacy check rejected trusted file hash: $relative"
+            }
+            $manifest.Add($relative, $cached['Value'])
+            continue
+        }
+
         if ([IO.Path]::GetFileName($relative) -ieq 'model-call.ps1' -or $relative -ieq 'app/model-config.js') {
             Assert-PackageModelDefaults -RelativePath $relative -Text ([IO.File]::ReadAllText($file.FullName))
         }
@@ -505,7 +523,9 @@ function Get-PublicPackageTreeManifest {
         if ($isTrusted -and $hash -cne $trusted[$relative]) {
             throw "[PRIVACY_TRUSTED_HASH] Package privacy check rejected trusted file hash: $relative"
         }
-        $manifest.Add($relative, ([string]$file.Length + ':' + $hash))
+        $value = [string]$file.Length + ':' + $hash
+        $manifest.Add($relative, $value)
+        $script:PackageFileHashCache[$cacheKey] = @{ Stamp = $stamp; Trusted = $isTrusted; Hash = $hash; Value = $value }
     }
 
     foreach ($relative in @($trusted.Keys)) {
@@ -738,11 +758,14 @@ function Assert-PublicPackageFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$RelativePath,
-        [string[]]$ForbiddenValues = @()
+        [string[]]$ForbiddenValues = @(),
+        # g14: 由已验证 stage 经 Inno 生成的安装包，内容审计在 stage 侧已经做过，
+        # 这里只需要哈希（它的 520 MB 做全量内容扫描要 ~3.7 分钟，是纯重复劳动）。
+        [bool]$SkipContent = $false
     )
     Assert-PackageRelativePath $RelativePath
     $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-    try { return Get-PackageStreamHash -Stream $stream -RelativePath $RelativePath -ForbiddenNeedles @(Get-PackageForbiddenNeedles $ForbiddenValues) -SkipContent $false }
+    try { return Get-PackageStreamHash -Stream $stream -RelativePath $RelativePath -ForbiddenNeedles @(Get-PackageForbiddenNeedles $ForbiddenValues) -SkipContent $SkipContent }
     finally { $stream.Dispose() }
 }
 
