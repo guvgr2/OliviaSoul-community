@@ -17,6 +17,7 @@ import { DatabaseSync } from "node:sqlite";
 import { inflateRawSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { makeZip } from "./diagnostic-package.js";
+import { snapshotDatabase, cleanSidecars } from "./sqlite-snapshot.js";
 
 /** 当前程序版本：读随包的 package.json（打包脚本每次写版本号）。导出包要靠它标版本，不能是 unknown。 */
 const APP_VERSION = (() => {
@@ -78,23 +79,11 @@ function kindLabel(name) {
 // ---------------------------------------------------------------- 备份
 
 /**
- * 用 SQLite 自己的备份 API 生成一致快照（直接 copy 一个开着 WAL 的库会丢已提交事务）。
- * 备份 API 不可用时退回文件复制。
+ * 生成一致快照。注意：node:sqlite 没有 backup() 方法（见 sqlite-snapshot.js 的说明），
+ * 所以走"先 checkpoint 再复制"，否则 WAL 里未落盘的提交会丢。
  */
 export async function backupSqlite(databasePath, target) {
-  await mkdir(dirname(target), { recursive: true });
-  const temporary = `${target}.tmp`;
-  try { await unlink(temporary); } catch { /* 不存在正常 */ }
-  let done = false;
-  try {
-    const source = openReadOnly(databasePath);
-    try {
-      if (typeof source.backup === "function") { await source.backup(temporary); done = true; }
-    } finally { source.close(); }
-  } catch { done = false; }
-  if (!done) await copyFile(databasePath, temporary);
-  await rename(temporary, target);
-  return target;
+  return await snapshotDatabase(databasePath, target);
 }
 
 /** 备份列表（含当前库本身的信息）。 */
@@ -152,7 +141,11 @@ export async function inspectBackup(file) {
         letters: count("SELECT COUNT(*) AS c FROM letters"),
       },
     };
-  } finally { db.close(); }
+  } finally {
+    db.close();
+    // 备份文件继承了 WAL 模式，任何只读打开都会给它建一对日志文件（通常 0 字节），顺手清掉
+    await cleanSidecars(file);
+  }
 }
 
 /** 立刻手动备份一份当前库。 */
@@ -373,6 +366,7 @@ export async function exportUserData({ databasePath, version } = {}) {
   const lyrics = await collectLyrics(databasePath);
   const buffer = await readFile(snapshot);
   await unlink(snapshot).catch(() => {});
+  await cleanSidecars(snapshot);
 
   const manifest = {
     kind: "olivia-userdata",

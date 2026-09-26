@@ -20,6 +20,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { snapshotDatabase } from "./sqlite-snapshot.js";
 import { startupReport as buildStartupReport } from "./startup-report.js";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1442,25 +1443,9 @@ export async function createListenNamingRoutes(options = {}) {
     await mkdir(backupDir, { recursive: true });
     const target = join(backupDir, `backup-listen-${stamp()}.sqlite`);
     if (existsSync(target)) { session.backupFile = target; return target; }
-    // 先用 SQLite 自己的备份 API 生成一份一致的快照到临时文件，
-    // 避免直接 copy 一个正在被 OliviaSoul 写入（WAL）的库。
-    const temporary = `${target}.tmp`;
-    let done = false;
-    try {
-      const source = openReadOnly(databasePath);
-      try {
-        if (typeof source.backup === "function") {
-          await source.backup(temporary);
-          done = true;
-        }
-      } finally {
-        source.close();
-      }
-    } catch {
-      done = false;
-    }
-    if (!done) await copyFile(databasePath, temporary);
-    await rename(temporary, target);
+    // g14 修正：node:sqlite 的 DatabaseSync 没有 backup() 方法（实测 v22.22），
+    // 所以改用"先把 WAL checkpoint 回主库，再复制文件"，否则会漏掉尚未落盘的提交。
+    await snapshotDatabase(databasePath, target);
     session.backupFile = target;
     return target;
   }

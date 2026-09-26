@@ -385,7 +385,7 @@ foreach ($name in @(
     # --- 本分支新增的后端模块（漏了它们，装出来的程序接口会全部 404）---
     "listen-naming.js", "time-of-day.js", "community-catalog.js", "fingerprint.js", "dependency-check.js", "logs.js",
     # --- g13 新增 ---
-    "startup-report.js", "diagnostic-package.js", "crash-report.js", "game-log.js", "data-safety.js"
+    "startup-report.js", "diagnostic-package.js", "crash-report.js", "game-log.js", "data-safety.js", "sqlite-snapshot.js"
 )) {
     Copy-Item -LiteralPath (Join-Path (Join-Path $project "midi") $name) -Destination (Join-Path $stage "app\midi") -Force
 }

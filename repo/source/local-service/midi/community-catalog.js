@@ -22,6 +22,7 @@
 
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { snapshotDatabase } from "./sqlite-snapshot.js";
 import { createHash } from "node:crypto";
 import { get as httpGetRaw } from "node:http";
 import { get as httpsGetRaw } from "node:https";
@@ -166,28 +167,13 @@ export function openWritable(path) {
   return db;
 }
 
-/** 写库前备份数据库（SQLite 备份 API 优先，退回 copyFile）。 */
+/**
+ * 写库前备份数据库。
+ * g14 修正：node:sqlite 的 DatabaseSync 没有 backup() 方法（实测 v22.22），
+ * 改为"先 checkpoint 再复制"，否则 WAL 里未落盘的提交会丢。
+ */
 export async function backupDatabase(databasePath, target) {
-  await mkdir(dirname(target), { recursive: true });
-  const temporary = `${target}.tmp`;
-  try { await unlink(temporary); } catch { /* 不存在正常 */ }
-  let done = false;
-  try {
-    const source = openReadOnly(databasePath);
-    try {
-      if (typeof source.backup === "function") {
-        await source.backup(temporary);
-        done = true;
-      }
-    } finally {
-      source.close();
-    }
-  } catch {
-    done = false;
-  }
-  if (!done) await copyFile(databasePath, temporary);
-  await rename(temporary, target);
-  return target;
+  return await snapshotDatabase(databasePath, target);
 }
 
 // ---------------------------------------------------------------- 小工具

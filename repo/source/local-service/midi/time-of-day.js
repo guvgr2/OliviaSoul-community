@@ -35,6 +35,7 @@ import { copyFile, mkdir, readFile, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { snapshotDatabase } from "./sqlite-snapshot.js";
 
 function routePathOf(url) {
   // 调用方可能传 URL 对象，也可能直接传字符串路径；两种都要能处理，否则会抛
@@ -143,30 +144,12 @@ export function openWritable(path) {
 }
 
 /**
- * 写库前把数据库整体备份一份（用 SQLite 自己的备份 API，避免直接 copy 一个正在被写入的 WAL 库；
- * 备份 API 不可用时退回 copyFile）。
+ * 写库前把数据库整体备份一份。
+ * g14 修正：node:sqlite 的 DatabaseSync 并没有 backup() 方法（实测 v22.22），
+ * 所以这里改为"先把 WAL checkpoint 回主库，再复制文件" —— 直接复制一个 WAL 非空的库会丢最近的提交。
  */
 export async function backupDatabase(databasePath, target) {
-  await mkdir(dirname(target), { recursive: true });
-  const temporary = `${target}.tmp`;
-  try { await unlink(temporary); } catch { /* 不存在正常 */ }
-  let done = false;
-  try {
-    const source = openReadOnly(databasePath);
-    try {
-      if (typeof source.backup === "function") {
-        await source.backup(temporary);
-        done = true;
-      }
-    } finally {
-      source.close();
-    }
-  } catch {
-    done = false;
-  }
-  if (!done) await copyFile(databasePath, temporary);
-  await rename(temporary, target);
-  return target;
+  return await snapshotDatabase(databasePath, target);
 }
 
 // ---------------------------------------------------------------- ffmpeg 定位
