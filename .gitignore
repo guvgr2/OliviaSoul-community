@@ -40,3 +40,8 @@ project.assets.json
 repo/build*/
 *.zip
 package-work/
+
+# 本地验证用的沙箱与临时目录（不进包、不入库；里面会写本机路径）
+.test-twins/
+.uipick/
+.edge-profile*/

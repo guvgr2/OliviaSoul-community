@@ -780,7 +780,11 @@ test("发布脚本只在 Portable、安装器及冻结 stage 全部复核后原�
   assert.match(source, /-ForbiddenValues\s+\$forbiddenPackageValues/u);
   assert.match(source, /-TrustedFiles\s+\$trustedStageFiles/u);
   assert.match(source, /-ExpectedStageFingerprint\s+\$frozenStageFingerprint/u);
-  assert.match(source, /\$releaseTrustedFiles\s*=\s*@\{[\s\S]*?Portable\.zip"\s*=\s*\$portableReceipt\.ArchiveSha256[\s\S]*?Setup\.exe"\s*=\s*\$setupHash[\s\S]*?\n\}/u);
+  // 两个产物都必须登记进受信清单，各自绑定自己的哈希。
+  // （不约束两行的先后顺序：脚本先登记 Setup、Portable 再按条件追加，与断言意图一致。）
+  assert.match(source, /\$releaseTrustedFiles\s*=\s*@\{[\s\S]*?\n\}/u);
+  assert.match(source, /"OliviaSoul-\$version-Setup\.exe"\s*=\s*\$setupHash/u);
+  assert.match(source, /\$releaseTrustedFiles\["OliviaSoul-\$version-Portable\.zip"\]\s*=\s*\$portableReceipt\.ArchiveSha256/u);
   assert.match(source, /Get-PublicPackageTreeManifest\s+-Path\s+\$releaseCandidateDirectory[\s\S]*?-TrustedFiles\s+\$releaseTrustedFiles/u);
   assert.match(source, /Publish-VerifiedReleaseDirectory[\s\S]*?-TrustedFiles\s+\$releaseTrustedFiles/u);
   assert.match(source, /Invoke-AuditedInstallerCompiler[\s\S]*?-RequireExplicitSources[\s\S]*?& \$Iscc/u);

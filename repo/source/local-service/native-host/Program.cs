@@ -27,6 +27,9 @@ namespace OliviaSoul
                 }
 
                 SetCurrentProcessExplicitAppUserModelID(AppUserModelId);
+                // g11 启动计时：从这里开始记（窗口构造前），这样"进程起来→界面可见"能报出完整耗时，
+                // 包括 WebView2 运行时装载与 dotnet 启动这些窗体构造之前的部分。
+                MainForm.MarkHostStarted();
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 try

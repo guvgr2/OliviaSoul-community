@@ -140,6 +140,53 @@ small { display: block; color: #77777d; font-size: 11px; margin-top: 2px; }
 .cards span { display: block; color: #83838a; font-size: 11px; margin-bottom: 2px; }
 .cards strong { font-size: 14px; }
 .sideTabs { display: grid; gap: 6px; border-top: 0; margin-top: 0; padding-top: 0; }
+
+/* ==========================================================================
+   g11 导航分类：侧栏收成几组（<details class="sideGroup">），组内仍是原来的
+   .sideTab[data-tab]，所以页签联动、通知点、装配器全都不受影响。
+   版式取"卡片分组"：每组一个浅底卡片 + 组名下的细分隔线，边界清楚又不抢视线。
+   ========================================================================== */
+.sideGroup {
+  border: 0; border-radius: 10px;
+  margin: 0 0 8px; padding: 8px 8px 8px;
+  background: #17181c;
+}
+.sideGroupTitle {
+  /* 只用 flex 居中：不用绝对定位排文字，避免"两个箭头高度不一致"那种歪斜；
+     红点与箭头用绝对定位钉在同一列（见下） */
+  position: relative;
+  display: flex; align-items: center;
+  list-style: none; cursor: pointer; user-select: none;
+  padding: 2px 28px 7px 4px; margin: 0 4px 6px;
+  border-bottom: 1px solid #24252b;
+  color: #7a7a82; font-size: 11.5px; font-weight: 700; letter-spacing: .7px;
+}
+/* 只留一个箭头：干掉浏览器给 <summary> 画的那个原生三角 */
+.sideGroupTitle::-webkit-details-marker { display: none; }
+.sideGroupTitle::marker { content: ""; }
+.sideGroupTitle > span:first-child { min-width: 0; }
+/* 提醒点与折叠箭头：两列，分别固定，绝不再重叠、也不再一左一右。
+   列位与页签红点对齐：页签红点是 right:10px（父容器右边缘内缩 10px），
+   组标题比页签内缩 4px（margin 0 4px），所以组红点取 right:6px 才落在同一竖线；
+   箭头固定在红点左侧 14px（7px 点宽 + 7px 间距）。 */
+.sideGroupTitle { padding-right: 30px; }
+.sideGroupTitle .sideGroupDot {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #dfbd80; box-shadow: 0 0 0 2px #17181c;
+}
+.sideGroupTitle[data-notice-kind="fault"] .sideGroupDot { background: #e48c87; }
+/* 折叠箭头：只此一个（原生三角已隐藏）。收起时指右、展开时指下 */
+.sideGroupTitle .sideGroupChevron {
+  position: absolute; right: 20px; top: 50%; transform: translateY(-50%) rotate(-90deg);
+  font-size: 13px; line-height: 1; color: #74747c; transition: transform .15s ease;
+}
+.sideGroup[open] .sideGroupTitle .sideGroupChevron { transform: translateY(-50%) rotate(0deg); }
+.sideGroupTitle:hover { color: #b6b6bd; }
+.sideGroupTitle:hover .sideGroupChevron { color: #9d9da5; }
+.sideGroup > .sideTab { margin-top: 2px; border-radius: 7px; padding: 8px 12px; font-size: 13.5px; }
+.sideGroup > .sideTab:last-child { margin-bottom: 0; }
+
 .sideTab {
   position: relative;
   width: 100%;
@@ -543,7 +590,10 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .workspace { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
   .sidebar { position: sticky; top: 0; z-index: 20; height: auto; min-height: 0; overflow: hidden; }
   .sideTitle { display: none; }
-  .sideTabs { display: flex; overflow-x: auto; border-top: 0; margin: 0; padding: 0; }
+  /* 窄屏：侧栏变成可横向滚动的"分组列"，展开的组内页签竖排 */
+  .sideTabs { display: flex; align-items: flex-start; gap: 12px; overflow-x: auto; border-top: 0; margin: 0; padding: 2px 0 6px; }
+  .sideGroup { flex: 0 0 auto; min-width: 132px; }
+  .sideGroup > .sideTab { width: auto; white-space: nowrap; }
   .sideTab { flex: 0 0 auto; width: auto; white-space: nowrap; }
   .customFields:not([hidden]) { grid-template-columns: 1fr; }
   .providerSwitch, .localModelFields { grid-template-columns: 1fr; }

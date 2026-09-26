@@ -69,6 +69,8 @@ const CONTRIBUTION_BATCH_LIMIT = 20;
 const CONTRIBUTION_BUDGET_MS = 20_000;
 // 生成投稿文件时给指纹留的最大时间：正常路径下预览已经把指纹算好，这里只是兜底。
 const CONTRIBUTION_BUILD_BUDGET_MS = 120_000;
+// g11：回传给前端的投稿文件正文上限（超出就不回传，只给清单，避免响应过大）
+const CONTRIBUTION_CONTENT_LIMIT = 512 * 1024;
 
 let USER_DATA_DIR = process.env.OLIVIA_USER_DATA || DEFAULT_DATA_DIR;
 let DATABASE_PATH = process.env.OLIVIA_COMMUNITY_DB || process.env.OLIVIA_LISTEN_DB || DEFAULT_DATABASE_PATH;
@@ -624,8 +626,71 @@ function writeNames(databasePath, plan, { allowExisting = false } = {}) {
  * @param {Function} [options.onProgress] 每处理一首回调一次 ({done, total, folder, matched})
  * @returns {Promise<{checked, matched, applied, skippedExisting, stale, total, offset, limit, hasMore, backupFile, details, errors}>}
  */
-export async function autoNameLocal(options = {}) {
+/**
+ * g12：给单首作品问一次"社区名单里有没有它" —— 命中就把曲名建议给前端预填（不写库）。
+ * 指纹走缓存，重复看同一首几乎不花时间。
+ *
+ * @returns {Promise<{folder,catalogCount,stale,matched,name,scores,worst,matchedFolder,reason}>}
+ */
+export async function suggestNameFor(folder, options = {}) {
+  const wanted = String(folder ?? "").trim();
+  if (!wanted) throw httpError(400, "缺少文件夹编号", "COMMUNITY_FOLDER_MISSING");
   const databasePath = databasePathOf(options);
+  if (!existsSync(databasePath)) throw new Error(`未找到 OliviaSoul 数据库：${databasePath}`);
+  let libraryRoot = String(options.libraryRoot ?? LIBRARY_ROOT ?? "").trim();
+  if (!libraryRoot) libraryRoot = readLibraryRootFromDatabase(databasePath);
+  if (!libraryRoot) throw httpError(409, "还没设置曲目存储路径", "COMMUNITY_LIBRARY_MISSING");
+  libraryRoot = resolve(libraryRoot);
+
+  const catalog = await fetchCatalog(options);
+  const entries = catalog.entries ?? {};
+  const catalogFolders = Object.keys(entries);
+  const base = { folder: wanted, catalogCount: catalog.count ?? catalogFolders.length, stale: catalog.stale === true };
+
+  const absolute = join(libraryRoot, wanted);
+  if (!existsSync(absolute)) return { ...base, matched: false, reason: "曲库里找不到这个文件夹" };
+  if (!catalogFolders.length) return { ...base, matched: false, reason: "社区名单还是空的（可在「试听工具」页刷新名单）" };
+
+  const cache = await loadFingerprintCache(options);
+  let local = null;
+  try {
+    local = await fingerprintFolderCached(absolute, { cache, options });
+  } catch (error) {
+    return { ...base, matched: false, reason: `算指纹失败：${error?.message ?? error}` };
+  }
+  if (local?.fromCache !== true) await saveFingerprintCache(cache, options).catch(() => {});
+  if (!local || !Array.isArray(local.fps) || local.fps.length < 2)
+    return { ...base, matched: false, reason: "取不到音频，算不出指纹" };
+
+  let best = null;
+  for (const key of catalogFolders) {
+    const entry = entries[key];
+    if (!Array.isArray(entry?.fps) || entry.fps.length < 2) continue;
+    const verdict = verifyMatch(local.fps, entry.fps);
+    if (!best || verdict.worst > best.verdict.worst) best = { key, entry, verdict };
+    if (verdict.ok) break;
+  }
+  if (!best) return { ...base, matched: false, reason: "社区名单里没有可比对的条目" };
+  if (!best.verdict.ok) {
+    return {
+      ...base, matched: false, matchedFolder: best.key, scores: best.verdict.scores,
+      worst: best.verdict.worst, suggested: sanitizeName(best.entry.name).ok ? sanitizeName(best.entry.name).name : "",
+      reason: `最接近的一条（${best.key}）相似度不够（最差一段 ${Math.round(best.verdict.worst * 1000) / 1000}）`,
+    };
+  }
+  const cleaned = sanitizeName(best.entry.name);
+  if (!cleaned.ok) return { ...base, matched: false, reason: `社区条目的曲名没通过脱敏检查（${cleaned.reason}）` };
+  return {
+    ...base,
+    matched: true,
+    name: cleaned.name,
+    matchedFolder: best.key,
+    scores: best.verdict.scores,
+    worst: best.verdict.worst,
+  };
+}
+
+export async function autoNameLocal(options = {}) {  const databasePath = databasePathOf(options);
   if (!existsSync(databasePath)) throw new Error(`未找到 OliviaSoul 数据库：${databasePath}`);
   let libraryRoot = String(options.libraryRoot ?? LIBRARY_ROOT ?? "").trim();
   if (!libraryRoot) libraryRoot = readLibraryRootFromDatabase(databasePath);
@@ -1152,6 +1217,16 @@ export async function buildContributionFile(options = {}) {
     bytes: Buffer.byteLength(text, "utf8"),
     openUrl: CONTRIBUTION_TEMPLATE_URL,
     outboxDir: context.outboxDir,
+    // g11 可核验闭环：把刚写出的内容原样回传，让用户先看清"要公开什么"，再复制去提交。
+    // 只回传这一份文件本身（全是自己填的曲名 + 指纹），不含任何路径与账号信息。
+    content: text.length <= CONTRIBUTION_CONTENT_LIMIT ? text : "",
+    contentTruncated: text.length > CONTRIBUTION_CONTENT_LIMIT,
+    contentPreview: chosen.slice(0, 10).map(item => ({
+      folder: item.folder,
+      name: item.name,
+      segments: Array.isArray(item.fps) ? item.fps.length : 0,
+      hash: item.hash,
+    })),
     skipped: resolved.pending.map(item => ({ folder: item.folder, name: item.name, reason: item.reason })),
     skippedSubmitted: resolved.ready.length - chosen.length,
     remaining: resolved.pending.filter(item => item.status === "unmeasured").length,
@@ -1316,6 +1391,9 @@ export async function createCommunityRoutes(options = {}) {
     if (req.method === "GET" && path === "/listen-naming/community/contribution/preview") return await handleContributionPreview(req, res, url);
     if (req.method === "POST" && path === "/listen-naming/community/contribution/build") return await handleContributionBuild(req);
     if (req.method === "POST" && path === "/listen-naming/community/consent") return await handleConsent(req);
+    // g12：单首比对建议（给命名页预填用，不写库）
+    if (req.method === "GET" && path === "/listen-naming/community/suggest")
+      return await suggestNameFor(url.searchParams.get("folder"), shared);
     if (req.method === "GET" && path === "/listen-naming/community/consent") {
       return { share: await shareConsent(shared), settingsPath: settingsPathOf(shared) };
     }

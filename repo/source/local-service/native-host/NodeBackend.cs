@@ -27,6 +27,9 @@ namespace OliviaSoul
         private int _disposed;
         private readonly object _stopLock = new object();
         private Task _stopTask;
+        // g12 自愈相关：正常退出时不重启；异常退出最多自动重启 3 次
+        private volatile bool _stopping;
+        private int _restartAttempts;
 
         public int Port { get; private set; }
         public event Action<int> PortChanged;
@@ -41,9 +44,20 @@ namespace OliviaSoul
         public async Task StartAsync()
         {
             if (!File.Exists(_paths.NodeHostScript)) throw new FileNotFoundException("缺少 Node 宿主脚本", _paths.NodeHostScript);
+            // g11：把计时起点对到"宿主进程刚起来"，这样 node 启动耗时与宿主自报的 sinceProcessStartMs 同一基准。
+            MainForm.MarkHostStarted();
             Directory.CreateDirectory(_paths.Workspace);
             Directory.CreateDirectory(_paths.Data);
             StopStaleProcesses();
+            LaunchProcess();
+            var completed = await Task.WhenAny(_ready.Task, Task.Delay(TimeSpan.FromSeconds(30))).ConfigureAwait(false);
+            if (completed != _ready.Task) throw new TimeoutException("等待本机服务启动超时");
+            Port = await _ready.Task.ConfigureAwait(false);
+        }
+
+        /// <summary>启动 node 子进程（首次启动与自动重启共用）。</summary>
+        private void LaunchProcess()
+        {
             _process = new Process
             {
                 StartInfo = new ProcessStartInfo
@@ -83,16 +97,49 @@ namespace OliviaSoul
                     " code=" + _process.ExitCode.ToString(CultureInfo.InvariantCulture));
                 _ready.TrySetException(error);
                 foreach (var item in _pending) item.Value.TrySetException(error);
+                // g12 自愈：本地服务意外退出时自动重启（最多 3 次，逐次拉长间隔），
+                // 免得用户看到的是"程序突然不动了"而不知道发生了什么。
+                TryScheduleRestart();
             };
             if (!_process.Start()) throw new InvalidOperationException("无法启动内置 Node 服务");
             BindToCurrentProcessLifetime();
+            // sinceProcessStartMs 记的是 node 进程自己的启动时刻（相对宿主进程开始），
+            // 用来和后端打印的 startup-stage=… 对齐，分辨"宿主慢"还是"node 慢"。
             RaiseLog("node started pid=" + _process.Id.ToString(CultureInfo.InvariantCulture) +
-                " parent=" + Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture));
+                " parent=" + Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture) +
+                " sinceProcessStartMs=" + MainForm.HostStartElapsedMs.ToString(CultureInfo.InvariantCulture) +
+                " startedAt=" + DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss.fff zzz", CultureInfo.InvariantCulture));
             _process.BeginOutputReadLine();
             _process.BeginErrorReadLine();
-            var completed = await Task.WhenAny(_ready.Task, Task.Delay(TimeSpan.FromSeconds(30))).ConfigureAwait(false);
-            if (completed != _ready.Task) throw new TimeoutException("等待本机服务启动超时");
-            Port = await _ready.Task.ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// node 异常退出后的自动重启（最多 3 次，间隔逐次拉长）。
+        /// 正常退出（点了退出/托盘退出）时 _stopping 为 true，不会重启。
+        /// </summary>
+        private void TryScheduleRestart()
+        {
+            if (_disposed != 0 || _stopping) return;
+            if (_restartAttempts >= 3)
+            {
+                RaiseLog("本机服务连续退出 3 次，已停止自动重启；请在「运行日志」里查看原因");
+                return;
+            }
+            _restartAttempts++;
+            var attempt = _restartAttempts;
+            Task.Delay(TimeSpan.FromMilliseconds(1500 * attempt)).ContinueWith(delegate
+            {
+                if (_disposed != 0 || _stopping) return;
+                try
+                {
+                    RaiseLog("本机服务已退出，正在自动重启（第 " + attempt.ToString(CultureInfo.InvariantCulture) + " 次）");
+                    LaunchProcess();
+                }
+                catch (Exception error)
+                {
+                    RaiseLog("自动重启失败：" + error.Message);
+                }
+            });
         }
 
         private void BindToCurrentProcessLifetime()
@@ -196,6 +243,7 @@ namespace OliviaSoul
 
         private async Task StopCoreAsync()
         {
+            _stopping = true;   // g12：正常退出，别触发自动重启
             if (_process == null || _process.HasExited) return;
             RaiseLog("node graceful stop pid=" + _process.Id.ToString(CultureInfo.InvariantCulture));
             try

@@ -112,20 +112,75 @@
     const counts = node("p", "", "ln-contributionCounts");
     const actions = node("div", null, "ln-contributionActions");
     const build = node("button", "生成投稿文件", "secondary");
+    const copy = node("button", "复制文件内容", "secondary");
     const open = node("button", "打开提交页面", "secondary");
+    copy.disabled = true;
     open.disabled = true;
-    actions.append(build, open);
+    actions.append(build, copy, open);
     const result = node("p", "", "result");
     const file = node("code", "", "ln-contributionFile");
+    // g11 可核验闭环：把"这次会公开什么"摆出来，并且可以直接复制
+    const disclosure = node("div", null, "ln-contributionDisclosure");
+    const disclosureHead = node("p", "", "ln-contributionHint");
+    const disclosureList = node("ul", null, "ln-contributionList");
+    const contentBox = node("pre", "", "ln-contributionContent");
+    contentBox.hidden = true;
+    disclosure.append(disclosureHead, disclosureList, contentBox);
+    disclosure.hidden = true;
     const hint = node("p", "只上传「编号 + 曲名 + 3 段指纹」，不含任何个人信息（没有路径、用户名、设备信息）。", "ln-contributionHint");
-    block.append(head, counts, actions, result, file, hint);
+    block.append(head, counts, actions, result, file, disclosure, hint);
 
     let openUrl = "";
     let totals = { total: 0, ready: 0, submitted: 0 };
+    let lastContent = "";
 
     function renderCounts() {
       counts.textContent = `已命名 ${totals.total ?? 0} 首，可投稿 ${totals.ready ?? 0} 首，已投稿 ${totals.submitted ?? 0} 首`;
     }
+
+    /** g11：把"这次会公开的字段"渲染出来（曲名 + 3 段指纹 + 校验哈希）。 */
+    function renderDisclosure(data) {
+      const items = Array.isArray(data?.contentPreview) ? data.contentPreview : [];
+      disclosure.hidden = !items.length;
+      disclosureList.replaceChildren();
+      if (!items.length) return;
+      disclosureHead.textContent = `这次会公开 ${data.count ?? items.length} 首：编号 + 曲名 + ${data.fingerprint?.segments ?? 3} 段指纹 + 校验哈希`
+        + "（没有文件路径、没有用户名、没有设备信息）。下面只是清单，递交的是 JSON 全文：";
+      for (const item of items) {
+        const line = node("li");
+        line.append(
+          node("span", item.folder, "ln-sameNumberFolder"),
+          node("strong", item.name || "(无曲名)"),
+          node("small", ` · ${item.segments} 段指纹 · ${String(item.hash || "").slice(0, 12)}…`),
+        );
+        disclosureList.append(line);
+      }
+      if ((Number(data.count) || 0) > items.length) {
+        const more = node("li", `… 另有 ${Number(data.count) - items.length} 首（复制文件内容可看全）`, "empty");
+        disclosureList.append(more);
+      }
+    }
+
+    async function copyContent() {
+      if (!lastContent) return;
+      try {
+        if (global.navigator?.clipboard?.writeText) await global.navigator.clipboard.writeText(lastContent);
+        else {
+          const helper = document.createElement("textarea");
+          helper.value = lastContent;
+          document.body.append(helper);
+          helper.select();
+          document.execCommand("copy");
+          helper.remove();
+        }
+        result.textContent = `✓ 已复制 ${lastContent.length} 个字符，直接到 GitHub 页面粘贴即可。`;
+      } catch (error) {
+        contentBox.hidden = false;
+        result.textContent = `复制失败（${error.message}）；已把内容展开，请手动全选复制。`;
+      }
+    }
+
+    copy.addEventListener("click", () => { void copyContent(); });
 
     /** 反复调 preview 直到本机指纹都校验完：一次只补算一小批，免得一个请求卡好几分钟。 */
     async function previewAll(onProgress) {
@@ -172,8 +227,15 @@
         openUrl = (data && data.openUrl) || openUrl;
         open.disabled = !openUrl;
         file.textContent = (data && data.file) || "";
+        lastContent = String((data && data.content) || "");
+        copy.disabled = !lastContent;
+        contentBox.textContent = lastContent;
+        contentBox.hidden = true;
+        renderDisclosure(data);
         result.textContent = `已生成投稿文件：${(data && data.count) ?? 0} 首，${Math.round(((data && data.bytes) || 0) / 1024)} KB。`
-          + "点「打开提交页面」，把文件内容整段贴进去即可。";
+          + (lastContent
+            ? "先点「复制文件内容」，再点「打开提交页面」，粘贴到输入框后提交即可。"
+            : "文件较大未内嵌显示；请在下方路径找到文件后复制其内容。");
         await loadCounts();
       } catch (error) {
         result.textContent = `生成失败：${error.message}`;

@@ -52,6 +52,11 @@ namespace OliviaSoul
 
         public bool IsQuitting { get { return _quitting; } }
 
+        // 供 NodeBackend 打"node 起来时宿主已经跑了多久"，用来对齐两条时间线（g11 启动计时）。
+        private static readonly Stopwatch HostStartClock = Stopwatch.StartNew();
+        public static long HostStartElapsedMs { get { return HostStartClock.ElapsedMilliseconds; } }
+        public static void MarkHostStarted() { HostStartClock.Restart(); }
+
         public MainForm(bool hiddenAtLaunch)
         {
             _hiddenAtLaunch = hiddenAtLaunch;
@@ -327,8 +332,13 @@ namespace OliviaSoul
 
         private void LogStartupStage(string stage)
         {
+            var sinceProcessStart = DateTime.Now - Process.GetCurrentProcess().StartTime;
             WriteRuntimeLog("startup-stage=" + stage + " elapsedMs=" +
-                _startupClock.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture));
+                _startupClock.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture) +
+                // 进程启动到现在（含程序管理器加载 exe、CLR 启动、WebView2 运行时装载这些
+                // "窗体构造之前"的耗时）——只看 elapsedMs 会漏掉最慢的那一段。
+                " sinceProcessStartMs=" + ((long)sinceProcessStart.TotalMilliseconds).ToString(CultureInfo.InvariantCulture) +
+                " pid=" + Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture));
         }
 
         private async Task RefreshAutoStartAsync()

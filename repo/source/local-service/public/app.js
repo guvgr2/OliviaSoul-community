@@ -11,6 +11,8 @@ const tabNotices = createTabNotices({ storage: noticeStorage, render(tab, notice
   const label = button.textContent.trim();
   button.title = notice.messages.join('；');
   button.setAttribute?.('aria-label', notice.kind ? `${label}：${button.title}` : label);
+  // g11：同步到大标题上的提醒点（组收起时也看得见）
+  if (typeof updateSideGroupNotices === 'function') updateSideGroupNotices();
 } });
 let previewId = null;
 let aiExchanges = [];
@@ -965,18 +967,92 @@ document.addEventListener("keydown", event => {
   if (event.key === "Escape") closeNotice(false);
   if (event.key === "Enter") closeNotice(true);
 });
+// g11：侧栏分了组（<details class="sideGroup">）。这里负责：
+//   · 点页签时自动展开它所在的组
+//   · 记住每组的展开/收起状态
+//   · 把页签上的提醒点同步到组的大标题上（组收起时也能一眼看到哪一组有事）
+const SIDE_GROUPS_KEY = "olivia.sideGroups";
+function readSideGroupState() {
+  try { return JSON.parse(localStorage.getItem(SIDE_GROUPS_KEY) || "{}") || {}; } catch { return {}; }
+}
+function saveSideGroupState(state) {
+  try { localStorage.setItem(SIDE_GROUPS_KEY, JSON.stringify(state)); } catch { /* 忽略 */ }
+}
+/** 组大标题上的提醒点：组内任一页签有提醒就点亮（fault 优先）。 */
+function updateSideGroupNotices() {
+  for (const group of document.querySelectorAll(".sideGroup")) {
+    const kinds = [...group.querySelectorAll(".sideTab")]
+      .map(tab => tab.dataset.noticeKind)
+      .filter(Boolean);
+    const title = group.querySelector(".sideGroupTitle");
+    const dot = group.querySelector(".sideGroupDot");
+    if (!title || !dot) continue;
+    if (!kinds.length) {
+      dot.hidden = true;
+      delete title.dataset.noticeKind;
+      title.removeAttribute("title");
+    } else {
+      const kind = kinds.includes("fault") ? "fault" : "info";
+      dot.hidden = false;
+      title.dataset.noticeKind = kind;
+      title.title = `${group.querySelector("span")?.textContent || "本组"}里有需要处理的事项`;
+    }
+  }
+}
+function setupSideGroups() {
+  const saved = readSideGroupState();
+  const groups = [...document.querySelectorAll(".sideGroup")];
+  if (!groups.length) return;
+  for (const group of groups) {
+    const key = group.dataset.group || "";
+    if (key && Object.hasOwn(saved, key)) group.open = saved[key] === true;
+    group.addEventListener("toggle", () => {
+      if (!group.dataset.group) return;
+      const next = readSideGroupState();
+      next[group.dataset.group] = group.open;
+      saveSideGroupState(next);
+    });
+  }
+  // 首次进入：把当前激活页签所在的组展开（其它组按记住的状态）
+  const active = document.querySelector(".sideTab.active");
+  const activeGroup = active?.closest(".sideGroup");
+  if (activeGroup) activeGroup.open = true;
+  updateSideGroupNotices();
+}
+setupSideGroups();
+
+/** 切页签后把内容区滚回顶部。
+    立刻做一次 + 下一帧一次 + 稍后一次：页签内容是异步渲染的，只做一次可能被"内容变高"顶走。 */
+function scrollContentToTop() {
+  const reset = () => {
+    const content = document.querySelector(".content");
+    if (content) content.scrollTop = 0;
+    for (const page of document.querySelectorAll(".tabPage")) page.scrollTop = 0;
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  };
+  reset();
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(reset);
+  setTimeout(reset, 60);
+  setTimeout(reset, 220);
+}
+
 document.querySelectorAll(".sideTab").forEach(button => {
   button.addEventListener("click", safely(async () => {
     tabNotices.visit(button.dataset.tab);
+    // g11：点到的页签一定可见 —— 自动展开它所在的组
+    const group = button.closest(".sideGroup");
+    if (group && !group.open) group.open = true;
     document.querySelectorAll(".sideTab").forEach(tab => tab.classList.toggle("active", tab === button));
     document.querySelectorAll(".tabPage").forEach(page => page.hidden = page.dataset.page !== button.dataset.tab);
-    const content = document.querySelector(".content");
-    if (content) content.scrollTop = 0;
+    scrollContentToTop();
     updateDownloadUI.setVisible(button.dataset.tab === "update");
     if (button.dataset.tab === "memory" && !memoryLoaded) await loadMemory();
     if (button.dataset.tab === "performances") await refreshMidiStatus();
     if (button.dataset.tab === "update" && !updateInformation) await loadUpdate();
     if (button.dataset.tab === "debug") await loadDebug();
+    updateSideGroupNotices();
+    scrollContentToTop();
   }));
 });
 document.querySelectorAll(".memoryTab").forEach(button => {

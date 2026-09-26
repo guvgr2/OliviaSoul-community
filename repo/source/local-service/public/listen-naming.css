@@ -157,16 +157,19 @@
 .ln-migrateOut{margin-top:8px}
 
 /* 试听卡片布局整理（g06） */
+/* g11 修正：卡片是纵向 flex，空间不够时子项会被拉高 —— 曲名输入框曾被撑成 320px 的大黑框。
+   flex:0 0 auto 让每个子项都保持自身高度，绝不参与拉伸。 */
+[data-page="listen-naming"] .ln-card > * { flex: 0 0 auto; min-height: 0; }
 /* 卡片内统一纵向节奏，间距不再忽大忽小 */
 [data-page="listen-naming"] .ln-card{display:flex;flex-direction:column;gap:10px;padding:14px 16px}
 /* 当前作品：做成醒目的标题条 */
 [data-page="listen-naming"] .ln-folder{font-size:15px;font-weight:600;letter-spacing:.2px;padding:6px 10px;border-radius:6px;background:rgba(255,255,255,.05);overflow-wrap:anywhere}
 [data-page="listen-naming"] .ln-meta{margin:0;font-size:12px;opacity:.75}
 /* 曲名输入 + 写库按钮同一行 */
-[data-page="listen-naming"] .ln-nameRow{display:flex;gap:8px;align-items:stretch}
+[data-page="listen-naming"] .ln-nameRow{display:flex;gap:8px;align-items:flex-start}
 [data-page="listen-naming"] .ln-nameBlock{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:4px}
-[data-page="listen-naming"] #lnNameInput{width:100%;height:38px;padding:0 12px;font-size:14px}
-[data-page="listen-naming"] .ln-nameRow > button{height:38px;padding:0 18px;white-space:nowrap;font-weight:600}
+[data-page="listen-naming"] #lnNameInput{width:100%;height:38px;min-height:38px;max-height:38px;padding:0 12px;font-size:14px}
+[data-page="listen-naming"] .ln-nameRow > button{height:38px;min-height:38px;max-height:38px;padding:0 18px;white-space:nowrap;font-weight:600}
 [data-page="listen-naming"] .ln-submitHint{font-size:11px;opacity:.6;line-height:1.4}
 /* 四个操作按钮：等宽网格，不再挤成三行 */
 [data-page="listen-naming"] .ln-actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
@@ -211,3 +214,63 @@
 [data-page="update"] .ln-updateNotes .settingsBlockHead small { color: #8b9198; font-size: 12px; }
 [data-page="update"] .ln-updateNotes .actions { flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 [data-page="update"] .ln-updateNotes > .fieldHint:empty { display: none; }
+
+/* 「诊断」面板（g12）：启动耗时列表 + 曲库健康检查 */
+.ln-diagnostics { display: grid; gap: 10px; }
+.ln-diagSpacer { margin-top: 6px; }
+.ln-diagOut { display: grid; gap: 8px; }
+.ln-diagCard { margin: 0; padding: 10px 12px; }
+.ln-diagCard > strong { display: block; margin-bottom: 6px; font-size: 13px; }
+.ln-diagList { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
+.ln-diagList li { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
+.ln-diagList small { color: #7f7f87; font-size: 11px; }
+.ln-diagStage { min-width: 132px; color: #8ab4f8; font-family: Consolas, "Courier New", monospace; font-size: 12px; }
+.ln-diagChips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ln-diagChips .ln-chip[data-kind="fault"] { color: #e48c87; }
+
+/* g12：命名质量守卫提示 + 就地时段依据 */
+[data-page="listen-naming"] .ln-nameGuard {
+  margin: 2px 0 0; padding: 6px 9px; border-radius: 7px;
+  background: rgba(255, 255, 255, .04); font-size: 12px; line-height: 1.6;
+  display: grid; gap: 2px;
+}
+[data-page="listen-naming"] .ln-nameGuard[data-kind="warn"] { color: #e0b978; background: rgba(224, 185, 120, .08); }
+[data-page="listen-naming"] .ln-guardLine { overflow-wrap: anywhere; }
+[data-page="listen-naming"] .ln-clueActions { flex-wrap: wrap; gap: 8px; }
+[data-page="listen-naming"] .ln-clueOut { display: block; }
+[data-page="listen-naming"] .ln-clueOut .ln-todRow { display: flex; flex-wrap: wrap; gap: 10px; }
+[data-page="listen-naming"] .ln-clueOut .ln-todCard { min-width: 178px; padding: 10px; }
+/* g12：批量命名表按钮行 */
+[data-page="listen-naming"] .ln-tableActions { flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+[data-page="listen-naming"] .ln-importFile { display: none; }
+
+/* g12：待定清单与标签（试听工具页） */
+[data-page="listen-tools"] .ln-tagBar,
+[data-page="listen-tools"] .ln-tagFilter { flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+[data-page="listen-tools"] .ln-tagLine { margin: 8px 0 4px; }
+[data-page="listen-tools"] .ln-tagList { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; max-height: 260px; overflow: auto; }
+[data-page="listen-tools"] .ln-tagList li { display: flex; align-items: center; gap: 8px; }
+[data-page="listen-tools"] .ln-tagList small { color: #8b9198; font-size: 11.5px; }
+[data-page="listen-tools"] .ln-tagJump { padding: 4px 9px; font-size: 12px; font-family: Consolas, "Courier New", monospace; }
+[data-page="listen-tools"] .ln-tagList .empty { color: #7f7f87; font-size: 12px; }
+
+/* g12：同款群核对（试听工具页，独立面板） */
+.ln-twins { display: grid; gap: 10px; }
+.ln-twins .ln-twinTop { flex-wrap: wrap; gap: 8px; }
+.ln-twins .ln-twinThreshold { margin: 0; }
+.ln-twins .ln-twinProgress { margin: 0; color: #c8ccd1; }
+.ln-twins .ln-twinHint { margin: 0; }
+.ln-twins .ln-twinFile { margin: 0; font-size: 11px; opacity: .6; overflow-wrap: anywhere; }
+.ln-twins .ln-twinOut { display: grid; gap: 8px; }
+.ln-twinCard { margin: 0; padding: 10px 12px; }
+.ln-twinCard > .settingsBlockHead { margin-bottom: 6px; }
+.ln-twinList { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
+.ln-twinList li { display: flex; align-items: baseline; gap: 10px; }
+.ln-twinFolder { font-family: Consolas, "Courier New", monospace; font-size: 12.5px; color: #8ab4f8; }
+.ln-twinEvidence { color: #8b9198; font-size: 11.5px; }
+.ln-twinActions { flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.ln-twins .ln-twinStatus:empty { display: none; }
+.ln-twins .ln-twinStatus[data-kind="fault"] { color: #e48c87; }
+.ln-twins .ln-twinStatus[data-kind="done"] { color: #8da094; }
+.ln-twins .ln-twinStatus[data-kind="warn"] { color: #e0b978; }
+.ln-twins .ln-twinTop button[data-state="on"] { border-color: #e7e2da; color: #f2f0ed; }

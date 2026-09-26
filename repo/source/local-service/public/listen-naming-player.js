@@ -124,7 +124,25 @@
 
     const status = node("p", "", "fieldHint ln-playerStatus");
     const cacheLine = node("p", "", "fieldHint ln-cacheLine");
-    box.append(head, row, status, cacheLine);
+
+    // g12：待定清单 + 标签（存在服务端，命名页与这里共享一份）
+    const tagBar = node("div", null, "actions ln-tagBar");
+    const doubtButton = node("button", "标记存疑", "secondary");
+    const likeButton = node("button", "标记喜欢", "secondary");
+    const refreshTags = node("button", "刷新清单", "secondary");
+    for (const button of [doubtButton, likeButton, refreshTags]) button.type = "button";
+    tagBar.append(doubtButton, likeButton, refreshTags);
+
+    const tagFilter = node("div", null, "actions ln-tagFilter");
+    const laterFilter = node("button", "只看待定", "secondary");
+    const doubtFilter = node("button", "只看存疑", "secondary");
+    const likeFilter = node("button", "只看喜欢", "secondary");
+    for (const button of [laterFilter, doubtFilter, likeFilter]) button.type = "button";
+    tagFilter.append(laterFilter, doubtFilter, likeFilter);
+
+    const tagLine = node("p", "", "fieldHint ln-tagLine");
+    const tagList = node("ul", null, "ln-tagList");
+    box.append(head, row, status, cacheLine, tagBar, tagFilter, tagLine, tagList);
 
     const paintAuto = () => {
       autoButton.textContent = autoPlay ? "连播：开（C）" : "连播：关（C）";
@@ -141,16 +159,27 @@
     laterButton.addEventListener("click", () => {
       const folder = currentFolder();
       if (!folder) return;
-      if (laterSet.has(folder)) { laterSet.delete(folder); setStatus("已取消标记：" + folder); }
-      else { laterSet.add(folder); setStatus("已标记稍后再听：" + folder + "（共 " + laterSet.size + " 首）"); }
+      // g12：改用服务端标签（和「待定清单」同一份数据），localStorage 仅作离线兜底
+      const nowLater = !laterSet.has(folder);
+      if (nowLater) laterSet.add(folder); else laterSet.delete(folder);
       saveLater();
-      if (laterSet.has(folder)) clickAction(2);   // 标记后立刻跳过
+      setStatus(nowLater ? `已标记稍后再听：${folder}（共 ${laterSet.size} 首）` : `已取消标记：${folder}`);
+      void api("/tags", {
+        method: "POST",
+        body: JSON.stringify({ folder, tag: "later", value: nowLater }),
+      }).then(() => paintTags()).catch(() => { /* 服务端写不了就只留本地标记 */ });
+      if (nowLater) clickAction(2);   // 标记后立刻跳过
     });
 
-    clearButton.addEventListener("click", () => {
+    clearButton.addEventListener("click", async () => {
+      const folders = [...laterSet];
       laterSet = new Set();
       saveLater();
-      setStatus("已清除「稍后再听」标记");
+      setStatus(`已清除「稍后再听」标记（${folders.length} 首）`);
+      for (const folder of folders) {
+        void api("/tags", { method: "POST", body: JSON.stringify({ folder, tag: "later", value: false }) }).catch(() => {});
+      }
+      global.setTimeout(() => { void paintTags(); }, 400);
     });
 
     pruneButton.addEventListener("click", async () => {
@@ -165,6 +194,55 @@
         void refreshCacheLine();
       }
     });
+
+    // g12：标签（待定/存疑/喜欢）与待定清单 —— 存服务端，命名页与这里共享
+    const paintTags = async (tag = "") => {
+      try {
+        const data = await api("/tags" + (tag ? "?tag=" + encodeURIComponent(tag) : ""));
+        const counts = data?.counts ?? {};
+        tagLine.textContent = `待定 ${counts.later ?? 0} 首 · 存疑 ${counts.doubt ?? 0} 首 · 喜欢 ${counts.like ?? 0} 首`
+          + (tag ? `　（当前只看「${data?.names?.[tag] ?? tag}」）` : "");
+        tagList.replaceChildren();
+        const items = Array.isArray(data?.tags) ? data.tags : [];
+        if (!items.length) {
+          tagList.append(node("li", tag ? "这个标签下还没有作品。" : "还没有任何标记。", "empty"));
+          return;
+        }
+        for (const item of items.slice(0, 50)) {
+          const line = node("li");
+          const jump = node("button", item.folder, "secondary ln-tagJump");
+          jump.type = "button";
+          jump.addEventListener("click", () => {
+            // 让「曲名与时段」页切到这一首：写入位置记忆后由命名页接管
+            void api("/position", { method: "POST", body: JSON.stringify({ folder: item.folder }) })
+              .then(() => setStatus(`已记住位置：${item.folder}，去「曲名与时段」页点「接着上次继续」`))
+              .catch(() => setStatus("切换失败：写位置失败"));
+          });
+          line.append(jump, node("small", item.tags.map(name => data.names?.[name] ?? name).join(" · ")));
+          tagList.append(line);
+        }
+      } catch (error) {
+        tagLine.textContent = `读取标签失败：${error.message}`;
+      }
+    };
+
+    const toggleTag = async (tag) => {
+      const folder = currentFolder();
+      if (!folder) { setStatus("先到「曲名与时段」里选中一首。", "warn"); return; }
+      try {
+        const data = await api("/tags", { method: "POST", body: JSON.stringify({ folder, tag, value: true }) });
+        setStatus(`已把 ${folder} 标记为「${data?.names?.[tag] ?? tag}」`);
+        await paintTags();
+      } catch (error) {
+        setStatus(`标记失败：${error.message}`, "warn");
+      }
+    };
+    doubtButton.addEventListener("click", () => { void toggleTag("doubt"); });
+    likeButton.addEventListener("click", () => { void toggleTag("like"); });
+    refreshTags.addEventListener("click", () => { void paintTags(); });
+    laterFilter.addEventListener("click", () => { void paintTags("later"); });
+    doubtFilter.addEventListener("click", () => { void paintTags("doubt"); });
+    likeFilter.addEventListener("click", () => { void paintTags("like"); });
 
     // g10：音频元素属于「曲名与时段」页，用文档级捕获监听，跟它什么时候被创建无关
     if (!global.__lnPlayerAudioBound) {
@@ -182,14 +260,26 @@
     }
 
     // g10：面板外壳返回给装配器；内部引用留给模块自己刷新内容用
-    ui = { box, autoButton, laterButton, clearButton, pruneButton, status, cacheLine };
+    ui = { box, autoButton, laterButton, clearButton, pruneButton, status, cacheLine, tagLine, tagList };
+    void paintTags();
     return box;
   }
 
-  // 装配器每次进入「试听工具」页签时调用：只刷新缓存占用文字，不重建面板
+  // 装配器每次进入「试听工具」页签时调用：只刷新缓存占用与清单文字，不重建面板
   function refresh() {
     void refreshCacheLine();
     void ensureFolders();
+    if (ui?.tagLine) void loadTagsIntoPanel();
+  }
+
+  /** 刷新标签清单（复用面板里的渲染逻辑，避免重复代码）。 */
+  async function loadTagsIntoPanel() {
+    if (!ui) return;
+    try {
+      const data = await api("/tags");
+      const counts = data?.counts ?? {};
+      ui.tagLine.textContent = `待定 ${counts.later ?? 0} 首 · 存疑 ${counts.doubt ?? 0} 首 · 喜欢 ${counts.like ?? 0} 首`;
+    } catch { /* 读不到就不刷 */ }
   }
 
   function onKeydown(event) {

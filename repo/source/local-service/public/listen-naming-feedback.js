@@ -12,7 +12,7 @@
   const BASE = "/toy/listen-naming";
   // ⚠️ 发布前改成你自己的仓库（与 midi/community-catalog.js 里的 CATALOG_URL 保持一致）
   const REPO = "guvgr2/OliviaSoul-community";
-  const APP_VERSION = "2008.2.7-linli9-g10";
+  const APP_VERSION = "2008.2.7-linli9-g12";
 
   const KINDS = [
     ["bug", "功能坏了 / 报错"],

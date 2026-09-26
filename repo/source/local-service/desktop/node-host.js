@@ -17,6 +17,14 @@ function send(message) {
 }
 
 const startupStartedAt = Date.now();
+// g11 启动计时：node 进程自己的启动既刻（Date.now() 在模块执行时取，含不上解释器启动，
+// 所以真正"从进程创建到第一个阶段"的耗时用 /proc 等价的 process.uptime() 来量）。
+const nodeProcessStartedAt = Date.now() - Math.round(process.uptime() * 1000);
+const stage = (name, extra = "") => console.log(
+  `startup-stage=${name} elapsedMs=${Date.now() - startupStartedAt}`
+  + ` sinceNodeStartMs=${Date.now() - nodeProcessStartedAt}${extra ? " " + extra : ""}`,
+);
+stage("node-bootstrap");
 const root = argument("--root");
 const dataDir = argument("--data-dir");
 const template = argument("--template");
@@ -28,7 +36,7 @@ if (!Number.isInteger(parentPid) || parentPid < 1) throw new Error("父进程 PI
 await mkdir(appData, { recursive: true });
 await mkdir(dataDir, { recursive: true });
 const workspace = await prepareWorkspaceIncrementally({ template, root, settings: join(appData, "settings") });
-console.log(`startup-stage=workspace-prepared elapsedMs=${Date.now() - startupStartedAt} changed=${workspace.changed}`);
+stage("workspace-prepared", `changed=${workspace.changed}`);
 
 const controller = new DesktopController({
   root,
@@ -40,7 +48,7 @@ const controller = new DesktopController({
   onLyricsFrame: data => send({ type: "lyrics", data }),
 });
 const port = await controller.initialize();
-console.log(`startup-stage=service-ready elapsedMs=${Date.now() - startupStartedAt}`);
+stage("service-ready");
 send({ type: "ready", port });
 console.log(`[host] ready pid=${process.pid} parent=${parentPid} port=${port}`);
 

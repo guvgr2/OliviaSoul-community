@@ -217,6 +217,23 @@ function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
+// 进程级兜底（g12）：本地服务"活着"比"干净退出"更重要。
+//   · 未处理的 Promise 拒绝：只记录，不退出（多数是某个接口的异步分支没 catch）
+//   · 未捕获异常：记录后退出，由原生宿主检测到并自动重启（native-host/NodeBackend.cs）
+// 只在服务实例化时注册一次；直接跑 node server.js 与便携版的 desktop/node-host.js 都覆盖到。
+let processSafetyNetsInstalled = false;
+function installProcessSafetyNets() {
+  if (processSafetyNetsInstalled) return;
+  processSafetyNetsInstalled = true;
+  process.on("unhandledRejection", reason => {
+    logError("未处理的 Promise 拒绝", reason && reason.stack ? reason.stack : String(reason));
+  });
+  process.on("uncaughtException", error => {
+    logError("未捕获异常（进程即将退出，宿主会自动重启）", error && error.stack ? error.stack : String(error));
+    setTimeout(() => process.exit(1), 50);
+  });
+}
+
 function localDate(epochSeconds) {
   const value = new Date(epochSeconds * 1000);
   const year = value.getFullYear();
@@ -641,6 +658,7 @@ async function deepSeekGenerator({ person, content, id, root, tempDir, historySn
 }
 
 export async function createOliviaService(options = {}) {
+  installProcessSafetyNets();
   const root = resolve(options.root ?? workspaceRoot);
   const dataDir = resolve(options.dataDir ?? join(here, "data"));
   const mediaIndexRoot = resolve(options.mediaIndexRoot ?? options.midiDataRoot ?? join(dataDir, "media"));
@@ -2547,6 +2565,10 @@ export async function createOliviaService(options = {}) {
   }
 
   function sendJson(req, res, payload, status = 200, headers = {}) {
+    // 响应头一旦发出就不能再写：某个路由可能已经自己写过响应（媒体流、错误页），
+    // 之后外层 catch 又调这里，会抛 ERR_HTTP_HEADERS_SENT —— 那是未捕获异常，
+    // 会把整个本地服务进程带走（界面表现为"程序突然不动了"）。这里直接放弃写。
+    if (res.headersSent || res.writableEnded) return;
     res.writeHead(status, { ...JSON_HEADERS, ...corsHeaders(req), ...headers });
     res.end(JSON.stringify(payload));
   }
@@ -2667,7 +2689,7 @@ export async function createOliviaService(options = {}) {
 
   async function serveStatic(req, res, pathname) {
     const relative = pathname === "/admin" || pathname === "/admin/" ? "index.html" : pathname.slice("/admin/".length);
-    if (!["index.html", "app.js", "game-lyrics.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "update-download-ui.js", "tab-notices.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
+    if (!["index.html", "app.js", "game-lyrics.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "update-download-ui.js", "tab-notices.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "diagnostics-panel.js", "twin-groups-panel.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
       throw httpError(404, "文件不存在");
     const file = join(publicRoot, relative);
     const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".png": "image/png" };
@@ -4178,14 +4200,28 @@ export async function createOliviaService(options = {}) {
 
   const server = createServer((req, res) => {
     route(req, res).catch(error => {
-      const status = error.status ?? 500;
-      const responseStatus = req.url.startsWith("/toy/") && !error.mediaResponse ? 200 : status;
-      if (req.url.startsWith("/toy/letter/"))
-        console.error(`[letter-error] ${req.method} ${req.url} code=${error.code ?? -1} message=${error.message}`);
-      if (req.url.includes("/toy/addToPlaylist") || req.url.includes("/toy/delFromPlaylist") || req.url.includes("/toy/searchPlaylist"))
-        console.error(`[playlist-error] ${req.method} ${req.url} code=${error.code ?? -1} message=${error.message}`);
-      sendJson(req, res, { code: error.code ?? -1, message: error.message, data: null }, responseStatus);
+      // 这一层绝不能再抛：catch 回调里抛出的异常是未捕获异常，会直接结束进程。
+      try {
+        const status = error.status ?? 500;
+        const responseStatus = req.url.startsWith("/toy/") && !error.mediaResponse ? 200 : status;
+        if (req.url.startsWith("/toy/letter/"))
+          console.error(`[letter-error] ${req.method} ${req.url} code=${error.code ?? -1} message=${error.message}`);
+        if (req.url.includes("/toy/addToPlaylist") || req.url.includes("/toy/delFromPlaylist") || req.url.includes("/toy/searchPlaylist"))
+          console.error(`[playlist-error] ${req.method} ${req.url} code=${error.code ?? -1} message=${error.message}`);
+        // 只把"真出错"写进运行日志：404（浏览器常常自己来要 /favicon.ico）属于噪音，
+        // 记进去会让用户在「运行日志」页看到一堆红色 [ERROR]，以为程序坏了。
+        const noisy = status === 404 || String(error.message ?? "").includes("接口不存在")
+          || req.url.includes("/favicon");
+        if (!noisy) logError(`请求处理失败 ${req.method} ${req.url}`, error && error.stack ? error.stack : String(error));
+        sendJson(req, res, { code: error.code ?? -1, message: error.message, data: null }, responseStatus);
+      } catch (secondary) {
+        logError("错误处理自身失败", secondary && secondary.stack ? secondary.stack : String(secondary));
+        try { if (!res.writableEnded) res.end(); } catch { /* 连接可能已经断了 */ }
+      }
     });
+    // 客户端半途断开（切页签/关窗口）不应该牵连服务
+    req.on("error", () => {});
+    res.on("error", () => {});
   });
 
   await archivePendingReplies();

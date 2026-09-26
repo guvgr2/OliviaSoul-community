@@ -24,21 +24,46 @@
     <div class="workspace">
       <aside class="panel sidebar">
         <nav class="sideTabs" aria-label="管理页签">
-          <button class="sideTab active" type="button" data-tab="settings">基础设置</button>
-          <button class="sideTab" type="button" data-tab="legal">声明与合规</button>
-          <button class="sideTab" type="button" data-tab="ai">AI 模型</button>
-          <button class="sideTab" type="button" data-tab="desktop">客户端与桌面</button>
-          <button class="sideTab" type="button" data-tab="lyrics">歌词设置</button>
-          <button class="sideTab" type="button" data-tab="performances">官方作品</button>
-          <button class="sideTab" type="button" data-tab="memory">记忆</button>
-          <button class="sideTab" type="button" data-tab="transcription">视频转文字</button>
-          <button class="sideTab" type="button" data-tab="listen-naming">曲名与时段</button>
-        <button class="sideTab" type="button" data-tab="listen-tools">试听工具</button>
-          <button class="sideTab" type="button" data-tab="update">软件更新</button>
-          <button class="sideTab" type="button" data-tab="dependency-check">依赖检查</button>
-          <button class="sideTab" type="button" data-tab="logs">运行日志</button>
-          <button class="sideTab" type="button" data-tab="feedback">反馈与建议</button>
-          <button class="sideTab" type="button" data-tab="debug">高级设置</button>
+          <!-- g11 导航分类：15 个平铺页签收成 5 组。组内仍是原来的 .sideTab[data-tab]，
+               点页签的行为、通知点、页签联动逻辑都不变（app.js 统一处理展开/收起与提醒点） -->
+          <details class="sideGroup" data-group="basic" open>
+            <summary class="sideGroupTitle"><span>基础与设置</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
+            <button class="sideTab active" type="button" data-tab="settings">基础设置</button>
+            <button class="sideTab" type="button" data-tab="ai">AI 模型</button>
+            <button class="sideTab" type="button" data-tab="legal">声明与合规</button>
+          </details>
+
+          <details class="sideGroup" data-group="client" open>
+            <summary class="sideGroupTitle"><span>客户端与歌词</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
+            <button class="sideTab" type="button" data-tab="desktop">客户端挂载与存储</button>
+            <button class="sideTab" type="button" data-tab="lyrics">歌词设置</button>
+          </details>
+
+          <details class="sideGroup" data-group="library" open>
+            <summary class="sideGroupTitle"><span>曲库与作品</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
+            <button class="sideTab" type="button" data-tab="performances">官方作品</button>
+            <button class="sideTab" type="button" data-tab="transcription">视频转文字</button>
+          </details>
+
+          <details class="sideGroup" data-group="letters" open>
+            <summary class="sideGroupTitle"><span>信件与记忆</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
+            <button class="sideTab" type="button" data-tab="memory">记忆</button>
+          </details>
+
+          <details class="sideGroup" data-group="naming" open>
+            <summary class="sideGroupTitle"><span>命名与试听</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
+            <button class="sideTab" type="button" data-tab="listen-naming">曲名与时段</button>
+            <button class="sideTab" type="button" data-tab="listen-tools">试听工具</button>
+          </details>
+
+          <details class="sideGroup" data-group="maintenance" open>
+            <summary class="sideGroupTitle"><span>更新与维护</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
+            <button class="sideTab" type="button" data-tab="update">软件更新</button>
+            <button class="sideTab" type="button" data-tab="feedback">反馈与建议</button>
+            <button class="sideTab" type="button" data-tab="dependency-check">依赖检查</button>
+            <button class="sideTab" type="button" data-tab="logs">运行日志</button>
+            <button class="sideTab" type="button" data-tab="debug">高级设置</button>
+          </details>
         </nav>
       </aside>
 
@@ -601,6 +626,8 @@
     <script src="/admin/time-of-day-inspect.js"></script>
     <script src="/admin/update-notes.js"></script>
     <script src="/admin/migrate-ui.js"></script>
+    <script src="/admin/diagnostics-panel.js"></script>
+    <script src="/admin/twin-groups-panel.js"></script>
   <script src="/admin/listen-naming-feedback.js"></script>
   <script src="/admin/dependency-check.js"></script>
   <script src="/admin/legal-notices.js"></script>
