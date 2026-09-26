@@ -20,7 +20,9 @@
       headers: { "Content-Type": "application/json" },
     }, options));
     const body = await response.json().catch(() => ({}));
-    if (body && typeof body.code === "number" && body.code !== 0) throw new Error(body.message || "请求失败");
+    // g13：后端错误响应的 code 是字符串错误码（如 TIME_OF_DAY_FOLDER_NOT_FOUND），
+    // 以前只认数字型 code，字符串码被跳过 → 拿到 data:null → 面板空指针崩、还吞掉真正的提示。
+    if (body && body.code !== 0 && body.code != null) throw new Error(body.message || "请求失败");
     return body && "data" in body ? body.data : body;
   }
 
@@ -32,6 +34,13 @@
 
   function renderReport(host, data) {
     host.replaceChildren();
+    // g13：拿不到数据时给一句人话，别让整块面板炸在 null 上
+    if (!data || typeof data !== "object" || !Array.isArray(data.segments)) {
+      host.append(node("p",
+        "没有拿到这首歌的时段依据。请重试；反复失败就到「高级设置 → 诊断 → 一键诊断包」导一份发我。",
+        "result"));
+      return;
+    }
     const head = node("p", `文件夹 ${data.folder}：共 ${data.segments.length} 段画面`, "fieldHint");
     host.append(head);
 
@@ -136,7 +145,7 @@
     const row = node("div", null, "actions");
     const input = node("input");
     input.type = "text";
-    input.placeholder = "文件夹编号（留空则用当前试听的作品）";
+    input.placeholder = "文件夹名或编号（留空则用当前试听的作品）";
     input.className = "ln-todInput";
     const button = node("button", "查看依据", "secondary");
     button.type = "button";
@@ -144,13 +153,32 @@
 
     const status = node("p", "", "fieldHint");
     const out = node("div", null, "ln-todOut");
-    box.append(head, row, status, out);
+
+    // g13 新手引导：这一块经常是"出问题才来找"的地方，所以就地给一条去排障的路
+    const helpRow = node("div", null, "actions ln-todHelp");
+    const helpText = node("span",
+      "看不明白 / 结果不对 / 想报障？排障工具在「更新与维护 → 高级设置」页的最下面：一键诊断包（导一个 zip 发作者）· 游戏崩溃记录 · 游戏日志。",
+      "fieldHint");
+    const helpButton = node("button", "去诊断（高级设置）", "secondary compact");
+    helpButton.type = "button";
+    helpRow.append(helpText, helpButton);
+    box.append(head, row, status, out, helpRow);
 
     // g10：事件绑定必须在 return 之前完成（否则按钮点不动）
+    helpButton.addEventListener("click", () => {
+      const tab = document.querySelector('.sideTab[data-tab="debug"]');
+      if (!tab) return;
+      tab.click();
+      // 切页后面板才装配出来，等一帧再滚到诊断块
+      global.setTimeout(() => {
+        const target = document.querySelector(".ln-diagnostics");
+        if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 120);
+    });
     button.addEventListener("click", async () => {
       const folder = (input.value || "").trim() || currentFolder();
       if (!folder) {
-        status.textContent = "请先填文件夹编号，或先到「曲名与时段」里选中一首。";
+        status.textContent = "请先填文件夹名或编号，或先到「曲名与时段」里选中一首。";
         return;
       }
       button.disabled = true;

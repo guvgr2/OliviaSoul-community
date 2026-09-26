@@ -26,43 +26,45 @@
         <nav class="sideTabs" aria-label="管理页签">
           <!-- g11 导航分类：15 个平铺页签收成 5 组。组内仍是原来的 .sideTab[data-tab]，
                点页签的行为、通知点、页签联动逻辑都不变（app.js 统一处理展开/收起与提醒点） -->
+          <!-- g13 新手引导：每个分组和页签都带 title，鼠标悬停就能看到"这页是干什么的"，
+               不用逐个点开摸索。更完整的"想做什么 → 去哪一页"见「基础设置」页顶部的功能地图 -->
           <details class="sideGroup" data-group="basic" open>
-            <summary class="sideGroupTitle"><span>基础与设置</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
-            <button class="sideTab active" type="button" data-tab="settings">基础设置</button>
-            <button class="sideTab" type="button" data-tab="ai">AI 模型</button>
-            <button class="sideTab" type="button" data-tab="legal">声明与合规</button>
+            <summary class="sideGroupTitle" data-tip="程序基本选项：离线身份、AI 模型配置、声明与许可"><span>基础与设置</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
+            <button class="sideTab active" type="button" data-tab="settings" data-tip="基础设置：功能地图（想做的事在哪一页）· 离线身份 · 本机服务状态">基础设置</button>
+            <button class="sideTab" type="button" data-tab="ai" data-tip="AI 模型：配置写信与整理用的模型和接口；不填也能用本机功能">AI 模型</button>
+            <button class="sideTab" type="button" data-tab="legal" data-tip="声明与合规：使用声明、隐私说明、开源许可与致谢">声明与合规</button>
           </details>
 
           <details class="sideGroup" data-group="client" open>
-            <summary class="sideGroupTitle"><span>客户端与歌词</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
-            <button class="sideTab" type="button" data-tab="desktop">客户端挂载与存储</button>
-            <button class="sideTab" type="button" data-tab="lyrics">歌词设置</button>
+            <summary class="sideGroupTitle" data-tip="把界面补丁挂到游戏客户端、调桌面歌词"><span>客户端与歌词</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
+            <button class="sideTab" type="button" data-tab="desktop" data-tip="客户端挂载与存储：把界面补丁装进游戏客户端 · 曲库目录与存储位置 · 备份与恢复">客户端挂载与存储</button>
+            <button class="sideTab" type="button" data-tab="lyrics" data-tip="歌词设置：桌面歌词的开关、字体字号、横竖排、偏移与锁定">歌词设置</button>
           </details>
 
           <details class="sideGroup" data-group="library" open>
-            <summary class="sideGroupTitle"><span>曲库与作品</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
-            <button class="sideTab" type="button" data-tab="performances">官方作品</button>
-            <button class="sideTab" type="button" data-tab="transcription">视频转文字</button>
+            <summary class="sideGroupTitle" data-tip="官方作品与视频转文字"><span>曲库与作品</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
+            <button class="sideTab" type="button" data-tab="performances" data-tip="官方作品：官方曲目的曲名与时段、播放与预览">官方作品</button>
+            <button class="sideTab" type="button" data-tab="transcription" data-tip="视频转文字：把视频里的语音转成文字（供写信与记忆使用）">视频转文字</button>
           </details>
 
           <details class="sideGroup" data-group="letters" open>
-            <summary class="sideGroupTitle"><span>信件与记忆</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
-            <button class="sideTab" type="button" data-tab="memory">记忆</button>
+            <summary class="sideGroupTitle" data-tip="记忆整理与信件往来"><span>信件与记忆</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
+            <button class="sideTab" type="button" data-tab="memory" data-tip="记忆：查看与编辑已整理的记忆、今日信件与来信记录">记忆</button>
           </details>
 
           <details class="sideGroup" data-group="naming" open>
-            <summary class="sideGroupTitle"><span>命名与试听</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
-            <button class="sideTab" type="button" data-tab="listen-naming">曲名与时段</button>
-            <button class="sideTab" type="button" data-tab="listen-tools">试听工具</button>
+            <summary class="sideGroupTitle" data-tip="给曲库起名、设时段，以及试听与核对工具"><span>命名与试听</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
+            <button class="sideTab" type="button" data-tab="listen-naming" data-tip="曲名与时段：主要工作区 —— 听片段给曲库起名、标白天/傍晚/夜晚、批量命名表">曲名与时段</button>
+            <button class="sideTab" type="button" data-tab="listen-tools" data-tip="试听工具：试听播放器 · 时段依据复核（能改时段）· 同款群核对">试听工具</button>
           </details>
 
           <details class="sideGroup" data-group="maintenance" open>
-            <summary class="sideGroupTitle"><span>更新与维护</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
-            <button class="sideTab" type="button" data-tab="update">软件更新</button>
-            <button class="sideTab" type="button" data-tab="feedback">反馈与建议</button>
-            <button class="sideTab" type="button" data-tab="dependency-check">依赖检查</button>
-            <button class="sideTab" type="button" data-tab="logs">运行日志</button>
-            <button class="sideTab" type="button" data-tab="debug">高级设置</button>
+            <summary class="sideGroupTitle" data-tip="更新程序、反馈问题、检查依赖、看日志、排障"><span>更新与维护</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
+            <button class="sideTab" type="button" data-tab="update" data-tip="软件更新：检查新版本、下载安装、查看更新说明">软件更新</button>
+            <button class="sideTab" type="button" data-tab="feedback" data-tip="反馈与建议：提交问题或建议、导出反馈材料">反馈与建议</button>
+            <button class="sideTab" type="button" data-tab="dependency-check" data-tip="依赖检查：确认 ffmpeg 等运行依赖是否就绪">依赖检查</button>
+            <button class="sideTab" type="button" data-tab="logs" data-tip="运行日志：看程序自己的运行日志、定位报错">运行日志</button>
+            <button class="sideTab" type="button" data-tab="debug" data-tip="高级设置（排障）：启动耗时 · 曲库健康检查 · 游戏崩溃记录 · 一键诊断包 · 游戏日志 · 数据搬移">高级设置</button>
           </details>
         </nav>
       </aside>
@@ -75,6 +77,34 @@
               <p>配置离线身份并查看本机服务状态</p>
             </div>
           </div>
+
+          <!-- g13 新手引导：功能地图。先回答"想做的事在哪一页"，用户再也不用逐页摸索。
+               默认展开；收起后由 getting-started.js 记住（localStorage），下次不再自动弹开。 -->
+          <details class="settingsBlock guideMap" id="guideMap" open>
+            <summary class="settingsBlockHead guideMapHead">
+              <strong>功能地图：想做什么 → 去哪一页</strong>
+              <small>第一次用先看这里；点这一行可以收起（下次打开不再自动展开）</small>
+            </summary>
+            <ul class="guideMapList">
+              <li><b>给曲库起名 / 标白天傍晚夜晚</b> → 「命名与试听 → <em>曲名与时段</em>」（主要工作区，第一次进去有「三步上手」）</li>
+              <li><b>先听一段再决定</b> → 「命名与试听 → <em>试听工具</em>」：试听播放器</li>
+              <li><b>某个时段判定对不对 / 想改</b> → 「试听工具 → <em>时段依据复核</em>」：看画面与判定值，可「按画面判定重写」或手动指定</li>
+              <li><b>找同一首的不同版本</b> → 「试听工具 → <em>同款群核对</em>」</li>
+              <li><b>更新程序 / 看更新说明</b> → 「更新与维护 → <em>软件更新</em>」</li>
+              <li><b>确认 ffmpeg 等依赖是否就绪</b> → 「更新与维护 → <em>依赖检查</em>」</li>
+              <li><b>看程序日志 / 定位报错</b> → 「更新与维护 → <em>运行日志</em>」</li>
+              <li><b>出问题了，想给作者一份材料</b> → 「更新与维护 → <em>高级设置</em>」最下面的「<b>一键诊断包</b>」：导出一个已脱敏的 zip 直接发过去</li>
+              <li><b>游戏崩了 / 崩在哪个模块</b> → 「高级设置 → <b>游戏崩溃记录</b>」（点「解读崩溃报告」）</li>
+              <li><b>启动慢在哪一段</b> → 「高级设置 → <b>读取启动耗时</b>」</li>
+              <li><b>游戏自己写了什么</b> → 「高级设置 → <b>游戏日志</b>」（页面最底部，点「读取游戏日志」）</li>
+              <li><b>挂界面补丁 / 改曲库目录 / 备份</b> → 「客户端与歌词 → <em>客户端挂载与存储</em>」</li>
+              <li><b>桌面歌词外观</b> → 「客户端与歌词 → <em>歌词设置</em>」</li>
+              <li><b>配置写信用的模型</b> → 「基础与设置 → <em>AI 模型</em>」</li>
+              <li><b>记忆与信件</b> → 「信件与记忆 → <em>记忆</em>」</li>
+              <li><b>使用声明 / 隐私 / 开源许可</b> → 「基础与设置 → <em>声明与合规</em>」</li>
+            </ul>
+          </details>
+
           <section id="statusCards" class="cards basicStatus"></section>
           <section class="settingsBlock">
             <div class="settingsBlockHead">
@@ -548,8 +578,8 @@
         <section class="panel tabPage debugPage" data-page="debug" data-panel-mount="keep" hidden>
           <div class="panelHead">
             <div>
-              <h2>调试</h2>
-              <p>查看整理结果与调整本机测试参数</p>
+              <h2>高级设置（排障与调试）</h2>
+              <p>本页依次是：显示摘要 · 回信延迟 · 今日信件 · 数据搬移 · 诊断（读取启动耗时 / 曲库健康检查 / 游戏崩溃记录 / 一键诊断包）· 游戏日志。要给作者报障，就用「一键诊断包」导出的 zip</p>
             </div>
           </div>
           <div class="debugSettings">
@@ -634,6 +664,7 @@
   <script src="/admin/legal-notices.js"></script>
   <script src="/admin/logs-page.js"></script>
   <script src="/admin/song-editor.js"></script>
+  <script src="/admin/getting-started.js"></script>
   <script type="module" src="/admin/app.js"></script>
 </body>
 </html>

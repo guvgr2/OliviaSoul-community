@@ -17,7 +17,7 @@
   async function api(path, options) {
     const response = await global.fetch(BASE + path, Object.assign({ credentials: "include" }, options));
     const body = await response.json().catch(() => ({}));
-    if (body && typeof body.code === "number" && body.code !== 0) throw new Error(body.message || "请求失败");
+    if (body && body.code !== 0 && body.code != null) throw new Error(body.message || "请求失败");
     return body && "data" in body ? body.data : body;
   }
 
@@ -127,7 +127,7 @@
     const head = node("div", null, "settingsBlockHead");
     head.append(
       node("strong", "游戏日志"),
-      node("small", "游戏自己写的 Olivia.log：崩溃现场 · 已知无害项已折叠 · 本地服务没在跑时会明确提示"),
+      node("small", "游戏自己写的 Olivia.log：崩溃现场 · 已知无害项已折叠 · 本地服务没在跑时会明确提示。想报障请用上面「一键诊断包」导出的 zip（里面已含日志摘要）"),
     );
 
     const actions = node("div", null, "actions");

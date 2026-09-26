@@ -118,7 +118,7 @@
       body: JSON.stringify({ url: target }),
     });
     const body = await response.json().catch(() => ({}));
-    if (body && typeof body.code === "number" && body.code !== 0) throw new Error(body.message || "打开外链失败");
+    if (body && body.code !== 0 && body.code != null) throw new Error(body.message || "打开外链失败");
     return (body && body.data && body.data.url) || target;
   }
 

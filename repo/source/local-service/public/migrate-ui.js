@@ -21,7 +21,7 @@
       headers: { "Content-Type": "application/json" },
     }, options));
     const body = await response.json().catch(() => ({}));
-    if (body && typeof body.code === "number" && body.code !== 0) throw new Error(body.message || "请求失败");
+    if (body && body.code !== 0 && body.code != null) throw new Error(body.message || "请求失败");
     return body && "data" in body ? body.data : body;
   }
 

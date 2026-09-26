@@ -731,23 +731,37 @@ export async function createTimeOfDayRoutes(options = {}) {
    */
   async function handleInspect(req, res, url) {
     void req; void res;
-    const folder = String(url.searchParams.get("folder") ?? "").trim();
-    if (!TOD_FOLDER_PATTERN.test(folder)) throw httpError(400, "文件夹名无效", "TIME_OF_DAY_FOLDER_INVALID");
+    const asked = String(url.searchParams.get("folder") ?? "").trim();
+    if (!asked) throw httpError(400, "请填文件夹名或编号", "TIME_OF_DAY_FOLDER_INVALID");
 
     const db = openReadOnly(databasePath);
     let rows = [];
     try {
-      rows = db.prepare(
-        "SELECT video_path, video_by_tod_view FROM user_songs WHERE removed_at IS NULL AND video_path LIKE ? ESCAPE '\\'"
-      ).all(`%/${folder}/%`);
-      if (!rows.length) {
-        rows = db.prepare(
-          "SELECT video_path, video_by_tod_view FROM user_songs WHERE removed_at IS NULL AND video_path LIKE ? ESCAPE '\\'"
-        ).all(`%${folder}%`);
-      }
+      const select = "SELECT video_path, video_by_tod_view FROM user_songs WHERE removed_at IS NULL AND video_path LIKE ? ESCAPE '\\'";
+      if (TOD_FOLDER_PATTERN.test(asked)) rows = db.prepare(select).all(`%/${asked}/%`);
+      // g13：也允许只填编号段（midi_<编号>_<时间戳> 里的第二段数字）或名称片段
+      if (!rows.length) rows = db.prepare(select).all(`%${asked}%`);
     } finally {
       db.close();
     }
+
+    // g13：把输入解析成真实文件夹名。唯一命中才继续；命中多首就让人填完整名，
+    // 免得后面用错文件夹去读缩略图、写时段。以前这里直接拿输入当文件夹名。
+    const candidates = [];
+    for (const row of rows) {
+      const name = folderFromPath(row.video_path);
+      if (name && !candidates.includes(name)) candidates.push(name);
+    }
+    if (!candidates.length) {
+      throw httpError(404, `曲库里没有匹配「${asked}」的作品，请核对编号`, "TIME_OF_DAY_FOLDER_NOT_FOUND");
+    }
+    if (candidates.length > 1) {
+      const preview = candidates.slice(0, 5).join("、");
+      throw httpError(409,
+        `「${asked}」匹配到 ${candidates.length} 首作品：${preview}${candidates.length > 5 ? " 等" : ""}。请填完整文件夹名`,
+        "TIME_OF_DAY_FOLDER_AMBIGUOUS");
+    }
+    const folder = candidates[0];
 
     // g13：变体名用游戏自己的键（DEFAULT / DEFAULT_2 / …），跟写库时保持一致
     const seen = new Set();

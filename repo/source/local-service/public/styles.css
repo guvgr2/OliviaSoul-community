@@ -638,3 +638,22 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 #noticeDetails { min-width: 0; margin: 12px 0; }
 #noticeDetails summary { cursor: pointer; color: #b9bac1; }
 #noticeErrorText { max-height: 24vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; font-size: 12px; color: #b9bac1; }
+
+/* g13 新手引导：基础设置页顶部的「功能地图」 */
+.guideMap { border-color: #4a3f22; background: #1e1c17; }
+.guideMapHead { cursor: pointer; margin-bottom: 0; }
+.guideMapHead strong { display: block; }
+.guideMapHead small { display: block; margin-top: 4px; color: #b9bac1; font-size: 12px; }
+.guideMap[open] .guideMapHead { margin-bottom: 10px; }
+.guideMapList { display: grid; gap: 7px; margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.5; }
+.guideMapList li::marker { color: #b08a3c; }
+.guideMapList b { font-weight: 600; }
+.guideMapList em { font-style: normal; color: #d8c79a; }
+
+/* g13 诊断页里的「本页目录 + 直达按钮」 */
+.ln-diagNav { border-color: #33384a; }
+.ln-diagNav .actions { margin-top: 10px; flex-wrap: wrap; }
+.ln-diagNav button.compact { padding: 6px 12px; }
+/* g13 时段依据复核底部的「去诊断」提示行 */
+.ln-todHelp { align-items: flex-start; gap: 10px; margin-top: 10px; }
+.ln-todHelp .fieldHint { flex: 1 1 260px; margin: 0; }

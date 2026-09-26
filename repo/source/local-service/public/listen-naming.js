@@ -206,8 +206,11 @@
     guideSteps.append(
       node("li", "听一段 15 秒，听出来就把曲名打进输入框按回车；听不出点「跳过」——同一首的多个版本按 Ctrl+→ 可以整组跳过。"),
       node("li", "想更快：「导出命名表」把待命名清单存成 CSV，在表格里一次填几十首再导入；也可以点「社区名单比对」让程序猜一首。"),
-      node("li", "填错不怕：按 Ctrl+Z 撤回（连带命名的一起回退）。更多工具在「试听工具」页（同款群核对、时段依据）和「高级设置」页（诊断）。"),
+      node("li", "填错不怕：按 Ctrl+Z 撤回（连带命名的一起回退）。更多工具在「试听工具」页（同款群核对、时段依据复核）和「高级设置」页（排障）。"),
     );
+    const guideNote = node("p",
+      "找不到某个功能？「基础设置」页顶部有一张「功能地图：想做什么 → 去哪一页」。要报障就到「更新与维护 → 高级设置」最下面用「一键诊断包」导一个 zip。",
+      "fieldHint");
     const guideActions = node("div", null, "actions ln-guideActions");
     const guideExport = node("button", "导出命名表", "secondary");
     const guideTools = node("button", "去试听工具页", "secondary");
@@ -215,7 +218,7 @@
     const guideClose = node("button", "知道了，收起", "secondary");
     for (const button of [guideExport, guideTools, guideDiagnostics, guideClose]) button.type = "button";
     guideActions.append(guideExport, guideTools, guideDiagnostics, guideClose);
-    guide.append(guideHead, guideSteps, guideActions);
+    guide.append(guideHead, guideSteps, guideNote, guideActions);
 
     // g11「命名进度」：进度 / 今天命名了多少 / 撤回 / 接着上次 / 两遍法
     const progressBox = node("section", null, "settingsBlock ln-progress");

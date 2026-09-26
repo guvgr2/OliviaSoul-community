@@ -2695,7 +2695,7 @@ export async function createOliviaService(options = {}) {
 
   async function serveStatic(req, res, pathname) {
     const relative = pathname === "/admin" || pathname === "/admin/" ? "index.html" : pathname.slice("/admin/".length);
-    if (!["index.html", "app.js", "game-lyrics.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "update-download-ui.js", "tab-notices.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "diagnostics-panel.js", "twin-groups-panel.js", "game-log-panel.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
+    if (!["index.html", "app.js", "game-lyrics.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "update-download-ui.js", "tab-notices.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "diagnostics-panel.js", "twin-groups-panel.js", "game-log-panel.js", "getting-started.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
       throw httpError(404, "文件不存在");
     const file = join(publicRoot, relative);
     const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".png": "image/png" };

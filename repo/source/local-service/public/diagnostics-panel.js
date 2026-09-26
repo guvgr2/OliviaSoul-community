@@ -25,7 +25,7 @@
       headers: { "Content-Type": "application/json" },
     }, options));
     const body = await response.json().catch(() => ({}));
-    if (body && typeof body.code === "number" && body.code !== 0) throw new Error(body.message || "请求失败");
+    if (body && body.code !== 0 && body.code != null) throw new Error(body.message || "请求失败");
     return body && "data" in body ? body.data : body;
   }
 
@@ -330,12 +330,26 @@
       + "真正能定位的是上面这行的「模块 + 偏移」。", "fieldHint"));
   }
 
-  function buildPanel() {    const box = node("section", null, "settingsBlock ln-diagnostics");
+  function buildPanel() {
+    const box = node("section", null, "settingsBlock ln-diagnostics");
     const head = node("div", null, "settingsBlockHead");
     head.append(
       node("strong", "诊断"),
-      node("small", "启动慢在哪一段 · 曲库有没有脏数据 · 出问题时一键复制诊断信息"),
+      node("small", "启动慢在哪 · 曲库有没有脏数据 · 游戏崩在哪；要给作者报障，用下面的「一键诊断包」"),
     );
+
+    // g13：这一页很长，先给一条"本页目录 + 直达按钮"，新用户才不会以为诊断只有上面几块
+    const navBox = node("section", null, "settingsBlock ln-diagNav");
+    navBox.append(node("p",
+      "诊断这一块往下依次是：读取启动耗时 → 曲库健康检查 → 游戏崩溃记录 → 一键诊断包 → 游戏日志（在最底部）。找不到就点这几个按钮直接跳。",
+      "fieldHint"));
+    const navActions = node("div", null, "actions");
+    const navCrash = node("button", "去游戏崩溃记录", "secondary compact");
+    const navPack = node("button", "去一键诊断包", "secondary compact");
+    const navLog = node("button", "去游戏日志", "secondary compact");
+    for (const button of [navCrash, navPack, navLog]) button.type = "button";
+    navActions.append(navCrash, navPack, navLog);
+    navBox.append(navActions);
 
     const startupActions = node("div", null, "actions");
     const startupButton = node("button", "读取启动耗时", "secondary");
@@ -357,10 +371,10 @@
     const status = node("p", "", "fieldHint");
 
     // g13：一键诊断包
-    const packHead = node("div", null, "settingsBlockHead ln-diagSpacer");
+    const packHead = node("div", null, "settingsBlockHead ln-diagSpacer ln-diagPack");
     packHead.append(
       node("strong", "一键诊断包"),
-      node("small", "把排障需要的材料打成一个 zip（已脱敏）。不含数据库、信件、记忆、歌词、音视频"),
+      node("small", "点「导出诊断包」得到一个 zip（已脱敏）—— 把它发给作者就能直接排障；不含数据库、信件、记忆、歌词、音视频"),
     );
     const packActions = node("div", null, "actions");
     const packButton = node("button", "导出诊断包", "secondary");
@@ -371,10 +385,10 @@
     const packOut = node("div", null, "ln-diagOut");
 
     // g13：游戏崩溃记录
-    const crashHead = node("div", null, "settingsBlockHead ln-diagSpacer");
+    const crashHead = node("div", null, "settingsBlockHead ln-diagSpacer ln-diagCrash");
     crashHead.append(
       node("strong", "游戏崩溃记录"),
-      node("small", "读游戏的 crash.txt / crash.dmp，告诉你崩在哪个模块（以及是不是本程序改过的文件）"),
+      node("small", "点下面「解读崩溃报告」→ 读游戏的 crash.txt / crash.dmp，告诉你崩在哪个模块、是不是本程序改过的文件，并生成一段可以发给官方的文本"),
     );
     const crashActions = node("div", null, "actions");
     const crashButton = node("button", "解读崩溃报告", "secondary");
@@ -382,7 +396,7 @@
     crashActions.append(crashButton);
     const crashOut = node("div", null, "ln-diagOut");
 
-    box.append(head, startupActions, startupOut, healthHead, healthActions, healthOut,
+    box.append(head, navBox, startupActions, startupOut, healthHead, healthActions, healthOut,
       crashHead, crashActions, crashOut,
       packHead, packActions, packOut, status);
 
@@ -395,6 +409,15 @@
     packButton.addEventListener("click", () => { void exportPackage(); });
     packPreviewButton.addEventListener("click", () => { void previewPackage(); });
     packRevealButton.addEventListener("click", () => { void revealPackage(); });
+    // g13：本页目录的直达按钮 —— 点完滚到对应块（「游戏日志」在下面的另一个面板里，届时已装配好）
+    const jumpTo = (selector) => {
+      const target = document.querySelector(selector);
+      if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+      else ui.status.textContent = "这一块没找到，可能被别的内容挡住了；往下翻一下就能看到。";
+    };
+    navCrash.addEventListener("click", () => jumpTo(".ln-diagCrash"));
+    navPack.addEventListener("click", () => jumpTo(".ln-diagPack"));
+    navLog.addEventListener("click", () => jumpTo(".ln-gamelog"));
     // 进页签就把启动记录读出来（只读本地日志，很快）
     void loadStartup();
     return box;

@@ -9,7 +9,11 @@ const tabNotices = createTabNotices({ storage: noticeStorage, render(tab, notice
   if (notice.kind) button.dataset.noticeKind = notice.kind;
   else delete button.dataset.noticeKind;
   const label = button.textContent.trim();
-  button.title = notice.messages.join('；');
+  // g13：页签的静态说明存在 data-tip 上，这里把"说明 + 提醒"合成 title，
+  // 避免没有提醒时把说明清成空串（以前就是这么把新手引导弄丢的）。
+  const tip = button.dataset.tip || '';
+  const messages = notice.messages.join('；');
+  button.title = messages ? (tip ? `${tip}｜${messages}` : messages) : tip;
   button.setAttribute?.('aria-label', notice.kind ? `${label}：${button.title}` : label);
   // g11：同步到大标题上的提醒点（组收起时也看得见）
   if (typeof updateSideGroupNotices === 'function') updateSideGroupNotices();
@@ -990,12 +994,14 @@ function updateSideGroupNotices() {
     if (!kinds.length) {
       dot.hidden = true;
       delete title.dataset.noticeKind;
-      title.removeAttribute("title");
+      // g13：没提醒时恢复静态说明（data-tip），不要直接删掉 —— 那是新手看到的功能说明
+      title.title = title.dataset.tip || "";
     } else {
       const kind = kinds.includes("fault") ? "fault" : "info";
       dot.hidden = false;
       title.dataset.noticeKind = kind;
-      title.title = `${group.querySelector("span")?.textContent || "本组"}里有需要处理的事项`;
+      const note = `${group.querySelector("span")?.textContent || "本组"}里有需要处理的事项`;
+      title.title = title.dataset.tip ? `${title.dataset.tip}｜${note}` : note;
     }
   }
 }
