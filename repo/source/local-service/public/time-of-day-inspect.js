@@ -14,8 +14,11 @@
     return element;
   }
 
-  async function api(path) {
-    const response = await global.fetch(BASE + path, { credentials: "include" });
+  async function api(path, options) {
+    const response = await global.fetch(BASE + path, Object.assign({
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+    }, options));
     const body = await response.json().catch(() => ({}));
     if (body && typeof body.code === "number" && body.code !== 0) throw new Error(body.message || "请求失败");
     return body && "data" in body ? body.data : body;
@@ -61,6 +64,65 @@
     host.append(node("p",
       `判定阈值：亮度 ≥ ${t.brightnessDay} 且偏冷 → 白天；亮度 < ${t.brightnessNight} → 夜晚；偏暖（色温 ≥ ${t.warmthDusk}）→ 傍晚。`,
       "fieldHint"));
+
+    // g13：判错了也能改 —— 显示数据库现值 + 一键按判定重写 + 手动指定
+    const SLOTS = [["TOD12", "白天"], ["TOD1730", "傍晚"], ["TOD20", "夜晚"]];
+    const showMapping = (mapping) => {
+      if (!mapping) return "（数据库里现在是空）";
+      const parts = SLOTS
+        .filter(([slot]) => mapping[slot])
+        .map(([slot, label]) => `${label}=${mapping[slot]}`);
+      return parts.length ? parts.join(" · ") : "（数据库里现在是空）";
+    };
+    const currentLine = node("p", `数据库现值：${showMapping(data.current)}`, "fieldHint");
+    const verdictLine = node("p", `画面判定值：${showMapping(data.mapping)}`, "fieldHint ln-todVerdictLine");
+    host.append(currentLine, verdictLine);
+
+    const actions = node("div", null, "actions ln-todActions");
+    const rework = node("button", "按画面判定重写这一首", "secondary");
+    rework.type = "button";
+    actions.append(rework, node("span", "手动指定：", "fieldHint"));
+    for (const [slot, label] of SLOTS) {
+      const button = node("button", label, "secondary compact");
+      button.type = "button";
+      button.addEventListener("click", async () => {
+        if (!global.confirm(`把 ${data.folder} 设为「${label}」？\n只改这一首的时段，写库前会自动备份数据库。`)) return;
+        await runAction(host, actions, `/time-of-day/set-slot`, { folder: data.folder, slot }, data);
+      });
+      actions.append(button);
+    }
+    rework.addEventListener("click", async () => {
+      if (!global.confirm(`按画面判定重写 ${data.folder} 的时段？\n会覆盖这一首已有的时段，写库前会自动备份数据库。`)) return;
+      await runAction(host, actions, `/time-of-day/rework`, { folder: data.folder }, data);
+    });
+    host.append(actions);
+
+    const result = node("p", "", "result ln-todResult");
+    host.append(result);
+    host._todResult = result;
+  }
+
+  /** g13：修正动作的统一入口（复用同一套接口与错误提示）。 */
+  async function runAction(host, actions, path, body, data) {
+    const result = host._todResult;
+    for (const button of actions.querySelectorAll("button")) button.disabled = true;
+    if (result) result.textContent = "正在写库（先备份数据库）…";
+    try {
+      const updated = await api(path, { method: "POST", body: JSON.stringify(body) });
+      const slots = [["TOD12", "白天"], ["TOD1730", "傍晚"], ["TOD20", "夜晚"]];
+      const text = slots.filter(([slot]) => updated?.mapping?.[slot])
+        .map(([slot, label]) => `${label}=${updated.mapping[slot]}`).join(" · ");
+      if (result) {
+        result.textContent = `✓ 已写入 ${updated?.written ?? 0} 行：${text}`
+          + (updated?.backupFile ? `（备份 ${updated.backupFile}）` : "");
+      }
+      // 重新读一次依据，让"数据库现值"立刻更新
+      try { renderReport(host, await api(`/time-of-day/inspect?folder=${encodeURIComponent(data.folder)}`)); } catch { /* 刷新失败不影响写入结果 */ }
+    } catch (error) {
+      if (result) result.textContent = `写入失败：${error.message}`;
+    } finally {
+      for (const button of actions.querySelectorAll("button")) button.disabled = false;
+    }
   }
 
   function buildPanel() {

@@ -1,4 +1,4 @@
-﻿// 「时段识别」后端模块（OliviaSoul 内嵌功能）
+// 「时段识别」后端模块（OliviaSoul 内嵌功能）
 //
 // 做什么：读曲库里每首歌的 3 个视频画面，判断哪一段是白天 / 傍晚 / 夜晚，
 // 生成 time_of_day_mapping（如 {"TOD12":"DEFAULT","TOD1730":"DEFAULT_2","TOD20":"DEFAULT_3"}）。
@@ -505,12 +505,39 @@ export async function createTimeOfDayRoutes(options = {}) {
     const db = openReadOnly(databasePath);
     try {
       return db.prepare(
-        "SELECT id, video_path, custom_name, time_of_day_mapping FROM user_songs "
+        "SELECT id, video_path, video_by_tod_view, custom_name, time_of_day_mapping FROM user_songs "
         + `WHERE removed_at IS NULL${where ? ` AND ${where}` : ""} ORDER BY updated_at DESC, id`,
       ).all();
     } finally {
       db.close();
     }
+  }
+
+  function normalizePathKey(value) {
+    return String(value ?? "").replace(/^external:/iu, "").replace(/\\/gu, "/").toLowerCase();
+  }
+
+  /**
+   * g13 修正（既有 bug）：写进 time_of_day_mapping 的必须是**游戏自己的变体键**
+   * （video_by_tod_view 里的键，如 DEFAULT / DEFAULT_2 / TOD1730_WI），
+   * 而不是视频文件名。以前直接用「文件名去掉 .mp4」当键，游戏那侧按 songVariants()
+   * 的 key 去匹配时根本找不到，等于白写。这里按路径优先、文件名兜底地把键找回来。
+   */
+  function variantKeyFor(row, videoAbs, fallback) {
+    try {
+      const map = JSON.parse(String(row?.video_by_tod_view ?? "{}"));
+      if (map && typeof map === "object" && !Array.isArray(map)) {
+        const target = normalizePathKey(videoAbs);
+        const base = target.split("/").pop();
+        for (const [key, path] of Object.entries(map)) {
+          if (normalizePathKey(path) === target) return key;
+        }
+        for (const [key, path] of Object.entries(map)) {
+          if (normalizePathKey(path).split("/").pop() === base) return key;
+        }
+      }
+    } catch { /* 解析不了就退回文件名 */ }
+    return fallback;
   }
 
   /** 把 user_songs 的行按曲库文件夹分组：folder -> { songIds, videos:[{video, variant}] }。 */
@@ -525,7 +552,8 @@ export async function createTimeOfDayRoutes(options = {}) {
       group.rows.push(row);
       const video = toAbsoluteVideoPath(row.video_path, libraryRoot);
       if (!video) continue;
-      group.videos.push({ video, variant: variantKeyOf(video), row });
+      // 变体键优先取 video_by_tod_view 里的键（游戏认这个），拿不到才退回文件名
+      group.videos.push({ video, variant: variantKeyFor(row, video, variantKeyOf(video)), row });
     }
     for (const group of groups.values()) group.videos.sort((left, right) => left.variant.localeCompare(right.variant, "en"));
     return groups;
@@ -710,21 +738,31 @@ export async function createTimeOfDayRoutes(options = {}) {
     let rows = [];
     try {
       rows = db.prepare(
-        "SELECT video_path FROM user_songs WHERE removed_at IS NULL AND video_path LIKE ? ESCAPE '\\'"
+        "SELECT video_path, video_by_tod_view FROM user_songs WHERE removed_at IS NULL AND video_path LIKE ? ESCAPE '\\'"
       ).all(`%/${folder}/%`);
       if (!rows.length) {
         rows = db.prepare(
-          "SELECT video_path FROM user_songs WHERE removed_at IS NULL AND video_path LIKE ? ESCAPE '\\'"
+          "SELECT video_path, video_by_tod_view FROM user_songs WHERE removed_at IS NULL AND video_path LIKE ? ESCAPE '\\'"
         ).all(`%${folder}%`);
       }
     } finally {
       db.close();
     }
 
+    // g13：变体名用游戏自己的键（DEFAULT / DEFAULT_2 / …），跟写库时保持一致
+    const seen = new Set();
     const videos = rows
-      .map((row) => toAbsoluteVideoPath(row.video_path, libraryRoot))
+      .map((row) => {
+        const video = toAbsoluteVideoPath(row.video_path, libraryRoot);
+        if (!video) return null;
+        return { video, key: variantKeyFor(row, video, variantKeyOf(video)) };
+      })
       .filter(Boolean)
-      .map((video) => ({ video, key: variantKeyOf(video) }))
+      .filter((item) => {
+        if (seen.has(item.video)) return false;
+        seen.add(item.video);
+        return true;
+      })
       .sort((a, b) => a.key.localeCompare(b.key, "en"));
 
     const segments = [];
@@ -752,8 +790,9 @@ export async function createTimeOfDayRoutes(options = {}) {
     // 整体判定沿用写入时用的排序法（与"写入时段"结果一致）
     let mapping = null;
     try {
+      // 注意：mappingFromVideos 读的是 item.variant —— 必须把变体键放进 variant 字段
       mapping = mappingFromVideos(segments.map((segment) => ({
-        key: segment.video,
+        variant: segment.video,
         period: segment.period,
         brightness: segment.brightness,
         warmth: segment.warmth,
@@ -766,6 +805,18 @@ export async function createTimeOfDayRoutes(options = {}) {
       folder,
       segments,
       mapping,
+      // g13：把数据库里的现值也带上，界面上才能显示"现值 vs 判定值"
+      current: (() => {
+        try {
+          const db = openReadOnly(databasePath);
+          try {
+            const row = db.prepare(
+              "SELECT time_of_day_mapping FROM user_songs WHERE removed_at IS NULL AND video_path LIKE ? ESCAPE '\\' LIMIT 1",
+            ).get(`%${folder}%`);
+            return parseMappingText(row?.time_of_day_mapping) ?? null;
+          } finally { db.close(); }
+        } catch { return null; }
+      })(),
       thresholds: {
         brightnessDay: TOD_BRIGHT_DAY,
         brightnessNight: TOD_BRIGHT_NIGHT,
@@ -899,6 +950,105 @@ export async function createTimeOfDayRoutes(options = {}) {
     };
   }
 
+  /** 写库前备份（一次进程只备一次，与「写入时段」共用同一份备份）。 */
+  async function ensureBackup() {
+    if (!session.backupFile) {
+      session.backupFile = await backupDatabase(databasePath, join(backupDir, `backup-tod-${stamp()}.sqlite`));
+    }
+    return session.backupFile;
+  }
+
+  function parseMappingText(value) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch { return null; }
+  }
+
+  /** 找出某个文件夹对应的分组（不区分是否已设过时段）。 */
+  function groupOfFolder(folder) {
+    return allTargets().get(folder) ?? null;
+  }
+
+  /**
+   * g13：按画面判定**重新写**这一首的时段（覆盖已有值）。
+   * 以前 apply 只写"从没设过时段"的作品，一旦判定错了就再也改不了；这个接口补上那个缺口。
+   */
+  async function handleRework(req, res, url) {
+    void res; void url;
+    const body = await readJson(req);
+    const folder = String(body?.folder ?? "").trim();
+    if (!TOD_FOLDER_PATTERN.test(folder)) throw httpError(400, "文件夹名无效", "TIME_OF_DAY_FOLDER_INVALID");
+    const group = groupOfFolder(folder);
+    if (!group) throw httpError(404, "曲库里没有这个文件夹", "TIME_OF_DAY_FOLDER_NOT_FOUND");
+
+    const [preview] = await previewFolders([group]);
+    if (!preview?.usable) {
+      throw httpError(400, "这一首的画面判不出时段，没法按判定写入（可以改用「手动指定时段」）", "TIME_OF_DAY_NOT_USABLE");
+    }
+    await ensureBackup();
+    const written = writeMappings([{
+      folder,
+      songIds: group.songIds,
+      mapping: normalizeMapping(preview.mapping),
+      overwrite: true,
+    }]);
+    return {
+      folder,
+      mapping: preview.mapping,
+      videos: preview.videos,
+      written: written.length,
+      backupFile: session.backupFile,
+    };
+  }
+
+  /**
+   * g13：手动把某个文件夹的变体指到指定时段（覆盖已有值，且不动其它变体）。
+   * 用于"程序判成夜晚、但我觉得该是傍晚"这种情况。
+   */
+  async function handleSetSlot(req, res, url) {
+    void res; void url;
+    const body = await readJson(req);
+    const folder = String(body?.folder ?? "").trim();
+    const slot = String(body?.slot ?? "").trim();
+    if (!TOD_FOLDER_PATTERN.test(folder)) throw httpError(400, "文件夹名无效", "TIME_OF_DAY_FOLDER_INVALID");
+    if (!TOD_SLOTS.includes(slot)) {
+      throw httpError(400, `时段只能是 ${TOD_SLOTS.join(" / ")}`, "TIME_OF_DAY_SLOT_INVALID");
+    }
+    const group = groupOfFolder(folder);
+    if (!group) throw httpError(404, "曲库里没有这个文件夹", "TIME_OF_DAY_FOLDER_NOT_FOUND");
+    const variant = group.videos.map(item => item.variant).filter(Boolean)[0];
+    if (!variant) throw httpError(400, "这个文件夹里没有可解析的视频文件名", "TIME_OF_DAY_VARIANT_MISSING");
+
+    // 保留其它变体原来的时段，只把当前变体挪到目标时段
+    const current = parseMappingText(group.rows[0]?.time_of_day_mapping) ?? {};
+    const mapping = Object.fromEntries(TOD_SLOTS.map(name => [name, null]));
+    for (const name of TOD_SLOTS) {
+      const value = current?.[name];
+      if (typeof value === "string" && value && value !== variant && !mapping[name]) mapping[name] = value;
+    }
+    mapping[slot] = variant;
+
+    await ensureBackup();
+    const written = writeMappings([{
+      folder,
+      songIds: group.songIds,
+      mapping: normalizeMapping(mapping),
+      overwrite: true,
+    }]);
+    return {
+      folder,
+      slot,
+      slotLabel: TOD_LABELS[slot] ?? slot,
+      variant,
+      previous: current,
+      mapping,
+      written: written.length,
+      backupFile: session.backupFile,
+    };
+  }
+
   /**
    * 路由入口。返回 null = 不是本模块的请求；返回对象 = JSON 结果（server.js 用 ok() 包信封）。
    */
@@ -915,6 +1065,9 @@ export async function createTimeOfDayRoutes(options = {}) {
       return await handleThumbnail(req, res, url);
     if (req.method === "GET" && path === "/listen-naming/time-of-day/preview") return await handlePreview(req, res, url);
     if (req.method === "POST" && path === "/listen-naming/time-of-day/apply") return await handleApply(req, res, url);
+    // g13：判定错了也能改（覆盖已有值）
+    if (req.method === "POST" && path === "/listen-naming/time-of-day/rework") return await handleRework(req, res, url);
+    if (req.method === "POST" && path === "/listen-naming/time-of-day/set-slot") return await handleSetSlot(req, res, url);
     if (req.method === "GET" && path === "/listen-naming/time-of-day/status") {
       return {
         databasePath,

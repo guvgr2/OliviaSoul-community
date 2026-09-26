@@ -20,6 +20,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { startupReport as buildStartupReport } from "./startup-report.js";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
@@ -732,95 +733,10 @@ export async function createListenNamingRoutes(options = {}) {
       db.close();
     }
   }
+  // ------------------------------------------------------------ 启动耗时报表（g12；g13 抽到 midi/startup-report.js）
 
-  // ------------------------------------------------------------ 启动耗时报表（g12）
-
-  /**
-   * 读 <UserData>\runtime.log（必要时连上一份）里的 startup-stage 行，按"宿主进程 pid"分组，
-   * 返回最近若干次启动的分段耗时。原生宿主与 node 宿主都会打这些行（g11 加的埋点）。
-   */
-  async function startupReport(limit = 3) {
-    const stages = [];
-    const nodeStartedAt = new Map();   // 宿主 pid → node 在宿主的第几毫秒启动
-    const files = [
-      join(userDataDir(), "runtime.previous.log"),
-      join(userDataDir(), "runtime.log"),
-    ];
-    for (const file of files) {
-      let text = "";
-      try { text = await readFile(file, "utf8"); } catch { continue; }
-      // 只保留最后 4000 行，避免把几 MB 的日志全解析一遍
-      const lines = text.split(/\r?\n/u).slice(-4000);
-      for (const line of lines) {
-        // 宿主启动 node 的那一行：拿到"node 是在宿主第几毫秒起来的"，用来把 node 自己的阶段对齐到宿主时间线
-        const bootLine = /desktop=(\d+)\s+.*?node started.*?sinceProcessStartMs=(\d+)/u.exec(line);
-        if (bootLine) {
-          nodeStartedAt.set(bootLine[1], Number(bootLine[2]));
-          continue;
-        }
-        const match = /desktop=(\d+)\s+.*?startup-stage=(\S+)(.*)$/u.exec(line);
-        if (!match) continue;
-        const stamp = line.slice(0, 23);
-        const elapsed = /elapsedMs=(\d+)/u.exec(match[3]);
-        const sinceProcess = /sinceProcessStartMs=(\d+)/u.exec(match[3]);
-        const sinceNode = /sinceNodeStartMs=(\d+)/u.exec(match[3]);
-        stages.push({
-          host: match[1],
-          stage: match[2],
-          at: stamp,
-          elapsedMs: elapsed ? Number(elapsed[1]) : null,
-          sinceProcessStartMs: sinceProcess ? Number(sinceProcess[1]) : null,
-          sinceNodeStartMs: sinceNode ? Number(sinceNode[1]) : null,
-        });
-      }
-    }
-    // 按宿主 pid 归组（同一 pid 的一次启动 = 一条时间线），取每组最早出现的时间做排序键
-    const boots = new Map();
-    for (const item of stages) {
-      if (!boots.has(item.host)) boots.set(item.host, { host: item.host, first: item.at, stages: [] });
-      boots.get(item.host).stages.push(item);
-    }
-    const list = [...boots.values()]
-      .sort((left, right) => String(left.first).localeCompare(String(right.first)))
-      .slice(-limit)
-      .reverse();
-    for (const boot of list) {
-      // 同一阶段可能被打印多次（重启），保留各阶段的最小 elapsedMs
-      const merged = new Map();
-      const base = nodeStartedAt.get(boot.host) ?? 0;
-      for (const item of boot.stages) {
-        // node 自己的阶段只有 sinceNodeStartMs（相对 node 启动），换算到宿主时间线，
-        // 这样"node 起来 → 服务就绪 → 界面可见"能在同一把尺子上比较。
-        if (item.sinceProcessStartMs == null && item.sinceNodeStartMs != null) {
-          item.sinceProcessStartMs = base + item.sinceNodeStartMs;
-        }
-        const key = item.stage;
-        const current = merged.get(key);
-        const value = item.sinceProcessStartMs ?? item.elapsedMs ?? 0;
-        if (!current || value < (current.sinceProcessStartMs ?? current.elapsedMs ?? Infinity)) merged.set(key, item);
-      }
-      boot.stages = [...merged.values()].sort((left, right) => (left.elapsedMs ?? 0) - (right.elapsedMs ?? 0));
-      const total = boot.stages.reduce((max, item) => Math.max(max, item.sinceProcessStartMs ?? item.elapsedMs ?? 0), 0);
-      boot.totalMs = total;
-      // "最慢的一段"要按**相邻阶段的差值**算（累计值最大的永远是最后一段，没有信息量）
-      const ordered = [...boot.stages].sort((left, right) =>
-        (left.sinceProcessStartMs ?? 0) - (right.sinceProcessStartMs ?? 0));
-      let worst = null;
-      let previous = 0;
-      for (const item of ordered) {
-        const at = item.sinceProcessStartMs ?? item.elapsedMs ?? 0;
-        const delta = Math.max(0, at - previous);
-        if (!worst || delta > worst.deltaMs) worst = { stage: item.stage, at, deltaMs: delta };
-        previous = Math.max(previous, at);
-      }
-      boot.slowest = worst;
-    }
-    return {
-      boots: list,
-      logFile: join(userDataDir(), "runtime.log"),
-      note: "sinceProcessStartMs = 从宿主进程启动算起（含 WebView2 装载）；elapsedMs = 从窗体构造算起",
-    };
-  }
+  /** 读 runtime.log 汇总最近几次启动的分段耗时（实现见 midi/startup-report.js，诊断包共用同一份）。 */
+  const startupReport = (limit = 3) => buildStartupReport({ userDataDir: userDataDir(), limit });
 
   // ------------------------------------------------------------ 批量命名表（g12）
 

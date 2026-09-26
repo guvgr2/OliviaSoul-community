@@ -4,6 +4,9 @@ import { createLyricsService } from "./lyrics/service.js";
 import { lyricsRoute } from "./lyrics/routes.js";
 import { createListenNamingRoutes } from "./midi/listen-naming.js";
 import { createDependencyCheckRoutes } from "./midi/dependency-check.js";
+import { createDiagnosticRoutes } from "./midi/diagnostic-package.js";
+import { createCrashRoutes } from "./midi/crash-report.js";
+import { createGameLogRoutes } from "./midi/game-log.js";
 import { createLogRoutes, logError } from "./midi/logs.js";
 import { createCommunityRoutes } from "./midi/community-catalog.js";
 import { createTimeOfDayRoutes } from "./midi/time-of-day.js";
@@ -11,6 +14,9 @@ import { createTimeOfDayRoutes } from "./midi/time-of-day.js";
 let listenNamingRoutesPromise = null;
 let listenNamingRoutesRoot = "";
 let dependencyCheckRoutesPromise = null;
+let diagnosticRoutesPromise = null;
+let crashRoutesPromise = null;
+let gameLogRoutesPromise = null;
 let logRoutesPromise = null;
 let communityCatalogRoutesPromise = null;
 let timeOfDayRoutesPromise = null;
@@ -2689,7 +2695,7 @@ export async function createOliviaService(options = {}) {
 
   async function serveStatic(req, res, pathname) {
     const relative = pathname === "/admin" || pathname === "/admin/" ? "index.html" : pathname.slice("/admin/".length);
-    if (!["index.html", "app.js", "game-lyrics.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "update-download-ui.js", "tab-notices.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "diagnostics-panel.js", "twin-groups-panel.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
+    if (!["index.html", "app.js", "game-lyrics.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "update-download-ui.js", "tab-notices.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "diagnostics-panel.js", "twin-groups-panel.js", "game-log-panel.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
       throw httpError(404, "文件不存在");
     const file = join(publicRoot, relative);
     const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".png": "image/png" };
@@ -2795,6 +2801,35 @@ export async function createOliviaService(options = {}) {
       if (result !== null && result !== undefined) return ok(req, res, result, { "Cache-Control": "no-store" });
     }
 
+
+    // 「诊断包」：独立模块，路由 /toy/listen-naming/diagnostics/package*
+    diagnosticRoutesPromise ??= createDiagnosticRoutes();
+    {
+      const routes = await diagnosticRoutesPromise;
+      const result = await routes(req, new URL(req.url ?? "/", "http://127.0.0.1"));
+      if (result && result.mediaResponse) return;
+      if (result !== null && result !== undefined) return ok(req, res, result, { "Cache-Control": "no-store" });
+    }
+
+
+    // 「游戏崩溃记录解读」：独立模块，路由 /toy/listen-naming/diagnostics/crashes*
+    crashRoutesPromise ??= createCrashRoutes();
+    {
+      const routes = await crashRoutesPromise;
+      const result = await routes(req, new URL(req.url ?? "/", "http://127.0.0.1"));
+      if (result && result.mediaResponse) return;
+      if (result !== null && result !== undefined) return ok(req, res, result, { "Cache-Control": "no-store" });
+    }
+
+
+    // 「游戏日志」：独立模块，路由 /toy/listen-naming/diagnostics/game-log
+    gameLogRoutesPromise ??= createGameLogRoutes();
+    {
+      const routes = await gameLogRoutesPromise;
+      const result = await routes(req, new URL(req.url ?? "/", "http://127.0.0.1"));
+      if (result && result.mediaResponse) return;
+      if (result !== null && result !== undefined) return ok(req, res, result, { "Cache-Control": "no-store" });
+    }
 
     // 「画面识别（时段）」：独立模块，路由前缀 /toy/listen-naming/*
     timeOfDayRoutesPromise ??= createTimeOfDayRoutes({});   // 这两个不吃挂载时的曲库路径，内部会现读

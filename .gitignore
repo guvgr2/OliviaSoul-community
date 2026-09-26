@@ -45,3 +45,6 @@ package-work/
 .test-twins/
 .uipick/
 .edge-profile*/
+
+# Local crash-analysis scripts (contain machine paths) - never committed
+tools/
