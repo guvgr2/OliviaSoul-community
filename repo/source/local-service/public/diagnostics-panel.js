@@ -330,6 +330,178 @@
       + "真正能定位的是上面这行的「模块 + 偏移」。", "fieldHint"));
   }
 
+  // ---------------------------------------------------------------- g14 数据备份与恢复
+  // 以前备份只写不读（改时段/写曲名前都会存一份，出事却没有任何恢复入口）。这里补上闭环：
+  // 备份 → 看内容 → 恢复（重启生效，恢复前自动留档）+ 导出/导入（换电脑迁移）。
+
+  function timeText(value) {
+    const text = String(value ?? "").replace("T", " ");
+    return text ? text.slice(0, 19) : "—";
+  }
+
+  function renderDataSafety(data) {
+    if (!ui) return;
+    const box = ui.dataOut;
+    box.replaceChildren();
+    const db = data?.database;
+    box.append(node("p",
+      db ? `当前数据库：${bytes(db.bytes)} · 最后改动 ${timeText(db.at)}`
+        : "还没读到数据库信息。",
+      "fieldHint"));
+
+    if (data?.pending) {
+      const warn = node("section", null, "settingsBlock ln-diagPending");
+      warn.append(node("strong", "⚠ 已安排一次恢复：关掉程序再打开就生效"));
+      warn.append(node("p", `${data.pending.label || data.pending.source || "恢复"} · ${data.pending.file}`, "fieldHint"));
+      const row = node("div", null, "actions");
+      const cancel = node("button", "取消这次恢复", "secondary compact");
+      cancel.type = "button";
+      cancel.addEventListener("click", () => { void cancelRestoreNow(); });
+      row.append(cancel);
+      warn.append(row);
+      box.append(warn);
+    }
+
+    const items = Array.isArray(data?.items) ? data.items : [];
+    if (!items.length) {
+      box.append(node("p", "还没有任何备份。点上面「立即备份」存一份，以后改错了可以回到这里。", "fieldHint"));
+      return;
+    }
+    const table = node("table", null, "ln-diagTable");
+    const head = node("tr");
+    for (const label of ["时间", "来源", "大小", "操作"]) head.append(node("th", label));
+    table.append(head);
+    for (const item of items.slice(0, 12)) {
+      const tr = node("tr");
+      tr.append(node("td", timeText(item.at)));
+      tr.append(node("td", item.label));
+      tr.append(node("td", bytes(item.bytes)));
+      const actions = node("td");
+      const look = node("button", "看内容", "secondary compact");
+      look.type = "button";
+      look.addEventListener("click", () => { void inspectBackupRow(item.file, tr); });
+      const restore = node("button", "恢复这一个", "secondary compact");
+      restore.type = "button";
+      restore.addEventListener("click", () => { void restoreBackup(item); });
+      actions.append(look, restore);
+      tr.append(actions);
+      table.append(tr);
+    }
+    box.append(table);
+    if (items.length > 12)
+      box.append(node("p", `另有 ${items.length - 12} 份更早的备份，「打开备份目录」能看到全部`, "fieldHint"));
+  }
+
+  async function loadDataSafety() {
+    if (!ui) return;
+    ui.dataStatus.textContent = "正在读取备份列表…";
+    try {
+      renderDataSafety(await api("/data/status"));
+      ui.dataStatus.textContent = "";
+    } catch (error) {
+      ui.dataStatus.textContent = `读取失败：${error.message}`;
+    }
+  }
+
+  async function backupNow() {
+    if (!ui) return;
+    ui.dataStatus.textContent = "正在备份数据库…";
+    try {
+      const result = await api("/data/backup", { method: "POST", body: "{}" });
+      ui.dataStatus.textContent = `✓ 已备份 ${result.file}（${bytes(result.bytes)}）`;
+      await loadDataSafety();
+    } catch (error) {
+      ui.dataStatus.textContent = `备份失败：${error.message}`;
+    }
+  }
+
+  async function inspectBackupRow(file, row) {
+    if (!ui) return;
+    try {
+      const info = await api(`/data/inspect?file=${encodeURIComponent(file)}`);
+      const counts = info.counts ?? {};
+      const line = node("p",
+        `完整性 ${info.integrity} · 曲库 ${counts.songs ?? "?"} 条（已命名 ${counts.named ?? "?"}，已设时段 ${counts.timeOfDay ?? "?"}）· 信件 ${counts.letters ?? "?"} 封`,
+        info.valid ? "fieldHint" : "result");
+      line.dataset.diagInspect = "1";
+      const next = row.nextElementSibling;
+      if (next && next.dataset?.diagInspect === "1") next.remove();
+      row.after(line);
+    } catch (error) {
+      ui.dataStatus.textContent = `读取备份内容失败：${error.message}`;
+    }
+  }
+
+  async function restoreBackup(item) {
+    if (!ui) return;
+    if (!global.confirm(`用备份「${item.file}」恢复数据库？\n\n· 现在这份会先留档成 before-restore-*.sqlite（随时能再换回来）\n· 恢复要关掉程序再打开才生效\n· 备份来源：${item.label}`)) return;
+    ui.dataStatus.textContent = "正在安排恢复…";
+    try {
+      const result = await api("/data/restore", { method: "POST", body: JSON.stringify({ file: item.file, confirm: true }) });
+      ui.dataStatus.textContent = `✓ 已安排恢复 ${result.file} —— 关掉程序再打开就会生效（现在这份已留档）。`;
+      await loadDataSafety();
+    } catch (error) {
+      ui.dataStatus.textContent = `恢复失败：${error.message}`;
+    }
+  }
+
+  async function cancelRestoreNow() {
+    if (!ui) return;
+    try {
+      await api("/data/cancel-restore", { method: "POST", body: "{}" });
+      ui.dataStatus.textContent = "已取消这次恢复，数据库不会被替换。";
+      await loadDataSafety();
+    } catch (error) {
+      ui.dataStatus.textContent = `取消失败：${error.message}`;
+    }
+  }
+
+  async function revealBackups() {
+    if (!ui) return;
+    try {
+      const result = await api("/data/reveal", { method: "POST", body: "{}" });
+      ui.dataStatus.textContent = `已打开备份目录：${result.opened}`;
+    } catch (error) {
+      ui.dataStatus.textContent = `打开目录失败：${error.message}`;
+    }
+  }
+
+  async function exportAllData() {
+    if (!ui) return;
+    ui.transferStatus.textContent = "正在打包用户数据（数据库 + 歌词），稍等…";
+    try {
+      const result = await api("/data/export", { method: "POST", body: "{}" });
+      const removed = Number(result.credentialsRemoved ?? 0);
+      ui.transferStatus.textContent = `✓ 已导出 ${result.name}（${bytes(result.bytes)}）：`
+        + `曲库 ${result.counts?.songs ?? "?"} 条、已命名 ${result.counts?.named ?? "?"}、已设时段 ${result.counts?.timeOfDay ?? "?"}、歌词 ${result.lyrics ?? 0} 个；`
+        + (removed ? `已清除 ${removed} 处 API Key（新机器要重新填一次）。` : "没有需要清除的密钥。")
+        + " 这个包等于你的隐私数据，别随意外发。";
+    } catch (error) {
+      ui.transferStatus.textContent = `导出失败：${error.message}`;
+    }
+  }
+
+  async function importDataFile(file) {
+    if (!ui || !file) return;
+    if (!global.confirm(`从「${file.name}」导入？\n\n· 会用它替换当前数据库\n· 当前这份会先留档成 before-restore-*.sqlite\n· 导入要关掉程序再打开才生效`)) return;
+    ui.transferStatus.textContent = "正在上传并校验导出包…";
+    try {
+      const response = await global.fetch(`${BASE}/data/import?name=${encodeURIComponent(file.name)}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: file,
+      });
+      const body = await response.json().catch(() => ({}));
+      if (body && body.code !== 0 && body.code != null) throw new Error(body.message || "导入失败");
+      const data = body?.data ?? body;
+      ui.transferStatus.textContent = `✓ 已接受导入（${data?.name ?? file.name}）—— 关掉程序再打开就生效。`;
+      await loadDataSafety();
+    } catch (error) {
+      ui.transferStatus.textContent = `导入失败：${error.message}`;
+    }
+  }
+
   function buildPanel() {
     const box = node("section", null, "settingsBlock ln-diagnostics");
     const head = node("div", null, "settingsBlockHead");
@@ -341,14 +513,15 @@
     // g13：这一页很长，先给一条"本页目录 + 直达按钮"，新用户才不会以为诊断只有上面几块
     const navBox = node("section", null, "settingsBlock ln-diagNav");
     navBox.append(node("p",
-      "诊断这一块往下依次是：读取启动耗时 → 曲库健康检查 → 游戏崩溃记录 → 一键诊断包 → 游戏日志（在最底部）。找不到就点这几个按钮直接跳。",
+      "诊断这一块往下依次是：读取启动耗时 → 曲库健康检查 → 游戏崩溃记录 → 一键诊断包 → 数据备份与恢复（含导出迁移）→ 游戏日志（在最底部）。找不到就点这几个按钮直接跳。",
       "fieldHint"));
     const navActions = node("div", null, "actions");
     const navCrash = node("button", "去游戏崩溃记录", "secondary compact");
     const navPack = node("button", "去一键诊断包", "secondary compact");
     const navLog = node("button", "去游戏日志", "secondary compact");
-    for (const button of [navCrash, navPack, navLog]) button.type = "button";
-    navActions.append(navCrash, navPack, navLog);
+    const navData = node("button", "去数据备份与恢复", "secondary compact");
+    for (const button of [navCrash, navPack, navLog, navData]) button.type = "button";
+    navActions.append(navCrash, navPack, navLog, navData);
     navBox.append(navActions);
 
     const startupActions = node("div", null, "actions");
@@ -396,12 +569,50 @@
     crashActions.append(crashButton);
     const crashOut = node("div", null, "ln-diagOut");
 
+    // g14：数据备份与恢复（+ 导出迁移）
+    const dataHead = node("div", null, "settingsBlockHead ln-diagSpacer ln-diagData");
+    dataHead.append(
+      node("strong", "数据备份与恢复"),
+      node("small", "你的整理成果（曲名 / 时段 / 歌词关联 / 信件）全在数据库里。平时改时段、写曲名都会自动留一份备份 —— 这里可以手动再存一份、随时看某份备份里有什么、出错时回滚，或者把全部数据打包换电脑"),
+    );
+    const dataActions = node("div", null, "actions");
+    const backupNowButton = node("button", "立即备份", "secondary");
+    const revealBackupsButton = node("button", "打开备份目录", "secondary");
+    const refreshBackupsButton = node("button", "刷新列表", "secondary compact");
+    for (const button of [backupNowButton, revealBackupsButton, refreshBackupsButton]) button.type = "button";
+    dataActions.append(backupNowButton, revealBackupsButton, refreshBackupsButton);
+    const dataStatus = node("p", "", "fieldHint");
+    const dataOut = node("div", null, "ln-diagOut ln-diagDataOut");
+
+    const transferHead = node("div", null, "settingsBlockHead ln-diagSpacer ln-diagTransfer");
+    transferHead.append(
+      node("strong", "导出 / 导入（换电脑、留底）"),
+      node("small", "导出一个 zip：数据库 + 歌词 + 说明。**不含 API Key**（导出时会自动清除，新机器重填一次），也不含音视频；但含你的曲名与信件，别随意外发"),
+    );
+    const transferActions = node("div", null, "actions");
+    const exportDataButton = node("button", "导出全部用户数据（zip）", "secondary");
+    const importDataButton = node("button", "从导出包导入", "secondary");
+    const importDataInput = node("input");
+    importDataInput.type = "file";
+    importDataInput.accept = ".zip,application/zip";
+    importDataInput.hidden = true;
+    for (const button of [exportDataButton, importDataButton]) button.type = "button";
+    transferActions.append(exportDataButton, importDataButton, importDataInput);
+    const transferStatus = node("p", "", "fieldHint");
+
     box.append(head, navBox, startupActions, startupOut, healthHead, healthActions, healthOut,
       crashHead, crashActions, crashOut,
-      packHead, packActions, packOut, status);
+      packHead, packActions, packOut,
+      dataHead, dataActions, dataStatus, dataOut,
+      transferHead, transferActions, transferStatus,
+      status);
 
     // g12：事件绑定必须在 return 之前完成
-    ui = { box, startupButton, copyButton, healthButton, startupOut, healthOut, crashButton, crashOut, packButton, packOut, status };
+    ui = {
+      box, startupButton, copyButton, healthButton, startupOut, healthOut, crashButton, crashOut,
+      packButton, packOut, status,
+      dataOut, dataStatus, transferStatus,
+    };
     startupButton.addEventListener("click", () => { void loadStartup(); });
     healthButton.addEventListener("click", () => { void loadHealth(); });
     copyButton.addEventListener("click", () => { void copyDiagnostics(); });
@@ -409,6 +620,16 @@
     packButton.addEventListener("click", () => { void exportPackage(); });
     packPreviewButton.addEventListener("click", () => { void previewPackage(); });
     packRevealButton.addEventListener("click", () => { void revealPackage(); });
+    backupNowButton.addEventListener("click", () => { void backupNow(); });
+    revealBackupsButton.addEventListener("click", () => { void revealBackups(); });
+    refreshBackupsButton.addEventListener("click", () => { void loadDataSafety(); });
+    exportDataButton.addEventListener("click", () => { void exportAllData(); });
+    importDataButton.addEventListener("click", () => importDataInput.click());
+    importDataInput.addEventListener("change", () => {
+      const file = importDataInput.files?.[0];
+      importDataInput.value = "";
+      if (file) void importDataFile(file);
+    });
     // g13：本页目录的直达按钮 —— 点完滚到对应块（「游戏日志」在下面的另一个面板里，届时已装配好）
     const jumpTo = (selector) => {
       const target = document.querySelector(selector);
@@ -418,6 +639,9 @@
     navCrash.addEventListener("click", () => jumpTo(".ln-diagCrash"));
     navPack.addEventListener("click", () => jumpTo(".ln-diagPack"));
     navLog.addEventListener("click", () => jumpTo(".ln-gamelog"));
+    navData.addEventListener("click", () => jumpTo(".ln-diagData"));
+    // g14：进页就把备份列表读出来（只读本地目录，很快）
+    void loadDataSafety();
     // 进页签就把启动记录读出来（只读本地日志，很快）
     void loadStartup();
     return box;

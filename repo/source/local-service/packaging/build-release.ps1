@@ -17,7 +17,7 @@ $utf8NoBom = New-Object Text.UTF8Encoding $false
 . (Join-Path $PSScriptRoot "package-safety.ps1")
 
 $baseVersion = "2008.2.7"
-$version = "2008.2.7-linli9-g13"
+$version = "2008.2.7-linli9-g14"
 $packagePath = Join-Path $project "package.json"
 $packageText = [IO.File]::ReadAllText($packagePath, $utf8NoBom)
 $package = $packageText | ConvertFrom-Json
@@ -385,7 +385,7 @@ foreach ($name in @(
     # --- 本分支新增的后端模块（漏了它们，装出来的程序接口会全部 404）---
     "listen-naming.js", "time-of-day.js", "community-catalog.js", "fingerprint.js", "dependency-check.js", "logs.js",
     # --- g13 新增 ---
-    "startup-report.js", "diagnostic-package.js", "crash-report.js", "game-log.js"
+    "startup-report.js", "diagnostic-package.js", "crash-report.js", "game-log.js", "data-safety.js"
 )) {
     Copy-Item -LiteralPath (Join-Path (Join-Path $project "midi") $name) -Destination (Join-Path $stage "app\midi") -Force
 }

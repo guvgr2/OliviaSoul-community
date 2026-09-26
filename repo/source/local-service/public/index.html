@@ -64,7 +64,7 @@
             <button class="sideTab" type="button" data-tab="feedback" data-tip="反馈与建议：提交问题或建议、导出反馈材料">反馈与建议</button>
             <button class="sideTab" type="button" data-tab="dependency-check" data-tip="依赖检查：确认 ffmpeg 等运行依赖是否就绪">依赖检查</button>
             <button class="sideTab" type="button" data-tab="logs" data-tip="运行日志：看程序自己的运行日志、定位报错">运行日志</button>
-            <button class="sideTab" type="button" data-tab="debug" data-tip="高级设置（排障）：启动耗时 · 曲库健康检查 · 游戏崩溃记录 · 一键诊断包 · 游戏日志 · 数据搬移">高级设置</button>
+            <button class="sideTab" type="button" data-tab="debug" data-tip="高级设置（排障与数据安全）：启动耗时 · 曲库健康检查 · 游戏崩溃记录 · 一键诊断包 · 数据备份与恢复（回滚）· 导出/导入迁移 · 游戏日志 · 数据搬移">高级设置</button>
           </details>
         </nav>
       </aside>
@@ -94,6 +94,8 @@
               <li><b>确认 ffmpeg 等依赖是否就绪</b> → 「更新与维护 → <em>依赖检查</em>」</li>
               <li><b>看程序日志 / 定位报错</b> → 「更新与维护 → <em>运行日志</em>」</li>
               <li><b>出问题了，想给作者一份材料</b> → 「更新与维护 → <em>高级设置</em>」最下面的「<b>一键诊断包</b>」：导出一个已脱敏的 zip 直接发过去</li>
+              <li><b>怕数据丢 / 改错了想回退</b> → 「高级设置 → <b>数据备份与恢复</b>」：立即备份、看某份备份里有什么、一键回到某个时间点（改时段和写曲名前程序也会自动留备份）</li>
+              <li><b>换电脑 / 重装，要把整理成果带走</b> → 「高级设置 → <b>导出 / 导入</b>」：导出一个 zip（含曲名、时段、歌词关联、信件；不含 API Key），在新机器上「从导出包导入」即可</li>
               <li><b>游戏崩了 / 崩在哪个模块</b> → 「高级设置 → <b>游戏崩溃记录</b>」（点「解读崩溃报告」）</li>
               <li><b>启动慢在哪一段</b> → 「高级设置 → <b>读取启动耗时</b>」</li>
               <li><b>游戏自己写了什么</b> → 「高级设置 → <b>游戏日志</b>」（页面最底部，点「读取游戏日志」）</li>
@@ -579,7 +581,7 @@
           <div class="panelHead">
             <div>
               <h2>高级设置（排障与调试）</h2>
-              <p>本页依次是：显示摘要 · 回信延迟 · 今日信件 · 数据搬移 · 诊断（读取启动耗时 / 曲库健康检查 / 游戏崩溃记录 / 一键诊断包）· 游戏日志。要给作者报障，就用「一键诊断包」导出的 zip</p>
+              <p>本页依次是：显示摘要 · 回信延迟 · 今日信件 · 数据搬移 · 诊断（读取启动耗时 / 曲库健康检查 / 游戏崩溃记录 / 一键诊断包）· <b>数据备份与恢复</b>（含导出迁移）· 游戏日志。要给作者报障，就用「一键诊断包」导出的 zip</p>
             </div>
           </div>
           <div class="debugSettings">

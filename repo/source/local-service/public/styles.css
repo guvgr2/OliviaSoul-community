@@ -657,3 +657,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* g13 时段依据复核底部的「去诊断」提示行 */
 .ln-todHelp { align-items: flex-start; gap: 10px; margin-top: 10px; }
 .ln-todHelp .fieldHint { flex: 1 1 260px; margin: 0; }
+/* g14 数据备份与恢复：备份列表表格 / 待恢复提示 */
+.ln-diagDataOut { margin-top: 10px; }
+.ln-diagTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ln-diagTable th, .ln-diagTable td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #292a2f; vertical-align: middle; }
+.ln-diagTable th { color: #b9bac1; font-weight: 600; }
+.ln-diagTable td:last-child { white-space: nowrap; }
+.ln-diagTable td:last-child button { margin-right: 6px; }
+.ln-diagPending { border-color: #6b5620; background: #241f14; }
+.ln-diagPending strong { display: block; margin-bottom: 6px; }

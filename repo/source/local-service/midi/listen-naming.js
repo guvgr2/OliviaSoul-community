@@ -740,11 +740,42 @@ export async function createListenNamingRoutes(options = {}) {
 
   // ------------------------------------------------------------ 批量命名表（g12）
 
-  const TABLE_HEADER = ["编号", "文件夹", "曲名（在这一列填）", "线索", "同编号已有曲名", "同款群"];
+  const TABLE_HEADER = ["编号", "文件夹", "曲名（在这一列填）", "线索", "同编号已有曲名", "同款群", "当前时段（只读）"];
+
+  /**
+   * g14：把数据库里已设的时段读成"白天=DEFAULT · 傍晚=DEFAULT_2"这种人话，填进命名表最后一列。
+   * 只读展示：改时段请在「时段依据复核」里做（那里能看画面依据）；整库换电脑用「导出/导入」。
+   */
+  function currentTimeOfDayByFolder() {
+    const map = new Map();
+    const labels = { TOD12: "白天", TOD1730: "傍晚", TOD20: "夜晚" };
+    let db = null;
+    try {
+      db = openReadOnly(DATABASE_PATH);
+      const rows = db.prepare(
+        "SELECT video_path, time_of_day_mapping FROM user_songs WHERE removed_at IS NULL "
+        + "AND time_of_day_mapping IS NOT NULL AND time_of_day_mapping <> ''"
+      ).all();
+      for (const row of rows) {
+        const folder = folderFromPath(row.video_path);
+        if (!folder || map.has(folder)) continue;
+        let parsed = null;
+        try { parsed = JSON.parse(String(row.time_of_day_mapping ?? "null")); } catch { parsed = null; }
+        if (!parsed || typeof parsed !== "object") continue;
+        const parts = Object.entries(labels)
+          .filter(([slot]) => parsed[slot])
+          .map(([slot, label]) => `${label}=${parsed[slot]}`);
+        if (parts.length) map.set(folder, parts.join(" · "));
+      }
+    } catch { /* 读不到就留空这一列，不影响命名表其它列 */ }
+    finally { try { db?.close(); } catch { /* 忽略 */ } }
+    return map;
+  }
 
   /** 导出待命名清单为 CSV（用 Excel/记事本一次填多首，再导入写库）。 */
   async function nameTable() {
     const payload = await cachedBuildList();
+    const todByFolder = currentTimeOfDayByFolder();
     const lines = [csvLine(TABLE_HEADER)];
     for (const song of payload.songs) {
       const feature = song.feature ?? {};
@@ -760,6 +791,7 @@ export async function createListenNamingRoutes(options = {}) {
         clue,
         (song.sameNumber ?? []).map(item => item.name).join(" / "),
         (song.twins ?? []).join(" / "),
+        todByFolder.get(song.folder) ?? "",
       ]));
     }
     const stamp2 = new Date().toISOString().slice(0, 19).replace(/[:T]/gu, "-");
@@ -767,8 +799,9 @@ export async function createListenNamingRoutes(options = {}) {
       fileName: `olivia-命名表-${stamp2}.csv`,
       count: payload.songs.length,
       csv: "\uFEFF" + lines.join(""),
-      hint: "只填「曲名」那一列（第 3 列）；留空的行会被忽略。导入时先自动备份数据库，"
-        + "整批可以用 Ctrl+Z 一次性撤回。",
+      hint: "只填「曲名」那一列（第 3 列）；留空的行会被忽略。最后一列「当前时段」是给你看的现状，"
+        + "改时段请到「时段依据复核」（能看画面依据），换电脑整库搬走请用「高级设置 → 导出/导入」。"
+        + "导入时先自动备份数据库，整批可以用 Ctrl+Z 一次性撤回。",
     };
   }
 

@@ -7,6 +7,7 @@ import { createDependencyCheckRoutes } from "./midi/dependency-check.js";
 import { createDiagnosticRoutes } from "./midi/diagnostic-package.js";
 import { createCrashRoutes } from "./midi/crash-report.js";
 import { createGameLogRoutes } from "./midi/game-log.js";
+import { createDataSafetyRoutes, prepareDatabaseBeforeOpen } from "./midi/data-safety.js";
 import { createLogRoutes, logError } from "./midi/logs.js";
 import { createCommunityRoutes } from "./midi/community-catalog.js";
 import { createTimeOfDayRoutes } from "./midi/time-of-day.js";
@@ -17,6 +18,7 @@ let dependencyCheckRoutesPromise = null;
 let diagnosticRoutesPromise = null;
 let crashRoutesPromise = null;
 let gameLogRoutesPromise = null;
+let dataSafetyRoutesPromise = null;
 let logRoutesPromise = null;
 let communityCatalogRoutesPromise = null;
 let timeOfDayRoutesPromise = null;
@@ -691,6 +693,21 @@ export async function createOliviaService(options = {}) {
     allowImport: options.allowLegacyModelConfigImport === true,
   });
   const databasePath = join(dataDir, "olivia-local.sqlite");
+  // g14 数据安全：必须在打开连接之前处理两件事 ——
+  //   ① 应用用户安排的"从备份恢复"（此时没有任何连接，文件才能安全替换）；
+  //   ② 检测到程序版本变了（覆盖安装/换便携包）就自动备份一次旧库。
+  // 失败一律不阻断启动：宁可少一次备份，也不能让人打不开程序。
+  try {
+    const prepared = await prepareDatabaseBeforeOpen({
+      databasePath,
+      version: DEFAULT_UPDATE_TAG,
+      log: message => console.log(String(message)),
+    });
+    if (prepared?.restored?.applied)
+      console.log(`[data-safety] 已按你的安排恢复数据库：${prepared.restored.from}（恢复前留档 ${prepared.restored.kept || "无"}）`);
+  } catch (error) {
+    console.error(`[data-safety] 启动前处理失败（继续启动）：${error?.message ?? error}`);
+  }
   const db = initDatabase(databasePath);
   const midiStore = new MidiStore({ db, root: mediaIndexRoot });
   const resolveSongPreview = createSongPreviewResolver({
@@ -2826,6 +2843,15 @@ export async function createOliviaService(options = {}) {
     gameLogRoutesPromise ??= createGameLogRoutes();
     {
       const routes = await gameLogRoutesPromise;
+      const result = await routes(req, new URL(req.url ?? "/", "http://127.0.0.1"));
+      if (result && result.mediaResponse) return;
+      if (result !== null && result !== undefined) return ok(req, res, result, { "Cache-Control": "no-store" });
+    }
+
+    // 「数据安全（备份 / 恢复 / 导出迁移）」：独立模块，路由前缀 /toy/listen-naming/data/*
+    dataSafetyRoutesPromise ??= createDataSafetyRoutes({ databasePath });
+    {
+      const routes = await dataSafetyRoutesPromise;
       const result = await routes(req, new URL(req.url ?? "/", "http://127.0.0.1"));
       if (result && result.mediaResponse) return;
       if (result !== null && result !== undefined) return ok(req, res, result, { "Cache-Control": "no-store" });
