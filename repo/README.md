@@ -1,3 +1,8 @@
+> **注意：本文件是上游 linli 分支 README 的原文**，随源码一并保留，便于对照上游改动。
+> 本仓库是 **OliviaSoul-community**（自上游 `coderscsy/linli` 分叉而来），**本支的说明在仓库根目录的 [README.md](../README.md)**。
+> 本文件里的下载链接、Release 页与 Issues 入口**全部指向上游 `coderscsy/linli`**，不要用它们下载本支版本。
+> 本支下载与反馈：https://github.com/guvgr2/OliviaSoul-community
+
 # OliviaSoul · 林离离线增强工具
 
 面向已安装《BSide: Olivia Lin》离线客户端的 Windows 本地工具，提供信件与记忆管理、兼容 AI 接入、成品演奏视频导入、游戏端“我的上传”播放与作品编辑，以及轻量桌面歌词。

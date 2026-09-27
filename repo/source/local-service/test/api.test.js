@@ -1178,9 +1178,12 @@ test("本地服务提供加播单、查播单和删播单接口", async () => {
   }
 });
 
-test("发布构建路径留在 I 盘", async () => {
-  await mkdir("I:\\Temp", { recursive: true });
-  const root = await mkdtemp("I:\\Temp\\olivia-build-paths-");
+test("发布构建路径解析到项目目录", async () => {
+  // 上游原断言写死 I 盘（作者机器的构建盘）并把临时目录也放在 I:\Temp；
+  // 本支改为只校验“盘符 + 路径”形式，临时目录用系统临时目录，不依赖具体盘符。
+  const scratch = join(tmpdir(), "olivia-build-paths");
+  await mkdir(scratch, { recursive: true });
+  const root = await mkdtemp(join(scratch, "run-"));
   try {
     const output = join(root, "release");
     const buildScript = new URL("../packaging/build-release.ps1", import.meta.url).pathname.slice(1);
@@ -1190,7 +1193,7 @@ test("发布构建路径留在 I 盘", async () => {
       "-OutputDirectory", output, "-ResolvePathsOnly",
     ]);
     const resolved = JSON.parse(result.stdout);
-    assert.match(resolved.buildTools, /^I:[\\/]/u);
+    assert.match(resolved.buildTools, /^[A-Za-z]:[\\/]/u);
     assert.equal(resolved.buildTools, join(project, "dist-native", "build-tools"));
     assert.equal(resolved.downloadCache, join(project, "dist-native", "build-tools", "downloads"));
     assert.equal(resolved.dotnetCliHome, join(project, "dist-native", "build-tools", "dotnet-home"));
@@ -1202,8 +1205,9 @@ test("发布构建路径留在 I 盘", async () => {
 });
 
 test("发布脚本为现有二进制生成校验和", async () => {
-  await mkdir("I:\\Temp", { recursive: true });
-  const root = await mkdtemp("I:\\Temp\\olivia-build-hashes-");
+  const scratch = join(tmpdir(), "olivia-build-hashes");
+  await mkdir(scratch, { recursive: true });
+  const root = await mkdtemp(join(scratch, "run-"));
   try {
     await writeFile(join(root, "OliviaSoul-2008.2.7-Setup.exe"), "setup");
     await writeFile(join(root, "OliviaSoul-2008.2.7-Portable.zip"), "portable");
@@ -2797,7 +2801,7 @@ test("清除模型配置后迟到的旧检测结果不能恢复旧模型状态",
   const status = await ctx.request("/admin/api/model/status");
   assert.deepEqual(status.body.data, {
     provider: "deepseek",
-    model: "deepseek-v4-pro",
+    model: "deepseek-flash",
     state: "unconfigured",
     error: null,
   });

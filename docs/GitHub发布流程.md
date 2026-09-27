@@ -1,131 +1,113 @@
-# GitHub 发布流程（照着做即可）
+﻿> ⚠️ **本文档已过期（停在 g01 时期），仅作历史参考。**
+> 当前做法请看仓库根 `README.md`、`E:\olivia_tool\soul集成\发版手册.md` 与 `g16发布步骤.md`。
+> 里面的版本号、目录名与命令都可能已经变了，**不要照抄**。
+# GitHub 鍙戝竷娴佺▼锛堢収鐫€鍋氬嵆鍙級
 
-## 第 0 步：先解决两件前置事
+## 绗?0 姝ワ細鍏堣В鍐充袱浠跺墠缃簨
 
-### ① 取得上游授权 ✅ 已完成
+### 鈶?鍙栧緱涓婃父鎺堟潈 鉁?宸插畬鎴?
+鏈垎鏀殑涓ょ骇涓婃父锛坄yilangren/OliviaSoul`銆乣coderscsy/linli`锛?*閮芥病鏈夊０鏄庡紑婧愯鍙瘉**锛?鎸夎憲浣滄潈娉曢粯璁よ鍒欏睘浜?淇濈暀鎵€鏈夋潈鍒?銆?*鏈垎鏀凡鑾峰緱浣滆€呰鍙?*锛屾姝ュ凡瀹屾垚 鉁?寤鸿鎶婂綋鏃剁殑娌熼€氳褰曟埅鍥剧暀妗ｃ€?
+- 閫氳繃灏忛粦鐩掔淇¤仈绯讳袱浣嶄綔鑰咃紝璇存槑浣犺鍋氱殑浜嬶紝璇锋眰涓€鍙ユ槑纭殑"鍚屾剰"
+- **鎶婂鏂圭殑鍥炲鎴浘瀛樻。**锛堝缓璁斁鍒?`docs/鎺堟潈瀛樻。/` 骞跺彧鍐欐枃瀛楄鏄庯紝涓嶈鏀句釜浜轰俊鎭級
+- 鑻ュ鏂逛笉鍚屾剰锛?*鍙叕寮€浣犳柊澧炵殑浠ｇ爜鏂囦欢**锛堣鏂囨湯"鍙彂宸紓鐗?锛夛紝涓嶈鍒嗗彂鎵撳寘濂界殑 EXE
 
-本分支的两级上游（`yilangren/OliviaSoul`、`coderscsy/linli`）**都没有声明开源许可证**，
-按著作权法默认规则属于"保留所有权利"。**本分支已获得作者许可**，此步已完成 ✓ 建议把当时的沟通记录截图留档。
+### 鈶?瑁?Git for Windows
 
-- 通过小黑盒私信联系两位作者，说明你要做的事，请求一句明确的"同意"
-- **把对方的回复截图存档**（建议放到 `docs/授权存档/` 并只写文字说明，不要放个人信息）
-- 若对方不同意：**只公开你新增的代码文件**（见文末"只发差异版"），不要分发打包好的 EXE
-
-### ② 装 Git for Windows
-
-本机目前**没装 git**。任选一种：
+鏈満鐩墠**娌¤ git**銆備换閫変竴绉嶏細
 
     winget install --id Git.Git -e
 
-若 winget 下载失败（GitHub 直连经常超时），用镜像下安装包：
+鑻?winget 涓嬭浇澶辫触锛圙itHub 鐩磋繛缁忓父瓒呮椂锛夛紝鐢ㄩ暅鍍忎笅瀹夎鍖咃細
 
-    # 用 Python 走镜像下载，再把 exe 装上
+    # 鐢?Python 璧伴暅鍍忎笅杞斤紝鍐嶆妸 exe 瑁呬笂
     python -c "import urllib.request;urllib.request.urlretrieve('https://ghproxy.net/https://github.com/git-for-windows/git/releases/download/v2.51.0.windows.1/Git-2.51.0-64-bit.exe', 'Git-2.51.0-64-bit.exe')"
 
-装完确认：`git --version`
+瑁呭畬纭锛歚git --version`
 
 ---
 
-## 第 1 步：发布前自检（**每次发布都要做**）
+## 绗?1 姝ワ細鍙戝竷鍓嶈嚜妫€锛?*姣忔鍙戝竷閮借鍋?*锛?
+    cd <浣犵殑浠撳簱鐩綍>
 
-    cd <你的仓库目录>
-
-    # 1) 社区名单门禁
+    # 1) 绀惧尯鍚嶅崟闂ㄧ
     node tools/sanitize.js check data/catalog.json
 
-    # 2) 确认没有个人隐私 / 媒体文件混进来（应输出 0）
-    node -e "const{execSync}=require('child_process');" 
-    # 手工检查更直观：下面两条是重点
-    dir /s /b | findstr /i "记录 备份 .sqlite .mp4 .mp3"
+    # 2) 纭娌℃湁涓汉闅愮 / 濯掍綋鏂囦欢娣疯繘鏉ワ紙搴旇緭鍑?0锛?    node -e "const{execSync}=require('child_process');" 
+    # 鎵嬪伐妫€鏌ユ洿鐩磋锛氫笅闈袱鏉℃槸閲嶇偣
+    dir /s /b | findstr /i "璁板綍 澶囦唤 .sqlite .mp4 .mp3"
     findstr /s /i /m "C:\\Users\\ E:\\linlimusic E:\\olivia_tool" *.js *.md *.json
 
-    # 3) 看 git 会提交什么（关键一步）
+    # 3) 鐪?git 浼氭彁浜や粈涔堬紙鍏抽敭涓€姝ワ級
     git status --short
 
-**绝不允许提交的内容**：`记录/`、`备份/`、`*.sqlite`、`*.mp4/*.mp3`、`dist-native/`、
-`build*/`、任何含本机路径或用户名的文件（`.gitignore` 已覆盖，但每次仍要眼看一遍）
+**缁濅笉鍏佽鎻愪氦鐨勫唴瀹?*锛歚璁板綍/`銆乣澶囦唤/`銆乣*.sqlite`銆乣*.mp4/*.mp3`銆乣dist-native/`銆?`build*/`銆佷换浣曞惈鏈満璺緞鎴栫敤鎴峰悕鐨勬枃浠讹紙`.gitignore` 宸茶鐩栵紝浣嗘瘡娆′粛瑕佺溂鐪嬩竴閬嶏級
 
 ---
 
-## 第 2 步：填掉三处占位符
-
-| 文件 | 常量 | 改成 |
+## 绗?2 姝ワ細濉帀涓夊鍗犱綅绗?
+| 鏂囦欢 | 甯搁噺 | 鏀规垚 |
 | --- | --- | --- |
-| `repo/source/local-service/midi/community-catalog.js` | `CATALOG_URL` | `https://raw.githubusercontent.com/<你的账号>/<仓库名>/main/data/catalog.json` |
-| `repo/source/local-service/public/listen-naming-feedback.js` | `REPO` | `<你的账号>/<仓库名>` |
-| `repo/source/local-service/server.js` 或设置中的更新仓库 | `updateRepository` | `<你的账号>/<仓库名>` |
+| `repo/source/local-service/midi/community-catalog.js` | `CATALOG_URL` | `https://raw.githubusercontent.com/<浣犵殑璐﹀彿>/<浠撳簱鍚?/main/data/catalog.json` |
+| `repo/source/local-service/public/listen-naming-feedback.js` | `REPO` | `<浣犵殑璐﹀彿>/<浠撳簱鍚?` |
+| `repo/source/local-service/server.js` 鎴栬缃腑鐨勬洿鏂颁粨搴?| `updateRepository` | `<浣犵殑璐﹀彿>/<浠撳簱鍚?` |
 
-改完搜一遍确认没有残留：
+鏀瑰畬鎼滀竴閬嶇‘璁ゆ病鏈夋畫鐣欙細
 
     findstr /s /i /m "<owner>/<repo>" *.js
 
 ---
 
-## 第 3 步：建仓库并首次推送
-
-    cd <你的仓库目录>
+## 绗?3 姝ワ細寤轰粨搴撳苟棣栨鎺ㄩ€?
+    cd <浣犵殑浠撳簱鐩綍>
     git init
     git add .
-    git status --short          # 再确认一遍没有隐私文件
-    git commit -m "Initial commit: OliviaSoul 曲名识别分支（2008.2.7-linli9-g01）"
+    git status --short          # 鍐嶇‘璁や竴閬嶆病鏈夐殣绉佹枃浠?    git commit -m "Initial commit: OliviaSoul 鏇插悕璇嗗埆鍒嗘敮锛?008.2.7-linli9-g01锛?
     git branch -M main
-    git remote add origin https://github.com/<你的账号>/<仓库名>.git
+    git remote add origin https://github.com/<浣犵殑璐﹀彿>/<浠撳簱鍚?.git
     git push -u origin main
 
-> 仓库描述里建议写清"非官方第三方分支，仅供学习交流"，与 README 顶部声明一致。
-
+> 浠撳簱鎻忚堪閲屽缓璁啓娓?闈炲畼鏂圭涓夋柟鍒嗘敮锛屼粎渚涘涔犱氦娴?锛屼笌 README 椤堕儴澹版槑涓€鑷淬€?
 ---
 
-## 第 4 步：打包（产出 EXE）
-
+## 绗?4 姝ワ細鎵撳寘锛堜骇鍑?EXE锛?
     cd repo\source\local-service
     npm install
-    powershell -NoProfile -ExecutionPolicy Bypass -File packaging\build-release.ps1 -Iscc "<Inno Setup 安装目录>\ISCC.exe" -OutputDirectory <你的仓库目录>\repo\build-final
+    powershell -NoProfile -ExecutionPolicy Bypass -File packaging\build-release.ps1 -Iscc "<Inno Setup 瀹夎鐩綍>\ISCC.exe" -OutputDirectory <浣犵殑浠撳簱鐩綍>\repo\build-final
 
-产物在 `build-final\`：
-
-    OliviaSoul-2008.2.7-linli9-g01-Setup.exe     ← 安装包
-    OliviaSoul-2008.2.7-linli9-g01-Portable.zip  ← 免安装版
-    SHA256SUMS.txt                               ← 校验和
-
-**注意**：脚本拒绝写入非空目录，每次发布换一个新的 `-OutputDirectory`。
-
+浜х墿鍦?`build-final\`锛?
+    OliviaSoul-2008.2.7-linli9-g01-Setup.exe     鈫?瀹夎鍖?    OliviaSoul-2008.2.7-linli9-g01-Portable.zip  鈫?鍏嶅畨瑁呯増
+    SHA256SUMS.txt                               鈫?鏍￠獙鍜?
+**娉ㄦ剰**锛氳剼鏈嫆缁濆啓鍏ラ潪绌虹洰褰曪紝姣忔鍙戝竷鎹竴涓柊鐨?`-OutputDirectory`銆?
 ---
 
-## 第 5 步：发 Release（**命名有硬要求**）
-
-在 GitHub 仓库 → Releases → Draft a new release：
-
-| 项 | 要求 |
+## 绗?5 姝ワ細鍙?Release锛?*鍛藉悕鏈夌‖瑕佹眰**锛?
+鍦?GitHub 浠撳簱 鈫?Releases 鈫?Draft a new release锛?
+| 椤?| 瑕佹眰 |
 | --- | --- |
-| **Tag** | `2008.2.7-linli9-g01`（下次 `g02`） |
+| **Tag** | `2008.2.7-linli9-g01`锛堜笅娆?`g02`锛?|
 | **Target** | `main` |
-| **Title** | 例如 `2008.2.7-linli9-g01` |
-| **说明** | 写清本次改了什么；首次发布加上"上游未声明许可证，已获作者授权（见 docs/授权存档）" |
-| **附件** | 上传 Setup.exe、Portable.zip、SHA256SUMS.txt |
-| **⚠️ Pre-release** | **不要勾** ✗ 勾了程序的自动更新就读不到（它只查 `/releases/latest`） |
-| **⚠️ 资产名** | 必须匹配 `OliviaSoul-*-Setup.exe` ✗ 否则更新器找不到安装包（打包脚本产出的名字天然符合） |
+| **Title** | 渚嬪 `2008.2.7-linli9-g01` |
+| **璇存槑** | 鍐欐竻鏈鏀逛簡浠€涔堬紱棣栨鍙戝竷鍔犱笂"涓婃父鏈０鏄庤鍙瘉锛屽凡鑾蜂綔鑰呮巿鏉冿紙瑙?docs/鎺堟潈瀛樻。锛? |
+| **闄勪欢** | 涓婁紶 Setup.exe銆丳ortable.zip銆丼HA256SUMS.txt |
+| **鈿狅笍 Pre-release** | **涓嶈鍕?* 鉁?鍕句簡绋嬪簭鐨勮嚜鍔ㄦ洿鏂板氨璇讳笉鍒帮紙瀹冨彧鏌?`/releases/latest`锛?|
+| **鈿狅笍 璧勪骇鍚?* | 蹇呴』鍖归厤 `OliviaSoul-*-Setup.exe` 鉁?鍚﹀垯鏇存柊鍣ㄦ壘涓嶅埌瀹夎鍖咃紙鎵撳寘鑴氭湰浜у嚭鐨勫悕瀛楀ぉ鐒剁鍚堬級 |
 
 ---
 
-## 第 6 步：以后每次跟进上游
+## 绗?6 姝ワ細浠ュ悗姣忔璺熻繘涓婃父
 
-1. 拉取上游改动并合并（我们只改了 `server.js` 与 `public/index.html` 两个上游文件，冲突面很小）
-2. **改版本号 4 处**：`package.json`、`package-lock.json`（2 处）、`native-host/OliviaSoul.csproj` 的 `<Version>`、`build-release.ps1` 里的 `$version`
-   （`AssemblyVersion` / `FileVersion` 必须保持纯数字，如 `2008.2.7.0`）
-3. 重跑第 1 步自检 → 第 4 步打包 → 第 5 步发 Release（tag 换成 `g02`）
-
+1. 鎷夊彇涓婃父鏀瑰姩骞跺悎骞讹紙鎴戜滑鍙敼浜?`server.js` 涓?`public/index.html` 涓や釜涓婃父鏂囦欢锛屽啿绐侀潰寰堝皬锛?2. **鏀圭増鏈彿 4 澶?*锛歚package.json`銆乣package-lock.json`锛? 澶勶級銆乣native-host/OliviaSoul.csproj` 鐨?`<Version>`銆乣build-release.ps1` 閲岀殑 `$version`
+   锛坄AssemblyVersion` / `FileVersion` 蹇呴』淇濇寔绾暟瀛楋紝濡?`2008.2.7.0`锛?3. 閲嶈窇绗?1 姝ヨ嚜妫€ 鈫?绗?4 姝ユ墦鍖?鈫?绗?5 姝ュ彂 Release锛坱ag 鎹㈡垚 `g02`锛?
 ---
 
-## 附：只发差异版（若未获授权）
+## 闄勶細鍙彂宸紓鐗堬紙鑻ユ湭鑾锋巿鏉冿級
 
-只把**你新增的文件**单独建一个仓库公开，使用者自行与上游代码组合：
-
+鍙妸**浣犳柊澧炵殑鏂囦欢**鍗曠嫭寤轰竴涓粨搴撳叕寮€锛屼娇鐢ㄨ€呰嚜琛屼笌涓婃父浠ｇ爜缁勫悎锛?
     midi/listen-naming.js  midi/time-of-day.js  midi/community-catalog.js
     midi/fingerprint.js    midi/dependency-check.js  midi/logs.js
     public/listen-naming.js  public/listen-naming-tools.js
     public/listen-naming-feedback.js  public/dependency-check.js
     public/legal-notices.js  public/logs-page.js
-    tools/  data/  docs/  曲目名单格式.md  免责声明.md  隐私说明.md  开源软件声明.md
+    tools/  data/  docs/  鏇茬洰鍚嶅崟鏍煎紡.md  鍏嶈矗澹版槑.md  闅愮璇存槑.md  寮€婧愯蒋浠跺０鏄?md
 
-并在 README 里写明需要自行接入的 5 处（页签、面板、脚本引用、静态白名单、路由挂载）。
+骞跺湪 README 閲屽啓鏄庨渶瑕佽嚜琛屾帴鍏ョ殑 5 澶勶紙椤电銆侀潰鏉裤€佽剼鏈紩鐢ㄣ€侀潤鎬佺櫧鍚嶅崟銆佽矾鐢辨寕杞斤級銆

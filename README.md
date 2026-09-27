@@ -11,6 +11,18 @@
 
 另外还有：依赖自检（缺 WebView2 或 ffmpeg 会直接告诉你怎么补）、运行日志、程序内一键问题反馈。
 
+## 后来又加的（g13 → g16）
+
+**模型可以自己选了。** 「AI 模型 → 远程兼容 API」多了一个「**选择模型**」下拉：DeepSeek 的 `deepseek-flash`（默认，快、省）/ `deepseek-v4-pro`（更强），智谱 GLM 的 `glm-5.3-flash` / `glm-5.3-flashx` / `glm-5.3`，以及「自定义」（自己填接口地址与模型名，用于中转站、本地服务或其它厂商）。**选哪个就用哪个 —— 程序不会自动切换，失败也不会跨家回退。** 你填的 API Key 只存本机、只发给你自己填的那个接口，不会上传，也不进日志 / 诊断包 / 导出包。
+
+**时段判错了，现在能改了。** 以前程序只写“从没判过”的曲子，你库里两千多首一旦判完，判错也永远改不了。现在「试听工具 → 时段依据复核」把**数据库现值**和**画面判定值**并排给你看：可以「按画面判定重写这一首」，也可以手动指定白天 / 傍晚 / 夜晚。
+
+**数据能备份、也能恢复了。** 程序一直会自动备份数据库，但以前**没有恢复入口**，备份只能躺着。「高级设置 → 诊断 → 数据备份与恢复」可以查看每份备份里有什么（曲名多少首、时段多少首、信件几封）、一键回到某个时间点；回滚前会把当前这份也留档，随时能再换回来。另外：覆盖升级新版时自动备份旧库；一键导出 / 导入换电脑，**导出时会自动清掉 API Key**。
+
+**游戏闪退能查了，还有一个可以试的开关。** 游戏内嵌的 Chromium 崩在一处固定位置（`libcef.dll + 0x921DA24`，读地址 0x0），**跟本工具无关**（调用栈全在游戏自己的 libcef 里）。「游戏崩溃记录」告诉你崩在哪个模块、是谁的问题，并能生成可直接上报的文本；「游戏日志」把游戏自写的日志变成事件时间轴；「**游戏崩溃规避**」把 Chromium 官方针对这条路径的开关写进 Steam 启动项 —— **不改游戏任何文件、随时可关、关掉时精确移除参数**。它是否生效取决于游戏会不会透传参数，这点需要你自己观察。
+
+**“功能太多找不到”也处理了。** 「基础设置」顶部有一张功能地图（想做什么 → 去哪一页），侧栏每个页签鼠标停上去都有说明。
+
 ## 合规说明
 
 - 非官方第三方分支，与米哈游、游戏《BSide Olivia Lin》官方以及上游 OliviaSoul / linli 项目均无关系。
@@ -57,13 +69,19 @@ Node ESM + 原生 HTML/CSS/JS（沿用上游 `public/styles.css` 的类名与配
 
     source/local-service/
       midi/listen-naming.js      试听起名（后端）
-      midi/time-of-day.js        画面识别（时段）
+      midi/time-of-day.js        画面识别（时段）+ 时段依据复核
       midi/community-catalog.js  社区名单拉取 / 自动命名 / 生成投稿
       midi/fingerprint.js        3 段指纹（前后端统一实现）
       midi/dependency-check.js   依赖自检
       midi/logs.js               运行日志
-      public/                    对应的前端页面（listennaming / tools / feedback / dependency-check / legal-notices / logs-page）
-      packaging/                 上游发布打包脚本（已补上本分支的模块清单）
+      midi/crash-report.js       游戏崩溃记录解读（模块 + 偏移 + 可上报文本）
+      midi/game-log.js           游戏日志面板（事件时间轴 / 崩溃现场）
+      midi/diagnostic-package.js 一键诊断包（固定 11 项，已脱敏）
+      midi/data-safety.js        数据备份与恢复 / 导出导入换电脑
+      midi/sqlite-snapshot.js    备份前 WAL checkpoint 与数据库快照
+      midi/game-stability.js     游戏崩溃规避（写 Steam 启动项，可还原）
+      public/                    对应的前端页面（listennaming / tools / feedback / dependency-check / legal-notices / logs-page / diagnostics-panel / game-stability-panel）
+      packaging/                 上游发布打包脚本（已补上本分支的模块清单，随包说明改为本支版本）
     data/catalog.json         社区名单（程序读取的唯一入口）
     data/community/           每人一个投稿文件
     tools/                    指纹、脱敏门禁、合并去重、真机探针
@@ -76,6 +94,10 @@ Node ESM + 原生 HTML/CSS/JS（沿用上游 `public/styles.css` 的类名与配
 - [x] 社区名单：拉取 / 指纹自动命名 / 生成投稿
 - [x] 依赖自检、运行日志、问题反馈
 - [x] 脱敏门禁 + 指纹去重合并
+- [x] g13：时段依据复核（判错可改）· 崩溃记录解读 · 游戏日志面板 · 一键诊断包（已脱敏）· 功能地图与悬停引导
+- [x] g14：数据备份与恢复（可回滚）· 升级前自动备份 · 导出/导入换电脑（导出清除 API Key）
+- [x] g15：游戏崩溃规避开关（写 Steam 启动项，不改游戏文件、可还原）
+- [x] g16：可选模型（DeepSeek / 智谱 GLM / 自定义，默认 `deepseek-flash`，不自动切换）· API Key 本机保存与不上传告知 · 随包说明文档更正为本支版本
 - [x] 发布：社区仓库地址已写入 `midi/community-catalog.js`、`public/listen-naming-feedback.js`、`server.js`（guvgr2/OliviaSoul-community）
 
 ---

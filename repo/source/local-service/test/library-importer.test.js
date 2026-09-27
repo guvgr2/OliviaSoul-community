@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
@@ -11,7 +12,8 @@ import { MidiStore } from "../midi/store.js";
 import { endOfTrack, midiFile, track } from "./fixtures/midi-fixtures.js";
 
 async function libraryFixture() {
-  const testRoot = "I:\\CodexData\\test-temp";
+  // 原来写死上游作者机器上的 I:\CodexData\test-temp，任何没有该盘的机器都会 ENOENT 全红
+  const testRoot = join(tmpdir(), "olivia-library-importer");
   await mkdir(testRoot, { recursive: true });
   const root = await mkdtemp(join(testRoot, "olivia-library-import-"));
   const libraryRoot = join(root, "library");

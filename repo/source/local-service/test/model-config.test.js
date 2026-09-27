@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  DEFAULT_DEEPSEEK_PROFILE,
   activeModelProfile,
   buildChatRequest,
   readModelConfig,
@@ -108,6 +109,47 @@ test("模型请求按当前档案构造且本地无鉴权不携带 DeepSeek 字�
   assert.equal(deepseek.headers.Authorization, "Bearer ds-key");
   assert.deepEqual(deepseek.body.thinking, { type: "enabled" });
   assert.equal(deepseek.body.reasoning_effort, "high");
+});
+
+test("内置默认模型是 deepseek-flash", () => {
+  assert.equal(DEFAULT_DEEPSEEK_PROFILE.provider, "deepseek");
+  assert.equal(DEFAULT_DEEPSEEK_PROFILE.baseUrl, "https://api.deepseek.com");
+  assert.equal(DEFAULT_DEEPSEEK_PROFILE.model, "deepseek-flash");
+});
+
+test("智谱 GLM 用自己那套推理参数，且不会被要求关闭思考", () => {
+  const glm = buildChatRequest({
+    provider: "deepseek",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    model: "glm-5.3-flash",
+    authMode: "bearer",
+    apiKey: "glm-key",
+  }, { messages: [], thinking: { type: "disabled" } });
+  assert.equal(glm.url, "https://open.bigmodel.cn/api/paas/v4/chat/completions");
+  assert.deepEqual(glm.body.thinking, { type: "enabled" });   // GLM 的 thinking.type 只接受 enabled
+  assert.equal(glm.body.reasoning_effort, "max");             // 官方推荐值
+
+  // 通用 / 本地档案照旧完全不发厂商专用参数
+  const local = buildChatRequest({
+    provider: "local",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    model: "glm-5.3-flash",
+    authMode: "none",
+    apiKey: "",
+  }, { messages: [] });
+  assert.equal(local.body.thinking, undefined);
+  assert.equal(local.body.reasoning_effort, undefined);
+
+  // 认不出的模型名也一个都不发，避免被严格接口 400 拒绝
+  const unknown = buildChatRequest({
+    provider: "deepseek",
+    baseUrl: "https://relay.example/v1",
+    model: "some-relay-model",
+    authMode: "bearer",
+    apiKey: "relay-key",
+  }, { messages: [] });
+  assert.equal(unknown.body.thinking, undefined);
+  assert.equal(unknown.body.reasoning_effort, undefined);
 });
 
 test("模型档案拒绝非法 provider 地址换行和缺失的 Bearer 密钥", async t => {

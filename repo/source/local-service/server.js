@@ -2874,7 +2874,9 @@ export async function createOliviaService(options = {}) {
     }
 
     // 「画面识别（时段）」：独立模块，路由前缀 /toy/listen-naming/*
-    timeOfDayRoutesPromise ??= createTimeOfDayRoutes({});   // 这两个不吃挂载时的曲库路径，内部会现读
+    // 曲库根目录仍然由模块内部现读，但数据库路径必须跟着本次启动的 dataDir 走，
+    // 否则显式指定的 dataDir（测试、便携版异位数据目录）会被模块级默认值顶掉。
+    timeOfDayRoutesPromise ??= createTimeOfDayRoutes({ databasePath });
     {
       const routes = await timeOfDayRoutesPromise;
       const result = await routes(req, res, new URL(req.url ?? "/", "http://127.0.0.1"));
@@ -2884,7 +2886,7 @@ export async function createOliviaService(options = {}) {
 
 
     // 「社区曲目名单」：独立模块，路由前缀 /toy/listen-naming/*
-    communityCatalogRoutesPromise ??= createCommunityRoutes({});   // 这两个不吃挂载时的曲库路径，内部会现读
+    communityCatalogRoutesPromise ??= createCommunityRoutes({ databasePath });
     {
       const routes = await communityCatalogRoutesPromise;
       const result = await routes(req, res, new URL(req.url ?? "/", "http://127.0.0.1"));

@@ -52,7 +52,9 @@ async function fixture(t, handler, modelsHandler) {
 async function runtime(root) {
   const helper=fileURLToPath(new URL('../../.cursor/skills/fit-letters/scripts/model-call.ps1',import.meta.url));
   const script=`$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; . '${quote(helper)}'; Import-ModelConfig -Root '${quote(root)}'; try {$value=Invoke-ModelChatOnce -System 'system' -User 'user'; @{ok=$true;value=$value}|ConvertTo-Json -Compress -Depth 8} catch {@{ok=$false;error=$_.Exception.Message}|ConvertTo-Json -Compress}`;
-  const result=await exec('powershell.exe',['-NoProfile','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{timeout:15000,windowsHide:true});
+  // 与产品本体一致地带上 -ExecutionPolicy Bypass：点源 .ps1 在 Restricted 策略的机器上会被拒绝加载，
+  // 而 server.js / desktop 控制器调用脚本时都显式带了 Bypass。
+  const result=await exec('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{timeout:15000,windowsHide:true});
   return JSON.parse(result.stdout.replace(/^\uFEFF/,''));
 }
 const json=(res,payload)=>res.end(JSON.stringify(payload));

@@ -52,7 +52,7 @@ function Import-ModelConfig {
     if ($provider -eq "deepseek") {
         $prefix = "MODEL_DEEPSEEK"
         $defaultBase = "https://api.deepseek.com"
-        $defaultModel = "deepseek-v4-pro"
+        $defaultModel = "deepseek-flash"
         $defaultAuth = "bearer"
         $legacyBase = "DEEPSEEK_BASE"
         $legacyModel = "DEEPSEEK_MODEL"
@@ -209,7 +209,14 @@ function Invoke-ModelChatOnce {
             @{ role = "user"; content = $User }
         )
     }
-    if ($script:ModelProvider -eq "deepseek" -and $script:ModelName -match '(?:^|/)deepseek(?:[-/]|$)') {
+    # 与 model-config.js 的 reasoningFamilyOf 保持一致：只有认得出的模型家族才发厂商专用参数，
+    # 认不出的一律不发，避免被严格接口以 400 拒绝。
+    $reasoningFamily = ""
+    if ($script:ModelProvider -eq "deepseek") {
+        if ($script:ModelName -match '(?:^|/)deepseek(?:[-/]|$)') { $reasoningFamily = "deepseek" }
+        elseif ($script:ModelName -match '(?:^|/)(?:glm|chatglm|zhipu)(?:[-/]|$)') { $reasoningFamily = "glm" }
+    }
+    if ($reasoningFamily -eq "deepseek") {
         if ($script:ModelThinking) {
             $payload.reasoning_effort = "high"
             $payload.thinking = @{ type = "enabled" }
@@ -217,6 +224,11 @@ function Invoke-ModelChatOnce {
         else {
             $payload.thinking = @{ type = "disabled" }
         }
+    }
+    elseif ($reasoningFamily -eq "glm") {
+        # 智谱 GLM 的 thinking.type 只接受 enabled（不能发 disabled），官方推荐 reasoning_effort = max
+        $payload.reasoning_effort = "max"
+        $payload.thinking = @{ type = "enabled" }
     }
     $bytes = $script:ModelUtf8NoBom.GetBytes(($payload | ConvertTo-Json -Depth 8 -Compress))
     try {

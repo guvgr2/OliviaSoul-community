@@ -385,7 +385,7 @@ function Assert-PackageModelDefaults {
 
     $relative = ConvertTo-PackageRelativePath $RelativePath
     if ([IO.Path]::GetFileName($relative) -ieq 'model-call.ps1') {
-        $allowedModels = @('local-model', 'deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-pro')
+        $allowedModels = @('local-model', 'deepseek-chat', 'deepseek-reasoner', 'deepseek-flash', 'deepseek-v4-pro')
         $literalDefaults = @{}
         foreach ($name in @('Model', 'Base', 'Auth', 'ApiKey')) {
             $all = [regex]::Matches($Text, '(?im)\$default' + $name + '\s*=')
@@ -444,7 +444,7 @@ function Assert-PackageModelDefaults {
         $remoteBase = [regex]::Match($remoteProfile.Groups['body'].Value, '(?im)\bbaseUrl\s*:\s*["'']([^"'']+)["'']')
         $remoteAuth = [regex]::Match($remoteProfile.Groups['body'].Value, '(?im)\bauthMode\s*:\s*["'']([^"'']+)["'']')
         $remoteKey = [regex]::Match($remoteProfile.Groups['body'].Value, '(?im)\bapiKey\s*:\s*["'']([^"'']*)["'']')
-        $allowedRemoteModels = @('deepseek-chat', 'deepseek-reasoner', 'deepseek-v4-pro')
+        $allowedRemoteModels = @('deepseek-chat', 'deepseek-reasoner', 'deepseek-flash', 'deepseek-v4-pro', 'glm-5.3', 'glm-5.3-flash', 'glm-5.3-flashx')
         if (-not $localModel.Success -or $localModel.Groups[1].Value -cne 'local-model' -or
             -not $localBase.Success -or $localBase.Groups[1].Value -notmatch '^http://(?:127\.0\.0\.1|localhost)(?::[0-9]+)?(?:/|$)' -or
             -not $localAuth.Success -or $localAuth.Groups[1].Value -cne 'none' -or

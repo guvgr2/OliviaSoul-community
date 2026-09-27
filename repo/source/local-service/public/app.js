@@ -378,15 +378,55 @@ function resetSecretInput(inputSelector, buttonSelector) {
   $(buttonSelector).setAttribute("aria-label", "显示 API Key");
 }
 
+// —— 可选的远程模型清单 ——
+// 每个条目自带它自己那家的地址与模型名：用户选哪个就用哪个。
+// 程序不猜、不自动挑、失败时也不会跨家回退（本地模型失败同样不回退远程）。
+const REMOTE_MODEL_PRESETS = [
+  { id: "deepseek-flash", label: "deepseek-flash · DeepSeek 官方（快、省，默认）", baseUrl: "https://api.deepseek.com", model: "deepseek-flash" },
+  { id: "deepseek-v4-pro", label: "deepseek-v4-pro · DeepSeek 官方（更强，适合写回信）", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-pro" },
+  { id: "glm-5.3-flash", label: "glm-5.3-flash · 智谱 GLM（原生多模态，便宜）", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.3-flash" },
+  { id: "glm-5.3-flashx", label: "glm-5.3-flashx · 智谱 GLM（更快，200 tokens/s）", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.3-flashx" },
+  { id: "glm-5.3", label: "glm-5.3 · 智谱 GLM（旗舰）", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.3" },
+];
+const CUSTOM_MODEL_PRESET = "__custom__";
+
+function normalizeModelBase(value) {
+  return String(value ?? "").trim().replace(/\/+$/u, "").replace(/\/chat\/completions$/iu, "");
+}
+
+/** 当前档案正好等于清单里的某一项时返回该项，否则返回 null（= 自定义）。 */
+function presetOf(profile) {
+  const base = normalizeModelBase(profile?.baseUrl);
+  const model = String(profile?.model ?? "").trim();
+  return REMOTE_MODEL_PRESETS.find(item => item.model === model && normalizeModelBase(item.baseUrl) === base) ?? null;
+}
+
+function renderRemotePresets() {
+  const select = $("#modelPreset");
+  if (!select || select.options.length) return;
+  for (const item of REMOTE_MODEL_PRESETS) {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = item.label;
+    select.append(option);
+  }
+  const custom = document.createElement("option");
+  custom.value = CUSTOM_MODEL_PRESET;
+  custom.textContent = "自定义（自己填接口地址和模型名）";
+  select.append(custom);
+}
+
 function renderDeepSeek(profile) {
+  renderRemotePresets();
   $("#apiKey").value = profile.apiKey ?? "";
   $("#apiKey").placeholder = "填写远程接口 API Key";
   resetSecretInput("#apiKey", "#toggleApiKey");
-  const custom = profile.model !== "deepseek-v4-pro" || profile.baseUrl !== "https://api.deepseek.com";
-  $("#customModel").checked = custom;
+  const preset = presetOf(profile);
+  $("#customModel").checked = !preset;
+  $("#modelPreset").value = preset ? preset.id : CUSTOM_MODEL_PRESET;
   replaceModelOptions("#modelName", [profile.model], profile.model);
   $("#modelBaseUrl").value = profile.baseUrl;
-  $("#customFields").hidden = !custom;
+  $("#customFields").hidden = Boolean(preset);
 }
 
 function renderLocalModel(profile) {
@@ -433,14 +473,12 @@ function toggleSecret(inputSelector, button) {
 }
 
 function deepSeekProfileFromForm() {
-  const custom = $("#customModel").checked;
-  return {
-    provider: "deepseek",
-    apiKey: $("#apiKey").value,
-    authMode: "bearer",
-    model: custom ? $("#modelName").value : "deepseek-v4-pro",
-    baseUrl: custom ? $("#modelBaseUrl").value : "https://api.deepseek.com",
-  };
+  const common = { provider: "deepseek", apiKey: $("#apiKey").value, authMode: "bearer" };
+  if (!$("#customModel").checked) {
+    const chosen = REMOTE_MODEL_PRESETS.find(item => item.id === $("#modelPreset").value) ?? REMOTE_MODEL_PRESETS[0];
+    return { ...common, model: chosen.model, baseUrl: chosen.baseUrl };
+  }
+  return { ...common, model: $("#modelName").value, baseUrl: $("#modelBaseUrl").value };
 }
 
 function localProfileFromForm() {
@@ -609,6 +647,25 @@ for (const id of ["modelName", "localModelName"]) {
     options.value = [...options.options].some(option => option.value === input.value) ? input.value : "";
   });
 }
+
+// 选择模型：清单里的条目直接带出它自己那家的地址与模型名；只有选“自定义”才展开手填字段。
+$("#modelPreset").addEventListener("change", () => {
+  const chosen = REMOTE_MODEL_PRESETS.find(item => item.id === $("#modelPreset").value);
+  if (!chosen) {
+    $("#customModel").checked = true;
+    $("#customFields").hidden = false;
+    return;
+  }
+  $("#customModel").checked = false;
+  $("#customFields").hidden = true;
+  $("#modelBaseUrl").value = chosen.baseUrl;
+  replaceModelOptions("#modelName", [chosen.model], chosen.model);
+});
+
+$("#customModel").addEventListener("change", () => {
+  $("#customFields").hidden = !$("#customModel").checked;
+  if ($("#customModel").checked) $("#modelPreset").value = CUSTOM_MODEL_PRESET;
+});
 
 async function queryModels(provider) {
   const profile = provider === "local" ? localProfileFromForm() : deepSeekProfileFromForm();

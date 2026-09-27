@@ -31,7 +31,7 @@
           <details class="sideGroup" data-group="basic" open>
             <summary class="sideGroupTitle" data-tip="程序基本选项：离线身份、AI 模型配置、声明与许可"><span>基础与设置</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
             <button class="sideTab active" type="button" data-tab="settings" data-tip="基础设置：功能地图（想做的事在哪一页）· 离线身份 · 本机服务状态">基础设置</button>
-            <button class="sideTab" type="button" data-tab="ai" data-tip="AI 模型：配置写信与整理用的模型和接口；不填也能用本机功能">AI 模型</button>
+            <button class="sideTab" type="button" data-tab="ai" data-tip="AI 模型：选择写信与整理用的模型（DeepSeek flash / v4-pro、智谱 GLM，或自己填地址与模型名）并填 API Key；Key 只存本机、不会上传">AI 模型</button>
             <button class="sideTab" type="button" data-tab="legal" data-tip="声明与合规：使用声明、隐私说明、开源许可与致谢">声明与合规</button>
           </details>
 
@@ -102,7 +102,7 @@
               <li><b>游戏自己写了什么</b> → 「高级设置 → <b>游戏日志</b>」（页面最底部，点「读取游戏日志」）</li>
               <li><b>挂界面补丁 / 改曲库目录 / 备份</b> → 「客户端与歌词 → <em>客户端挂载与存储</em>」</li>
               <li><b>桌面歌词外观</b> → 「客户端与歌词 → <em>歌词设置</em>」</li>
-              <li><b>配置写信用的模型</b> → 「基础与设置 → <em>AI 模型</em>」</li>
+              <li><b>换模型 / 想用别的模型</b> → 「基础与设置 → <em>AI 模型</em>」：在「<b>选择模型</b>」里挑一个（DeepSeek 的 <b>deepseek-flash</b> / <b>deepseek-v4-pro</b>，智谱 GLM 的 <b>glm-5.3-flash</b> / <b>glm-5.3-flashx</b> / <b>glm-5.3</b>），或选「<b>自定义</b>」自己填接口地址与模型名。<b>选哪个就用哪个，程序不会自动切换</b>；换完要填 Key 并点「保存并测试远程模型」</li>
               <li><b>记忆与信件</b> → 「信件与记忆 → <em>记忆</em>」</li>
               <li><b>使用声明 / 隐私 / 开源许可</b> → 「基础与设置 → <em>声明与合规</em>」</li>
             </ul>
@@ -166,6 +166,14 @@
               </div>
               <div class="modelSettings">
                 <div>
+                  <label for="modelPreset">选择模型</label>
+                  <select id="modelPreset" aria-label="选择要使用的模型">
+                    <!-- 选项由 app.js 按 REMOTE_MODEL_PRESETS 填充，避免常量两处维护 -->
+                  </select>
+                  <small class="providerHint">这里列出的模型各自独立：选哪个就用哪个，程序不会替你自动换模型，也不会在失败时偷偷切换到另一家。<br>
+                    可用性说明：DeepSeek 的 deepseek-flash / deepseek-v4-pro 已实测可连通；<b>智谱 GLM 三个只验证过接口地址可达，能否使用要看你的账号有没有该模型的权限 —— 请自己填 Key 后点「保存并测试」确认</b>。没把握就用「自定义」填你熟悉的接口。</small>
+                </div>
+                <div>
                   <label for="apiKey">远程 API Key</label>
                   <div class="secretInput">
                     <input id="apiKey" type="password" autocomplete="off" placeholder="填写远程接口 API Key">
@@ -201,6 +209,7 @@
                 <button id="testDeepSeek" class="secondary" type="button">保存并测试远程模型</button>
                 <span id="deepSeekResult" class="result"></span>
               </div>
+              <p class="providerHint">你的 API Key 只保存在本机 <code>UserData</code> 里，只在你点“保存并测试”或实际生成回信时直接发给你填的那家接口。程序不会把 Key 上传到任何地方，也不会写进运行日志、诊断包或导出包。</p>
             </div>
 
             <div class="settingsSubcard modelProfile" data-model-profile="local" hidden>

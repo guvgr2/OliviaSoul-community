@@ -4,7 +4,7 @@ import { join } from "node:path";
 export const DEFAULT_DEEPSEEK_PROFILE = Object.freeze({
   provider: "deepseek",
   baseUrl: "https://api.deepseek.com",
-  model: "deepseek-v4-pro",
+  model: "deepseek-flash",
   authMode: "bearer",
   apiKey: "",
 });
@@ -170,6 +170,35 @@ export function activeModelProfile(config) {
   return config.profiles[provider];
 }
 
+/**
+ * 各家的推理参数并不统一，所以按“模型家族”决定发什么：
+ *   · DeepSeek：thinking {type: enabled|disabled} + reasoning_effort: low|medium|high
+ *   · 智谱 GLM：thinking.type 只接受 enabled（不能发 disabled）+ 官方推荐 reasoning_effort: max
+ * 认不出的模型一律不发厂商专用参数，避免被严格接口以 400 拒绝。
+ */
+const REASONING_FAMILIES = Object.freeze([
+  Object.freeze({
+    name: "deepseek",
+    pattern: /(?:^|\/)deepseek(?:[-/]|$)/iu,
+    effort: "high",
+    canDisable: true,
+  }),
+  Object.freeze({
+    name: "glm",
+    pattern: /(?:^|\/)(?:glm|chatglm|zhipu)(?:[-/]|$)/iu,
+    effort: "max",
+    canDisable: false,
+  }),
+]);
+
+/** 按模型名判断家族；认不出返回 null。 */
+export function reasoningFamilyOf(model) {
+  const value = String(model ?? "").trim();
+  if (!value) return null;
+  for (const family of REASONING_FAMILIES) if (family.pattern.test(value)) return family;
+  return null;
+}
+
 export function buildChatRequest(profile, payload = {}) {
   const selected = normalizeProfile(profile.provider, profile, { requireBearerKey: true });
   const body = {
@@ -179,10 +208,13 @@ export function buildChatRequest(profile, payload = {}) {
   };
   if (payload.temperature !== undefined) body.temperature = payload.temperature;
   if (payload.maxTokens !== undefined) body.max_tokens = payload.maxTokens;
-  // A custom remote profile is not necessarily a DeepSeek model.
-  if (selected.provider === "deepseek" && /(?:^|\/)deepseek(?:[-/]|$)/iu.test(selected.model)) {
-    body.thinking = payload.thinking ?? { type: "enabled" };
-    if (body.thinking.type !== "disabled") body.reasoning_effort = payload.reasoning_effort ?? "high";
+  // 通用/本地档案（中转站、本地推理）不发送任何厂商专用参数；
+  // 远程档案再按模型家族决定，所以自定义远程档案里的非 DeepSeek / 非 GLM 模型也收不到这些字段。
+  const family = selected.provider === "deepseek" ? reasoningFamilyOf(selected.model) : null;
+  if (family) {
+    const requested = payload.thinking ?? { type: "enabled" };
+    body.thinking = family.canDisable ? requested : { type: "enabled" };
+    if (body.thinking.type !== "disabled") body.reasoning_effort = payload.reasoning_effort ?? family.effort;
   }
   const headers = { "Content-Type": "application/json" };
   if (selected.authMode === "bearer") headers.Authorization = `Bearer ${selected.apiKey}`;

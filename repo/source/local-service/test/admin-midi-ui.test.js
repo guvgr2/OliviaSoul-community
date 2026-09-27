@@ -13,7 +13,8 @@ test("admin UI imports completed performance videos without exposing keyboard-on
     readFile(new URL("../packaging/使用说明.txt", import.meta.url), "utf8"),
   ]);
 
-  assert.match(html, /data-tab="performances">官方作品</u);
+  // 本支给页签加了 data-tip 悬停说明，属性与标签文本之间允许存在其它属性
+  assert.match(html, /data-tab="performances"[^>]*>官方作品</u);
   assert.doesNotMatch(html, /id="selectMidiFile"|id="midiFile"|accept="\.mid,\.midi/u);
   assert.match(html, /id="midiLibraryRoot"/u);
   assert.match(html, /id="openMidiLibraryFolder"/u);
@@ -32,8 +33,11 @@ test("admin UI imports completed performance videos without exposing keyboard-on
   assert.match(html, /id="cancelStorageMigrationPreview"/u);
   assert.match(html, /id="previewStorageMigration"/u);
   assert.match(html, /id="confirmStorageMigration"/u);
-  assert.match(html, /<select id="modelName"/u);
-  assert.match(html, /<select id="localModelName"/u);
+  // 模型名现为可手填的文本输入，查询结果另放在独立的 Options 下拉里
+  assert.match(html, /<input id="modelName" type="text"/u);
+  assert.match(html, /<select id="modelNameOptions"/u);
+  assert.match(html, /<input id="localModelName" type="text"/u);
+  assert.match(html, /<select id="localModelNameOptions"/u);
   assert.match(html, /id="queryRemoteModels"/u);
   assert.match(html, /id="queryLocalModels"/u);
   assert.doesNotMatch(html, /data-model-combobox|modelComboboxToggle|localAiExecutable|startLocalAi|本地 AI 进程/u);
@@ -80,7 +84,7 @@ test("admin UI imports completed performance videos without exposing keyboard-on
   assert.doesNotMatch(desktopMain, /local-ai:select-executable|local-ai:select-working-directory/u);
   assert.match(desktopMain, /current\.updateAvailable/u);
   assert.match(desktopMain, /upgrade-feapp-v16-v17\.ps1/u);
-  assert.match(releaseGuide, /本地兼容 API/u);
+  assert.match(releaseGuide, /通用兼容 API|本地兼容 API/u);
   assert.doesNotMatch(releaseGuide, /Gemma|gemma-4-26b|tailf0d018|100\.124\.216\.70/iu);
 });
 

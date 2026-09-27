@@ -4,13 +4,15 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { mkdtemp, mkdir, readFile, writeFile, rm, symlink } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSongPreviewResolver } from "../midi/song-preview-source.js";
 import { scanPerformanceLibrary } from "../midi/library-importer.js";
 
 const hash = value => createHash("sha256").update(value).digest("hex");
 async function fixture(t, { legacy = true, resolverOptions = {} } = {}) {
-  const testRoot = "I:\\OliviaSoulData\\Tools\\temp";
+  // 原来写死上游作者机器上的 I:\OliviaSoulData\Tools\temp，任何没有该盘的机器都会 ENOENT 全红
+  const testRoot = join(tmpdir(), "olivia-preview-source");
   await mkdir(testRoot, { recursive: true });
   const root = await mkdtemp(join(testRoot, "olivia-preview-source-"));
   t.after(() => rm(root, { recursive: true, force: true }));
