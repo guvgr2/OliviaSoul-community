@@ -228,8 +228,22 @@ export async function configureGameFlag(options, ensureStopped = assertSteamStop
   } finally {
     await fs.unlink(temporary).catch((error) => { if (error.code !== 'ENOENT') throw error; });
   }
-  // 关闭开关时把这一次的清单也清掉，避免卸载恢复看到多个冲突候选。
-  if (!enabled && manifestPath) await fs.unlink(manifestPath).catch(() => {});
+  // 关闭开关：既然参数已经移除、启动项回到原样，那份"完整 localconfig.vdf 备份"也就不再需要了。
+  // 它含 Steam 账号信息（Steam 把各游戏启动项都存在同一个文件里，改一个字段也只能备份整文件），
+  // 所以确认已还原到原始状态后就连备份一起删掉，不给用户留隐私足迹。
+  // 只有"确实回到了 originalOptions"才删；否则保留清单与备份 —— 宁可留下能还原的材料。
+  if (!enabled && manifestPath) {
+    try {
+      const previous = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+      const restoredToOriginal = String(previous?.originalOptions ?? '').trim() === next.trim();
+      if (restoredToOriginal) {
+        // 已还原到原始状态：开启那次和本次关闭操作产生的两份完整备份都不再需要
+        if (previous?.backupPath) await fs.unlink(previous.backupPath).catch(() => {});
+        await fs.unlink(backupPath).catch(() => {});
+        await fs.unlink(manifestPath).catch(() => {});
+      }
+    } catch { /* 清单读不到就保留，卸载流程仍能处理 */ }
+  }
   return { mode, changed: true, previous, next, backupPath, manifestPath: enabled ? outputManifest : null, updatedHash: hash(updated) };
 }
 
