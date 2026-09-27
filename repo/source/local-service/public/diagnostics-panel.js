@@ -520,8 +520,9 @@
     const navPack = node("button", "去一键诊断包", "secondary compact");
     const navLog = node("button", "去游戏日志", "secondary compact");
     const navData = node("button", "去数据备份与恢复", "secondary compact");
-    for (const button of [navCrash, navPack, navLog, navData]) button.type = "button";
-    navActions.append(navCrash, navPack, navLog, navData);
+    const navStability = node("button", "去游戏崩溃规避", "secondary compact");
+    for (const button of [navCrash, navPack, navLog, navData, navStability]) button.type = "button";
+    navActions.append(navCrash, navPack, navLog, navData, navStability);
     navBox.append(navActions);
 
     const startupActions = node("div", null, "actions");
@@ -561,7 +562,7 @@
     const crashHead = node("div", null, "settingsBlockHead ln-diagSpacer ln-diagCrash");
     crashHead.append(
       node("strong", "游戏崩溃记录"),
-      node("small", "点下面「解读崩溃报告」→ 读游戏的 crash.txt / crash.dmp，告诉你崩在哪个模块、是不是本程序改过的文件，并生成一段可以发给官方的文本"),
+      node("small", "点下面「解读崩溃报告」→ 读游戏的 crash.txt / crash.dmp，告诉你崩在哪个模块、是不是本程序改过的文件，并生成一段可以发给官方的文本；如果反复崩在同一处，可用下面的「游戏崩溃规避」尝试规避"),
     );
     const crashActions = node("div", null, "actions");
     const crashButton = node("button", "解读崩溃报告", "secondary");
@@ -640,6 +641,7 @@
     navPack.addEventListener("click", () => jumpTo(".ln-diagPack"));
     navLog.addEventListener("click", () => jumpTo(".ln-gamelog"));
     navData.addEventListener("click", () => jumpTo(".ln-diagData"));
+    navStability.addEventListener("click", () => jumpTo(".ln-gameStability"));
     // g14：进页就把备份列表读出来（只读本地目录，很快）
     void loadDataSafety();
     // 进页签就把启动记录读出来（只读本地日志，很快）

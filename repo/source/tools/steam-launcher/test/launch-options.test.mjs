@@ -5,7 +5,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readLaunchOptions, editLaunchOptions, buildLaunchOptions, configureLaunchOptions } from '../steam-launch-options.mjs';
+import { readLaunchOptions, editLaunchOptions, buildLaunchOptions, configureLaunchOptions, buildFlagOptions, configureGameFlag } from '../steam-launch-options.mjs';
 
 const appId = '12345';
 const helperPath = String.raw`I:\Example App\UserData\tools\steam-launcher\OliviaSteamWaiter.exe`;
@@ -141,4 +141,71 @@ test('wrong account restore manifest is refused', async (t) => {
   await fs.writeFile(result.manifestPath, JSON.stringify(manifest));
   await assert.rejects(configureLaunchOptions({ ...args, mode: 'restore', manifestPath: result.manifestPath }, stopped), /INVALID_RESTORE_MANIFEST/);
   assert.equal(await fs.readFile(args.configPath, 'utf8'), before);
+});
+
+// ---------------------------------------------------------------- g15：纯参数开关
+// 用途：把 Chromium 的稳定性开关（--enable-features=...）写进游戏启动项，
+// 不改游戏文件、只动这一个参数、随时可关。
+const FLAG = '--enable-features=SkipDiscardDrivenByStaleSignal';
+
+test('buildFlagOptions adds the flag, keeps other arguments, is idempotent and removes only the target', () => {
+  assert.equal(buildFlagOptions('-windowed', FLAG, true), `-windowed ${FLAG}`);
+  assert.equal(buildFlagOptions(`-windowed ${FLAG}`, FLAG, true), `-windowed ${FLAG}`);
+  assert.equal(buildFlagOptions(`-windowed ${FLAG}`, FLAG, false), '-windowed');
+  assert.equal(buildFlagOptions(FLAG, FLAG, false), '');
+  assert.equal(buildFlagOptions(null, FLAG, true), FLAG);
+  assert.equal(buildFlagOptions(`-a ${FLAG} -b`, FLAG, false), '-a -b');
+});
+
+test('buildFlagOptions refuses wrapped commands and malformed flags', () => {
+  for (const old of ['"C:\\Example App\\launcher.exe" %command%', '-x & shutdown', '-x | other', '"unterminated']) {
+    assert.throws(() => buildFlagOptions(old, FLAG, true), /EXISTING_OPTIONS_REQUIRE_REVIEW/);
+  }
+  for (const bad of ['not-a-flag', '--enable-features=a b', '--', 'enable-features=x']) {
+    assert.throws(() => buildFlagOptions('-windowed', bad, true), /INVALID_FLAG/);
+  }
+});
+
+test('configureGameFlag writes the flag, backs up the file, keeps other arguments and is idempotent', async (t) => {
+  const args = await temp(t);
+  const applied = await configureGameFlag({ ...args, mode: 'apply', flag: FLAG, enabled: true }, stopped);
+  assert.equal(applied.changed, true);
+  assert.equal(readLaunchOptions(await fs.readFile(args.configPath, 'utf8'), appId), `-windowed ${FLAG}`);
+  assert.equal(await fs.readFile(applied.backupPath, 'utf8'), fixture(optionLine));
+  const manifest = JSON.parse(await fs.readFile(applied.manifestPath, 'utf8'));
+  assert.equal(manifest.mode, 'install');
+  assert.equal(manifest.originalOptions, '-windowed');
+  assert.equal(manifest.installedOptions, `-windowed ${FLAG}`);
+  assert.equal((await configureGameFlag({ ...args, mode: 'apply', flag: FLAG, enabled: true }, stopped)).changed, false);
+  assert.equal((await fs.readdir(args.backupDirectory)).filter(n => n.endsWith('.vdf')).length, 1);
+});
+
+test('disabling restores exactly and deletes both backups — no Steam account data left behind', async (t) => {
+  const args = await temp(t);
+  const applied = await configureGameFlag({ ...args, mode: 'apply', flag: FLAG, enabled: true }, stopped);
+  const off = await configureGameFlag({ ...args, mode: 'apply', flag: FLAG, enabled: false, manifestPath: applied.manifestPath }, stopped);
+  assert.equal(off.changed, true);
+  assert.equal(await fs.readFile(args.configPath, 'utf8'), fixture(optionLine));
+  assert.equal(await fs.stat(applied.manifestPath).then(() => true, () => false), false);
+  assert.equal(await fs.stat(applied.backupPath).then(() => true, () => false), false);
+  assert.deepEqual((await fs.readdir(args.backupDirectory)).filter(n => n.endsWith('.vdf')), []);
+});
+
+test('configureGameFlag runs the Steam guard before writing and leaves the config alone', async (t) => {
+  const args = await temp(t);
+  await assert.rejects(
+    configureGameFlag({ ...args, mode: 'apply', flag: FLAG, enabled: true }, async () => { throw new Error('STEAM_RUNNING'); }),
+    /STEAM_RUNNING/);
+  assert.equal(await fs.readFile(args.configPath, 'utf8'), fixture(optionLine));
+});
+
+test('configureGameFlag preview never writes and optimistic hash check refuses a changed file', async (t) => {
+  const args = await temp(t);
+  const preview = await configureGameFlag({ ...args, mode: 'preview', flag: FLAG, enabled: true }, stopped);
+  assert.equal(preview.changed, true);
+  assert.equal(readLaunchOptions(await fs.readFile(args.configPath, 'utf8'), appId), '-windowed');
+  await assert.rejects(
+    configureGameFlag({ ...args, mode: 'apply', flag: FLAG, enabled: true, expectedHash: '0'.repeat(64) }, stopped),
+    /CONFIG_CHANGED/);
+  assert.equal(readLaunchOptions(await fs.readFile(args.configPath, 'utf8'), appId), '-windowed');
 });
