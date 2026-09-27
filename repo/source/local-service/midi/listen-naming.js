@@ -20,7 +20,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { appendFile, copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { snapshotDatabase } from "./sqlite-snapshot.js";
+import { checkpointWal, snapshotDatabase } from "./sqlite-snapshot.js";
 import { startupReport as buildStartupReport } from "./startup-report.js";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -434,7 +434,16 @@ export async function createListenNamingRoutes(options = {}) {
       const path = routePathOf(url).replace(/^\/toy/u, "").replace(/^\/admin\/api/u, "");
       const OWNED = ["/listen-naming/list", "/listen-naming/clip", "/listen-naming/name", "/listen-naming/status",
         "/listen-naming/undo", "/listen-naming/progress", "/listen-naming/position"];
-      if (path.startsWith("/listen-naming/migrate/")) return null;   // 数据搬家与曲库无关，交给后面的挂载点
+      // 「数据搬移」与曲库目录无关，而且**新装机器上曲库目录本来就是空的** —— 这正是最需要它的时候。
+      // 以前这里 return null 并注释"交给后面的挂载点"，但 server.js 里并没有第二个 listen-naming
+      // 挂载点，结果是这种状态下探测与复制全部 404「接口不存在」。
+      // detectCandidates / applyMigration 是同作用域的函数声明（会提升），可以直接调用。
+      if (req.method === "GET" && path === "/listen-naming/migrate/detect")
+        return await detectCandidates();
+      if (req.method === "POST" && path === "/listen-naming/migrate/apply") {
+        const body = await readJson(req);
+        return await applyMigration(body?.path);
+      }
       if (OWNED.includes(path)) {
         return { needsLibrary: true, message: "还没设置曲目存储路径。请到「基础设置」里设置后，再回来使用本功能。" };
       }
@@ -1625,6 +1634,17 @@ export async function createListenNamingRoutes(options = {}) {
     return { items, scannedMs: Date.now() - started, current: currentUserDataDir() };
   }
 
+  /** 把 Windows 的文件占用错误翻成"照着做就能解决"的人话。 */
+  function describeCopyError(error) {
+    const code = String(error?.code ?? "");
+    const message = String(error?.message ?? "");
+    if (["EBUSY", "EPERM", "EACCES", "UNKNOWN"].includes(code)
+      || /sharing violation|being used by another process|另一个程序正在使用/iu.test(message)) {
+      return "文件正被另一个程序占用。请先完全退出那边的 OliviaSoul（含托盘图标）与游戏，再重试。";
+    }
+    return message || "未知错误";
+  }
+
   /** 只允许复制"探测到的候选"里的数据库文件；复制前把当前库另存一份。 */
   async function applyMigration(sourcePath) {
     const wanted = String(sourcePath ?? "").trim();
@@ -1638,20 +1658,51 @@ export async function createListenNamingRoutes(options = {}) {
     await mkdir(targetDir, { recursive: true });
     const targetDb = join(targetDir, "olivia-local.sqlite");
     const backup = join(targetDir, `backup-before-migrate-${stamp()}.sqlite`);
-    if (existsSync(targetDb)) await copyFile(targetDb, backup);
+    // 先 checkpoint 再快照：当前库的连接是我们自己一直开着的，
+    // 直接 copyFile 可能丢掉还在 WAL 里的最近提交（g14 修过同样的坑）。
+    if (existsSync(targetDb)) await snapshotDatabase(targetDb, backup);
 
+    const sourceDir = join(match.path, "database");
+    const sourceDb = join(sourceDir, "olivia-local.sqlite");
+
+    // -shm 永远不复制：它是 SQLite 的共享内存文件，只要源库还被任何进程打开就是内存映射状态，
+    // Windows 下 copyFile 会直接失败（UNKNOWN / 共享冲突）；而且它本来就是可丢弃的，
+    // 下次打开数据库会自动重建。之前把三个文件一视同仁地复制，就是这个报错的来源。
+    const sourceBusy = !checkpointWal(sourceDb);
     const copied = [];
-    for (const name of ["olivia-local.sqlite", "olivia-local.sqlite-wal", "olivia-local.sqlite-shm"]) {
-      const from = join(match.path, "database", name);
-      if (!existsSync(from)) continue;
-      await copyFile(from, join(targetDir, name));
-      copied.push(name);
+    const skipped = [];
+
+    // 目标里残留的 sidecar 必须先清掉，否则会把旧日志和新主库配成一对
+    for (const suffix of ["-wal", "-shm"]) {
+      try { await rm(join(targetDir, `olivia-local.sqlite${suffix}`), { force: true }); } catch { /* 忽略 */ }
+    }
+
+    try {
+      await copyFile(sourceDb, targetDb);
+    } catch (error) {
+      throw httpError(409, `读不到对方的数据库文件：${describeCopyError(error)}`, "MIGRATE_SOURCE_LOCKED");
+    }
+    copied.push("olivia-local.sqlite");
+
+    // -wal 里可能有还没并回主库的提交，尽量带上；带不上就退回只用主库，并如实告诉用户
+    const sourceWal = join(sourceDir, "olivia-local.sqlite-wal");
+    if (existsSync(sourceWal)) {
+      try {
+        await copyFile(sourceWal, join(targetDir, "olivia-local.sqlite-wal"));
+        copied.push("olivia-local.sqlite-wal");
+      } catch {
+        skipped.push("olivia-local.sqlite-wal");
+      }
     }
     if (!copied.length) throw httpError(400, "对方目录里没有可复制的数据库文件", "MIGRATE_NOTHING_TO_COPY");
-    logInfo("数据搬家完成", `从候选目录复制 ${copied.length} 个数据库文件（${match.songCount} 首，已命名 ${match.namedCount}），旧库已备份`);
+
+    const warning = skipped.length
+      ? "对方的数据库正被另一个程序占用（那边的 OliviaSoul 或游戏可能还开着），有一段日志没能复制：最近一次改动可能不在搬过来的库里。建议完全退出那边的程序后重试。"
+      : (sourceBusy ? "对方的数据库可能正被另一个程序占用，搬过来的数据以最近一次已落盘的内容为准。" : "");
+    logInfo("数据搬家完成", `从候选目录复制 ${copied.length} 个数据库文件（${match.songCount} 首，已命名 ${match.namedCount}），旧库已备份${warning ? "；有提示" : ""}`);
     return {
-      copied, backup, source: match.path, target: currentUserDataDir(),
-      songCount: match.songCount, namedCount: match.namedCount, restartRequired: true,
+      copied, skipped, backup, source: match.path, target: currentUserDataDir(),
+      songCount: match.songCount, namedCount: match.namedCount, warning, restartRequired: true,
     };
   }
 

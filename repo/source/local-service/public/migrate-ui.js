@@ -49,13 +49,19 @@
         const button = node("button", "复制到本安装", "secondary");
         button.type = "button";
         const result = node("p", "", "fieldHint");
+        // 复制成功但对方库被占用时，后端会带一句 warning —— 得让用户看见，否则他以为搬全了
+        const warn = node("p", "", "fieldHint");
+        warn.hidden = true;
         button.addEventListener("click", async () => {
           if (!global.confirm("把这份数据复制到当前安装？\n\n会先备份当前数据库，复制完成后需要关闭并重新打开程序。")) return;
           button.disabled = true;
           result.textContent = "正在复制…";
+          warn.hidden = true;
           try {
             const done = await api("/migrate/apply", { method: "POST", body: JSON.stringify({ path: item.path }) });
             result.textContent = `已复制 ${done.copied.join("、")}；原库已备份为 ${done.backup.split("\\").pop()}。请关闭并重新打开程序。`;
+            warn.textContent = done.warning ? "⚠ " + done.warning : "";
+            warn.hidden = !done.warning;
           } catch (error) {
             result.textContent = "复制失败：" + error.message;
           } finally {
@@ -63,7 +69,7 @@
           }
         });
         actions.append(button);
-        card.append(actions, result);
+        card.append(actions, result, warn);
       }
       host.append(card);
     }
