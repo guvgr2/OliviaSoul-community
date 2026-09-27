@@ -513,7 +513,7 @@
     // g13：这一页很长，先给一条"本页目录 + 直达按钮"，新用户才不会以为诊断只有上面几块
     const navBox = node("section", null, "settingsBlock ln-diagNav");
     navBox.append(node("p",
-      "诊断这一块往下依次是：读取启动耗时 → 曲库健康检查 → 游戏崩溃记录 → 一键诊断包 → 数据备份与恢复（含导出迁移）→ 游戏日志（在最底部）。找不到就点这几个按钮直接跳。",
+      "诊断这一块往下依次是：读取启动耗时 → 曲库健康检查 → 游戏崩溃记录 → 完整诊断包 → 数据备份与恢复（含导出迁移）→ 游戏崩溃规避 → 游戏日志（在最底部）。找不到就点这几个按钮直接跳。",
       "fieldHint"));
     const navActions = node("div", null, "actions");
     const navCrash = node("button", "去游戏崩溃记录", "secondary compact");

@@ -171,6 +171,68 @@ export async function configureLaunchOptions(options, ensureStopped = assertStea
   return { mode, changed: true, backupPath, manifestPath: outputManifest, updatedHash: hash(updated) };
 }
 
+/**
+ * 纯参数启动项的增删（g15）：只动目标 flag，其它参数原样保留，天然幂等。
+ * 只接受"纯参数"形态的现有启动项（以 - 或 + 开头、不含引号与 shell 特殊字符）；
+ * 一旦发现是命令包装（如 "C:\...\x.exe" %command% ...）就交给人工处理，绝不自动改写。
+ */
+export function buildFlagOptions(previous, flag, enabled) {
+  if (typeof flag !== 'string' || !/^--[A-Za-z0-9][A-Za-z0-9_-]*(?:=[A-Za-z0-9_,.\-]+)?$/u.test(flag)) fail('INVALID_FLAG');
+  const current = (previous ?? '').trim();
+  if (current && (/["'&|<>^%\r\n\0]/u.test(current) || !/^[-+]/u.test(current))) fail('EXISTING_OPTIONS_REQUIRE_REVIEW');
+  const parts = current ? current.split(/\s+/u) : [];
+  const kept = parts.filter(part => part !== flag);
+  if (enabled) kept.push(flag);
+  return kept.join(' ');
+}
+
+/**
+ * 安全地把一个 flag 写进/移出 Steam 启动项。
+ * 沿用 configureLaunchOptions 的全部保护：要求 Steam 关闭、写前备份原文件、写清单、
+ * 临时文件 + fsync + 二次确认 + 哈希比对 + 原子替换。
+ * 清单用 mode:"install" 以便卸载流程能自动还原（额外的 kind 字段用于自我识别）。
+ */
+export async function configureGameFlag(options, ensureStopped = assertSteamStopped) {
+  const { mode, appId, flag, backupDirectory, manifestPath, expectedHash } = options;
+  const enabled = options.enabled === true || options.enabled === 'true';
+  if (!['preview', 'apply'].includes(mode)) fail('INVALID_MODE');
+  const configPath = path.resolve(options.configPath);
+  if (mode !== 'preview') await ensureStopped();
+  const originalBytes = await fs.readFile(configPath);
+  const originalHash = hash(originalBytes);
+  if (expectedHash && expectedHash !== originalHash) fail('CONFIG_CHANGED');
+  const originalText = readText(originalBytes);
+  const previous = readLaunchOptions(originalText, appId);
+  const next = buildFlagOptions(previous, flag, enabled);
+  const changed = next !== (previous ?? '').trim();
+  if (mode === 'preview') return { mode, changed, previous, next, expectedHash: originalHash };
+  if (!changed) return { mode, changed: false, previous, next };
+
+  const updated = Buffer.from(editLaunchOptions(originalText, appId, next), 'utf8');
+  await fs.mkdir(backupDirectory, { recursive: true });
+  const identifier = new Date().toISOString().replace(/[:.]/gu, '-') + '-' + randomUUID();
+  const backupPath = path.join(backupDirectory, `${identifier}.localconfig.vdf`);
+  const outputManifest = path.join(backupDirectory, `${identifier}.json`);
+  await fs.writeFile(backupPath, originalBytes, { flag: 'wx' });
+  await fs.writeFile(outputManifest, JSON.stringify({
+    version: 1, kind: 'flag', mode: 'install', configPath, appId: String(appId),
+    originalOptions: previous, installedOptions: next, originalHash, backupPath, flag,
+  }, null, 2), { flag: 'wx' });
+  const temporary = path.join(path.dirname(configPath), `.olivia-flag-${randomUUID()}.tmp`);
+  try {
+    const handle = await fs.open(temporary, 'wx');
+    try { await handle.writeFile(updated); await handle.sync(); } finally { await handle.close(); }
+    await ensureStopped();
+    if (hash(await fs.readFile(configPath)) !== originalHash) fail('CONFIG_CHANGED');
+    await fs.rename(temporary, configPath);
+  } finally {
+    await fs.unlink(temporary).catch((error) => { if (error.code !== 'ENOENT') throw error; });
+  }
+  // 关闭开关时把这一次的清单也清掉，避免卸载恢复看到多个冲突候选。
+  if (!enabled && manifestPath) await fs.unlink(manifestPath).catch(() => {});
+  return { mode, changed: true, previous, next, backupPath, manifestPath: enabled ? outputManifest : null, updatedHash: hash(updated) };
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
     const args = process.argv.slice(2), options = {};

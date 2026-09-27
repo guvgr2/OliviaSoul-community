@@ -13,7 +13,7 @@
   // 唯一真相：页面 → 面板顺序
   const REGISTRY = {
     "listen-tools": ["OliviaSoulListenNamingPlayer", "OliviaSoulTimeOfDayInspect", "OliviaSoulTwinGroups"],
-    "debug": ["OliviaSoulMigrate", "OliviaSoulDiagnostics", "OliviaSoulGameLog"],
+    "debug": ["OliviaSoulMigrate", "OliviaSoulDiagnostics", "OliviaSoulGameStability", "OliviaSoulGameLog"],
     "update": ["OliviaSoulUpdateNotes"],
   };
 
