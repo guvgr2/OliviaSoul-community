@@ -47,4 +47,4 @@ package-work/
 .edge-profile*/
 
 # Local crash-analysis scripts (contain machine paths) - never committed
-tools/
+/tools/
