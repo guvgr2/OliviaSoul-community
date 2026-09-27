@@ -197,7 +197,7 @@
 [data-page="listen-tools"] .ln-todInspect{order:2}
 [data-page="listen-tools"] > .panelHead{order:0}
 
-/* 「更新说明」（g05 新增，g10 重排版式）：正文用 pre 等宽显示，只读、不接受远端排版 */
+/* 「更新说明」（g05 新增，g10 重排版式，g17 改安全迷你 Markdown）：只读、不接受远端排版 */
 [data-page="update"] .ln-updateNotesBody {
   margin: 0;
   padding: 12px 14px;
@@ -207,9 +207,25 @@
   border: 1px solid #2c3138;
   border-radius: 9px;
   color: #c8ccd1;
-  font: 12.5px/1.75 Consolas, "Courier New", monospace;
-  white-space: pre-wrap;
+  font-size: 12.5px;
+  line-height: 1.75;
   overflow-wrap: anywhere;
+}
+[data-page="update"] .ln-updateNotesBody .lnNotesH2 { margin: 0 0 6px; color: #e8eaed; font-size: 14px; font-weight: 700; }
+[data-page="update"] .ln-updateNotesBody .lnNotesH3 { margin: 12px 0 4px; color: #e0e3e7; font-size: 13px; font-weight: 700; }
+[data-page="update"] .ln-updateNotesBody .lnNotesH3:first-child { margin-top: 0; }
+[data-page="update"] .ln-updateNotesBody .lnNotesPara { margin: 0 0 4px; }
+[data-page="update"] .ln-updateNotesBody .lnNotesList { margin: 0 0 6px; padding-left: 20px; }
+[data-page="update"] .ln-updateNotesBody .lnNotesList li { margin: 0 0 3px; }
+[data-page="update"] .ln-updateNotesBody .lnNotesGap { height: 8px; }
+[data-page="update"] .ln-updateNotesBody strong { color: #e8eaed; }
+[data-page="update"] .ln-updateNotesBody code {
+  padding: 0 4px;
+  background: #1b1f24;
+  border: 1px solid #2c3138;
+  border-radius: 4px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
 }
 [data-page="update"] .ln-updateNotes .settingsBlockHead small { color: #8b9198; font-size: 12px; }
 [data-page="update"] .ln-updateNotes .actions { flex-wrap: wrap; gap: 8px; margin-top: 12px; }

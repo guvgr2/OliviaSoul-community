@@ -1,6 +1,8 @@
 // 更新日志展示（g05 新增，独立文件，不改 app.js）：
 // 「软件更新」页检测到新版本时，把 Release 说明、发布页链接、安装包直链摆出来。
 // 安全约定：GitHub 返回的说明文字一律用 textContent 渲染，绝不 innerHTML。
+// g17：Release 正文通常是 Markdown，以前直接塞进 <pre> 会让用户看到裸的 ### 与 **，
+//      所以加了一个**只建 DOM 节点、只用 textContent** 的迷你渲染器（仍然零 innerHTML）。
 (function (global) {
   "use strict";
 
@@ -13,6 +15,69 @@
     if (text != null) element.textContent = String(text);
     if (className) element.className = className;
     return element;
+  }
+
+  // 行内格式：**粗体** / `代码` / [文字](链接)。全部走 createElement + textContent，不解析任何 HTML。
+  const INLINE_PATTERN = /\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)/gu;
+
+  function appendInline(target, text) {
+    const value = String(text ?? "");
+    let index = 0;
+    for (const match of value.matchAll(INLINE_PATTERN)) {
+      if (match.index > index) target.append(value.slice(index, match.index));
+      if (match[1] !== undefined) target.append(node("strong", match[1]));
+      else if (match[2] !== undefined) target.append(node("code", match[2]));
+      else {
+        // 链接只渲染文字，链接地址放到 title —— 面板里已有「打开发布页」按钮，不额外制造可点区域
+        const label = node("span", match[3]);
+        label.title = match[4];
+        target.append(label);
+      }
+      index = match.index + match[0].length;
+    }
+    if (index < value.length) target.append(value.slice(index));
+  }
+
+  // 少量块级语法：## / ### 标题、- / * 列表；其余按段落。不认识的原样显示，不猜。
+  function renderNotes(container, raw) {
+    container.textContent = "";
+    const lines = String(raw ?? "").replace(/\r\n?/gu, "\n").split("\n");
+    let list = null;
+    const closeList = () => { if (list) { container.append(list); list = null; } };
+    for (const rawLine of lines) {
+      const trimmed = rawLine.trim();
+      if (!trimmed) { closeList(); container.append(node("div", null, "lnNotesGap")); continue; }
+      const heading = /^(#{1,6})\s+(.*)$/u.exec(trimmed);
+      if (heading) {
+        closeList();
+        const paragraph = node("p", null, heading[1].length <= 2 ? "lnNotesH2" : "lnNotesH3");
+        appendInline(paragraph, heading[2]);
+        container.append(paragraph);
+        continue;
+      }
+      const bullet = /^[-*+]\s+(.*)$/u.exec(trimmed);
+      if (bullet) {
+        if (!list) list = node("ul", null, "lnNotesList");
+        const item = node("li");
+        appendInline(item, bullet[1]);
+        list.append(item);
+        continue;
+      }
+      closeList();
+      const paragraph = node("p", null, "lnNotesPara");
+      appendInline(paragraph, trimmed);
+      container.append(paragraph);
+    }
+    closeList();
+  }
+
+  function setNotes(container, notes) {
+    const text = String(notes ?? "").trim();
+    if (!text) {
+      container.textContent = "（这个版本没有写更新说明）";
+      return;
+    }
+    renderNotes(container, text);
   }
 
   // g10：外链统一交后端（域名白名单 + 系统默认浏览器），面板里不再自己 window.open
@@ -38,7 +103,7 @@
     if (!versionLine.textContent.trim()) versionLine.textContent = "正在读取版本信息……";
     head.append(title, versionLine);
 
-    const notesBox = node("pre", "", "ln-updateNotesBody");
+    const notesBox = node("div", "", "ln-updateNotesBody");
     const actions = node("div", null, "actions");
     const openRelease = node("button", "打开发布页", "secondary");
     const openAsset = node("button", "下载安装包", "secondary");
@@ -76,7 +141,7 @@
       const sizeMb = data.assetSize ? (Number(data.assetSize) / 1048576).toFixed(1) + " MB" : "";
       ui.versionLine.textContent = `当前 ${data.currentTag || "?"} · GitHub 最新 ${lastTag || "?"}`
         + (data.publishedAt ? ` · 发布于 ${String(data.publishedAt).slice(0, 10)}` : "");
-      ui.notesBox.textContent = String(data.notes || "").trim() || "（这个版本没有写更新说明）";
+      setNotes(ui.notesBox, data.notes);
       ui.openRelease.hidden = !ui.releaseUrl;
       ui.openAsset.hidden = !ui.assetUrl;
       ui.openAsset.textContent = sizeMb ? `下载安装包（${sizeMb}）` : "下载安装包";

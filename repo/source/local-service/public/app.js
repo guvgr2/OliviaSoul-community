@@ -686,6 +686,8 @@ async function queryModels(provider) {
       if (provider === "deepseek" && !$("#customModel").checked) {
         $("#customModel").checked = true;
         $("#customFields").hidden = false;
+        // 「选择模型」下拉也要跟着切到“自定义”，否则下拉还显示着某个内置模型、与勾选状态不一致
+        $("#modelPreset").value = CUSTOM_MODEL_PRESET;
       }
       // Preserve edits made while model discovery was in flight.
       replaceModelOptions(target, result.models, $(target).value);

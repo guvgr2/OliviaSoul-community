@@ -40,6 +40,7 @@ namespace OliviaSoul
         private readonly ToolStripMenuItem _autoStartItem;
         private readonly LyricsPresenter _lyrics;
         private readonly WindowControlButton _maximizeButton;
+        private WindowControlButton[] _windowControlButtons;
         private DesktopBridge _bridge;
         private Task _startupInitialization;
         private Task _uiShellInitialization;
@@ -122,6 +123,15 @@ namespace OliviaSoul
             windowButtons.Controls.Add(minimizeButton, 0, 0);
             windowButtons.Controls.Add(_maximizeButton, 1, 0);
             windowButtons.Controls.Add(closeButton, 2, 0);
+
+            // 只靠 MouseEnter / MouseLeave 会让关闭键在鼠标"没动就离开"时一直红着
+            // （窗口被键盘拖动、布局变化、弹窗抢焦点等）。这里在这些时机主动按真实光标位置校正。
+            _windowControlButtons = new[] { minimizeButton, _maximizeButton, closeButton };
+            Move += delegate { SyncWindowControlButtons(); };
+            Resize += delegate { SyncWindowControlButtons(); };
+            Activated += delegate { SyncWindowControlButtons(); };
+            Deactivate += delegate { SyncWindowControlButtons(); };
+
             titleBar.Controls.Add(windowButtons);
             titleBar.MouseDown += DragWindow;
             titleBar.DoubleClick += delegate { ToggleMaximize(); };
@@ -201,6 +211,19 @@ namespace OliviaSoul
             }
             MaximizedBounds = Screen.FromControl(this).WorkingArea;
             WindowState = FormWindowState.Maximized;
+        }
+
+        /// <summary>
+        /// 让三个窗口按钮按真实光标位置重新判定悬停态，避免关闭键在鼠标"没动就离开"时一直红着。
+        /// </summary>
+        private void SyncWindowControlButtons()
+        {
+            var buttons = _windowControlButtons;
+            if (buttons == null) return;
+            foreach (var button in buttons)
+            {
+                if (button != null && !button.IsDisposed) button.SyncHover();
+            }
         }
 
         private async Task InitializeAsync()

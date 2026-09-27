@@ -46,6 +46,26 @@ namespace OliviaSoul
             }
         }
 
+        /// <summary>
+        /// 按真实光标位置校正悬停态。
+        ///
+        /// 只靠 OnMouseEnter / OnMouseLeave 是不够的：鼠标在**没有物理移动**的情况下离开本控件时，
+        /// WinForms 不会补发 MouseLeave（窗口被键盘或程序移动、布局/DPI 变化让控件从光标下移开、
+        /// 弹窗或别的窗口抢走焦点等），_hovered 就会一直停在 true ——
+        /// 表现出来就是「没碰它，关闭键却一直红着」。
+        ///
+        /// 由 MainForm 在窗口移动 / 缩放 / 激活变化时调用。
+        /// </summary>
+        public void SyncHover()
+        {
+            if (!IsHandleCreated || IsDisposed) return;
+            var hovered = ClientRectangle.Contains(PointToClient(Cursor.Position));
+            if (hovered == _hovered) return;
+            _hovered = hovered;
+            if (!hovered) _pressed = false;
+            Invalidate();
+        }
+
         protected override void OnMouseEnter(System.EventArgs args)
         {
             _hovered = true;
@@ -80,6 +100,15 @@ namespace OliviaSoul
 
         protected override void OnPaint(PaintEventArgs args)
         {
+            // 绘制前再按真实光标位置校正一次：外部事件可能来不及触发（例如窗口刚被移动完），
+            // 这里不 Invalidate，只修正状态，避免递归重绘。
+            var actuallyHovered = ClientRectangle.Contains(PointToClient(Cursor.Position));
+            if (actuallyHovered != _hovered)
+            {
+                _hovered = actuallyHovered;
+                if (!actuallyHovered) _pressed = false;
+            }
+
             var graphics = args.Graphics;
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
             var background = Color.Transparent;

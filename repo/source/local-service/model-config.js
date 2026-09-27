@@ -32,6 +32,28 @@ function normalizeProvider(provider) {
   return value;
 }
 
+/** 回环 / 局域网 / 本机域名 —— 这些地址走明文 http 不构成"经过互联网被抓包"。 */
+function isPrivateHost(hostname) {
+  const host = String(hostname ?? "").toLowerCase().replace(/^\[|\]$/gu, "");
+  if (!host) return false;
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".lan") || host.endsWith(".home")) return true;
+  if (host === "::1") return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(host);
+  if (v4) {
+    const first = Number(v4[1]);
+    const second = Number(v4[2]);
+    if (first === 0 || first === 10 || first === 127) return true;
+    if (first === 192 && second === 168) return true;
+    if (first === 172 && second >= 16 && second <= 31) return true;
+    if (first === 169 && second === 254) return true;   // 链路本地
+    return false;
+  }
+  if (/^f[cd][0-9a-f]{2}:/u.test(host)) return true;     // IPv6 ULA
+  if (/^fe80:/u.test(host)) return true;                 // IPv6 链路本地
+  return false;
+}
+
 function normalizeBaseUrl(value) {
   const text = assertSingleLine(value, "模型地址").replace(/\/+$/u, "");
   let url;
@@ -44,6 +66,10 @@ function normalizeBaseUrl(value) {
     throw new Error("请填写有效的模型地址");
   if (url.username || url.password || /[?#]/u.test(text))
     throw new Error("模型地址不能包含账号密码、查询参数或片段；密钥请填写到 API Key");
+  // 公网地址必须走 https：明文 http 时 API Key 会作为请求头明文经过网络，
+  // 同网段、出口链路上的任何程序都能抓到。本机与局域网地址不受此限制。
+  if (url.protocol === "http:" && !isPrivateHost(url.hostname))
+    throw new Error("公网地址请改用 https：明文 http 会让 API Key 在网络上明着传输（本机与局域网地址不受此限制）");
   if (/\/(messages|responses)$/iu.test(url.pathname.replace(/\/+$/u, "")))
     throw new Error("当前仅支持 Chat Completions 兼容接口，不支持原生 Messages / Responses 地址");
   return text.replace(/\/chat\/completions$/iu, "");

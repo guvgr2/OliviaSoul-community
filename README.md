@@ -98,6 +98,7 @@ Node ESM + 原生 HTML/CSS/JS（沿用上游 `public/styles.css` 的类名与配
 - [x] g14：数据备份与恢复（可回滚）· 升级前自动备份 · 导出/导入换电脑（导出清除 API Key）
 - [x] g15：游戏崩溃规避开关（写 Steam 启动项，不改游戏文件、可还原）
 - [x] g16：可选模型（DeepSeek / 智谱 GLM / 自定义，默认 `deepseek-flash`，不自动切换）· API Key 本机保存与不上传告知 · 随包说明文档更正为本支版本
+- [x] g17：安全加固（管理接口不再对外来网页开放跨域读取、公网地址强制 https）· 修关闭按钮悬停态卡红 · 更新说明渲染 Markdown
 - [x] 发布：社区仓库地址已写入 `midi/community-catalog.js`、`public/listen-naming-feedback.js`、`server.js`（guvgr2/OliviaSoul-community）
 
 ---

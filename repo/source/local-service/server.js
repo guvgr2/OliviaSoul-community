@@ -2584,14 +2584,24 @@ export async function createOliviaService(options = {}) {
 
   function corsHeaders(req) {
     const origin = req.headers.origin;
+    if (!origin) return {};
+    // 游戏端补丁页面是从游戏自己的源去调 /toy/* 的，所以那些路由必须反射来源。
+    // 但 /admin/* 是本机管理界面（同源加载），而 /admin/api/model 会把已保存的 API Key
+    // 回给调用方 —— 对管理接口反射任意 Origin，等于让用户浏览器里打开的任意网页
+    // 都能跨域读到这个 Key。所以管理接口只认自己的源。
+    const pathname = String(req.url ?? "").split("?")[0];
+    if (pathname.startsWith("/admin/")) {
+      const selfOrigin = `http://${req.headers.host ?? ""}`;
+      if (origin !== selfOrigin) return {};
+    }
     const requestedHeaders = req.headers["access-control-request-headers"];
-    return origin ? {
+    return {
       "Access-Control-Allow-Origin": origin,
       "Access-Control-Allow-Credentials": "true",
       "Access-Control-Allow-Headers": requestedHeaders ?? "Content-Type, x-token, x-uid, x-platform, Authorization",
       "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
       "Vary": "Origin",
-    } : {};
+    };
   }
 
   function sendJson(req, res, payload, status = 200, headers = {}) {

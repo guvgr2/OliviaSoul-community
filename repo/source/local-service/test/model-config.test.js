@@ -152,6 +152,36 @@ test("智谱 GLM 用自己那套推理参数，且不会被要求关闭思考", 
   assert.equal(unknown.body.reasoning_effort, undefined);
 });
 
+test("公网明文 http 被拒绝（否则 API Key 明文过网），本机与局域网仍允许", async t => {
+  const root = await mkdtemp(join(tmpdir(), "olivia-model-http-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const save = baseUrl => writeModelProfile({
+    root,
+    provider: "local",
+    profile: { baseUrl, model: "local-model", authMode: "none", apiKey: "" },
+  });
+
+  // 公网地址必须 https
+  await assert.rejects(save("http://api.example.com/v1"), /https/u);
+  await assert.rejects(save("http://203.0.113.9:8000/v1"), /https/u);
+  await assert.rejects(save("http://8.8.8.8/v1"), /https/u);
+
+  // 本机与局域网照旧允许（本地推理、局域网推理服务器都是明文 http 的常见用法）
+  for (const allowed of [
+    "http://127.0.0.1:8000/v1",
+    "http://localhost:8000/v1",
+    "http://192.168.1.50:8000/v1",
+    "http://10.0.0.7:8000/v1",
+    "http://172.16.5.5:8000/v1",
+    "http://ollama.local:11434/v1",
+    "https://api.deepseek.com",
+    "https://open.bigmodel.cn/api/paas/v4",
+  ]) {
+    const saved = await save(allowed);
+    assert.equal(saved.profiles.local.baseUrl, allowed.replace(/\/+$/u, ""), allowed);
+  }
+});
+
 test("模型档案拒绝非法 provider 地址换行和缺失的 Bearer 密钥", async t => {
   const root = await mkdtemp(join(tmpdir(), "olivia-model-invalid-"));
   t.after(() => rm(root, { recursive: true, force: true }));
