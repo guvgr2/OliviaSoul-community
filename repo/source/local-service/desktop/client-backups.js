@@ -206,6 +206,11 @@ export async function stageVerifiedOptionalClientBackups(options) {
  * 用途：便携版换到新目录后本实例没有原版备份，但旧安装的数据目录里还有，直接拿来用 ——
  * 用户不必手工复制文件夹，也不必去 Steam 验证文件完整性。
  */
+/** 目录判断专用：模块里的 exists() 只接受普通文件，对盘符/目录会抛错。 */
+async function isDirectory(path) {
+  try { return (await lstat(path)).isDirectory(); } catch { return false; }
+}
+
 async function scanSiblingBackupDirs(budgetMs = 1500) {
   const started = Date.now();
   const found = new Set();
@@ -213,7 +218,7 @@ async function scanSiblingBackupDirs(budgetMs = 1500) {
   const roots = [];
   for (let code = 65; code <= 90; code += 1) {
     const root = `${String.fromCharCode(code)}:\\`;
-    if (await exists(root)) roots.push(root);
+    if (await isDirectory(root)) roots.push(root);
   }
   for (const root of roots) {
     if (Date.now() - started > budgetMs) break;
@@ -227,7 +232,19 @@ async function scanSiblingBackupDirs(budgetMs = 1500) {
       else if (interesting.test(entry.name)) bases.push(join(root, entry.name, 'UserData'), join(root, entry.name));
       for (const base of bases) {
         for (const candidate of [join(base, 'database', 'client-backups'), join(base, 'client-backups')]) {
-          if (await exists(candidate)) found.add(resolve(candidate));
+          if (!(await isDirectory(candidate))) continue;
+          found.add(resolve(candidate));
+          // 备份文件实际放在两级目录里：client-backups\resources-only\<key>\*.dat。
+          // 只收 client-backups 一层是找不到文件的（g20 第一版就漏了这一点）。
+          try {
+            for (const entry of await readdir(candidate, { withFileTypes: true })) {
+              if (!entry.isDirectory() || entry.name !== 'resources-only') continue;
+              const root = join(candidate, entry.name);
+              for (const sub of await readdir(root, { withFileTypes: true })) {
+                if (sub.isDirectory()) found.add(resolve(join(root, sub.name)));
+              }
+            }
+          } catch { /* 读不到就跳过 */ }
         }
       }
     }
@@ -328,6 +345,7 @@ export async function resolveClientBackups({ layout, dataDir, appData, roamingAp
   // 关键：扫描结果「单独查一轮」，不并进 dirs —— 否则会改变原有的唯一性判断
   // （测试里已经抓到过：并进 dirs 后，真实机器上的其它安装会让候选变成歧义）。
   const usedSiblings = new Set();
+  let scannedSiblingResult = [];
   let siblingScanPromise = null;
   function siblingBackupDirs() {
     if (!siblingScanPromise) {
@@ -341,11 +359,15 @@ export async function resolveClientBackups({ layout, dataDir, appData, roamingAp
   let feapp = await exact('feapp', readFeappStatus, currentFe);
   if (!feapp) {
     const scanned = await siblingBackupDirs();
-    if (scanned.length) feapp = await exact('feapp', readFeappStatus, currentFe, scanned);
+    scannedSiblingResult = scanned;
+    if (scanned.length) {
+      try { feapp = await exact('feapp', readFeappStatus, currentFe, scanned); }
+      catch (error) { console.error(`[client-backup] 同机候选不可用：${error instanceof Error ? error.message : error}`); }
+    }
   }
   if (!feapp) {
     const old = [];
-    for (const dir of dirs.slice(1)) {
+    for (const dir of [...new Set([...dirs.slice(1), ...scannedSiblingResult])]) {
       const path = join(dir, `${oldKey}.feapp.dat`);
       if (await exists(path)) { const info = await clean(path, readFeappStatus); if (!await sameFeIdentity(info)) throw new Error('backup FE archive identity mismatch'); old.push(info); }
     }
@@ -356,14 +378,18 @@ export async function resolveClientBackups({ layout, dataDir, appData, roamingAp
   let webplayer = await exact('webplayer', readWebplayerStatus, currentWp);
   if (!webplayer) {
     const scanned = await siblingBackupDirs();
-    if (scanned.length) webplayer = await exact('webplayer', readWebplayerStatus, currentWp, scanned);
+    scannedSiblingResult = scanned;
+    if (scanned.length) {
+      try { webplayer = await exact('webplayer', readWebplayerStatus, currentWp, scanned); }
+      catch (error) { console.error(`[client-backup] 同机候选不可用：${error instanceof Error ? error.message : error}`); }
+    }
   }
   if (!webplayer) {
     // g19：先按旧命名（md5(gameRoot)，不含版本）在所有候选目录里找成对的 feapp+webplayer 备份。
     // 便携版换目录后，原版备份往往就是这种旧命名、且躺在用户级目录或安装版数据目录里。
     const matches = [];
     const pairs = [];
-    for (const dir of dirs.slice(1)) pairs.push([join(dir, `${oldKey}.feapp.dat`), join(dir, `${oldKey}.webplayer.dat`)]);
+    for (const dir of [...new Set([...dirs.slice(1), ...scannedSiblingResult])]) pairs.push([join(dir, `${oldKey}.feapp.dat`), join(dir, `${oldKey}.webplayer.dat`)]);
     let files = [];
     try { files = await readdir(managed); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     for (const name of files.filter(n => /^[a-f0-9]{32}\.feapp\.dat$/u.test(n) && n !== `${key}.feapp.dat` && n !== `${oldKey}.feapp.dat`)) {
