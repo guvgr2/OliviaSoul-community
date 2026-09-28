@@ -200,7 +200,41 @@ export async function stageVerifiedOptionalClientBackups(options) {
   return commitVerifiedOptionalClientBackups(plan);
 }
 
-export async function resolveClientBackups({ layout, dataDir, appData, roamingAppData = process.env.APPDATA, localAppData = process.env.LOCALAPPDATA, createOnMount = false, readFeappStatus, readWebplayerStatus }) {
+/**
+ * g20：扫描盘根下一层，找同机其它 OliviaSoul 安装里的 client-backups。
+ * 规则与「试听工具 → 数据搬家」的候选探测一致（命中 olivia/linli/soul 目录名，再看它的 UserData）。
+ * 用途：便携版换到新目录后本实例没有原版备份，但旧安装的数据目录里还有，直接拿来用 ——
+ * 用户不必手工复制文件夹，也不必去 Steam 验证文件完整性。
+ */
+async function scanSiblingBackupDirs(budgetMs = 1500) {
+  const started = Date.now();
+  const found = new Set();
+  const interesting = /(olivia|linli|soul)/iu;
+  const roots = [];
+  for (let code = 65; code <= 90; code += 1) {
+    const root = `${String.fromCharCode(code)}:\\`;
+    if (await exists(root)) roots.push(root);
+  }
+  for (const root of roots) {
+    if (Date.now() - started > budgetMs) break;
+    let entries = [];
+    try { entries = await readdir(root, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      if (Date.now() - started > budgetMs) break;
+      if (!entry.isDirectory()) continue;
+      const bases = [];
+      if (entry.name === 'UserData') bases.push(join(root, entry.name));
+      else if (interesting.test(entry.name)) bases.push(join(root, entry.name, 'UserData'), join(root, entry.name));
+      for (const base of bases) {
+        for (const candidate of [join(base, 'database', 'client-backups'), join(base, 'client-backups')]) {
+          if (await exists(candidate)) found.add(resolve(candidate));
+        }
+      }
+    }
+  }
+  return [...found];
+}
+export async function resolveClientBackups({ layout, dataDir, appData, roamingAppData = process.env.APPDATA, localAppData = process.env.LOCALAPPDATA, createOnMount = false, onSiblingReuse, readFeappStatus, readWebplayerStatus }) {
   const key = createHash('md5').update(`${layout.gameRoot.toLowerCase()}\n${layout.version.toLowerCase()}`).digest('hex');
   const oldKey = createHash('md5').update(layout.gameRoot.toLowerCase()).digest('hex');
   const managed = join(dataDir, 'client-backups');
@@ -254,7 +288,7 @@ export async function resolveClientBackups({ layout, dataDir, appData, roamingAp
       if (info.patched) reasons.push('archiveMarker=true');
       if (source === 'current' && info.patched) {
         throw Object.assign(new Error(`检测到旧补丁或补丁残留，而本机没有找到可用的干净原始备份（原文：backup original is invalid or patched: ${filename}; ${reasons.join(',')}）。`
-          + `如果你在另一个 OliviaSoul 目录（安装版，或旧版便携包）里打过补丁，把它的 UserData\\database\\client-backups 整个文件夹复制到下面任一位置再重试即可：`
+          + `程序已经自动扫过本机其它 OliviaSoul 安装（含安装版与各版本便携包）但没找到可用的原版备份。如果你确实在别处打过补丁，把它的 UserData\\database\\client-backups 整个文件夹复制到下面任一位置再重试即可：`
           + `${dirs.join('；')}。`
           + `实在没有备份时，退出游戏与本软件，在 Steam 里对游戏执行「验证文件完整性」，再回到这里重新启用（只会重新下载被改过的那两个文件）。`), {code:'CLIENT_ORIGINAL_RECOVERY_REQUIRED'});
       }
@@ -274,11 +308,13 @@ export async function resolveClientBackups({ layout, dataDir, appData, roamingAp
     }
     return sameIdentity(original, currentFe, knownFeLocale);
   }
-  async function exact(kind, readStatus, current) {
+  async function exact(kind, readStatus, current, scannedDirs) {
     const found = [];
-    for (const dir of completeStagedPair ? [staged] : dirs) {
+    const fromScan = Boolean(scannedDirs);
+    for (const dir of scannedDirs ?? (completeStagedPair ? [staged] : dirs)) {
       const path = join(dir, `${key}.${kind}.dat`);
       if (await exists(path)) {
+        if (fromScan) usedSiblings.add(resolve(dir));
         const info = await clean(path, readStatus);
         if (!(kind === 'feapp' ? await sameFeIdentity(info) : sameIdentity(info, current)))
           throw new Error(`backup ${kind} archive identity mismatch`);
@@ -288,7 +324,25 @@ export async function resolveClientBackups({ layout, dataDir, appData, roamingAp
     if (completeStagedPair && found.length !== 1) throw new Error('backup staging pair changed during validation');
     return unique(found, kind);
   }
+  // g20：静态候选全都命中不了时，才去扫同机其它安装（懒执行，约 1.5 秒预算）。
+  // 关键：扫描结果「单独查一轮」，不并进 dirs —— 否则会改变原有的唯一性判断
+  // （测试里已经抓到过：并进 dirs 后，真实机器上的其它安装会让候选变成歧义）。
+  const usedSiblings = new Set();
+  let siblingScanPromise = null;
+  function siblingBackupDirs() {
+    if (!siblingScanPromise) {
+      siblingScanPromise = scanSiblingBackupDirs().catch(error => {
+        console.error(`[client-backup] sibling scan skipped: ${error instanceof Error ? error.message : error}`);
+        return [];
+      });
+    }
+    return siblingScanPromise;
+  }
   let feapp = await exact('feapp', readFeappStatus, currentFe);
+  if (!feapp) {
+    const scanned = await siblingBackupDirs();
+    if (scanned.length) feapp = await exact('feapp', readFeappStatus, currentFe, scanned);
+  }
   if (!feapp) {
     const old = [];
     for (const dir of dirs.slice(1)) {
@@ -300,6 +354,10 @@ export async function resolveClientBackups({ layout, dataDir, appData, roamingAp
   if (!feapp && createOnMount) feapp = await clean(layout.feappPath, readFeappStatus);
   if (!feapp) throw new Error('backup FE original missing for current version');
   let webplayer = await exact('webplayer', readWebplayerStatus, currentWp);
+  if (!webplayer) {
+    const scanned = await siblingBackupDirs();
+    if (scanned.length) webplayer = await exact('webplayer', readWebplayerStatus, currentWp, scanned);
+  }
   if (!webplayer) {
     // g19：先按旧命名（md5(gameRoot)，不含版本）在所有候选目录里找成对的 feapp+webplayer 备份。
     // 便携版换目录后，原版备份往往就是这种旧命名、且躺在用户级目录或安装版数据目录里。
@@ -370,5 +428,12 @@ export async function resolveClientBackups({ layout, dataDir, appData, roamingAp
     }
   }
   for (const item of optionalToStage) await atomicStage(item.path, item.bytes);
+  // g20：让用户知道这份原版备份是从哪来的（日志 + 界面都看得到）。
+  // 注意：返回值结构必须保持 { feapp, webplayer } 不变 —— 调用方与测试都对它做精确断言，
+  // 所以来源通过回调传出去，而不是挂在返回对象上。
+  if (usedSiblings.size) {
+    console.log(`[client-backup] 已从同机其它安装复用游戏原版备份：${[...usedSiblings].join('、')}`);
+    if (typeof onSiblingReuse === 'function') onSiblingReuse([...usedSiblings]);
+  }
   return result;
 }

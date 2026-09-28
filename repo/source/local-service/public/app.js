@@ -277,6 +277,14 @@ function renderClientMountStatus(status) {
   } else {
     $("#serviceMountDetail").textContent = `客户端使用原服务，本机服务端口 ${status.servicePort}`;
   }
+  // g20：如果这次更新补丁用的是「同机其它安装」里的原版备份，直接把来源写在状态行里，
+  // 免得用户以为程序偷偷动了什么，也省得他去手工复制或 Steam 验证。
+  const backupReuse = Array.isArray(status.backupReuseSources) ? status.backupReuseSources : [];
+  if (backupReuse.length) {
+    const detail = $("#serviceMountDetail");
+    const note = `已从同机其它 OliviaSoul 安装复用游戏原版备份：${backupReuse.join("、")}`;
+    detail.textContent = detail.textContent ? `${detail.textContent}；${note}` : note;
+  }
   $("#mountService").hidden = status.mounted && !status.updateAvailable;
   $("#mountService").textContent = status.updateAvailable ? "更新客户端补丁" : "启用本地服务";
   $("#restoreClient").hidden = !status.mounted && !partiallyMounted;

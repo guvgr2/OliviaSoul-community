@@ -261,6 +261,7 @@ export class DesktopController {
       webplayerFound: webplayer.clientFound,
       webplayerMounted: Boolean(webplayer.mounted || webplayer.managed || webplayer.updateAvailable),
       servicePort: this.currentPort,
+      backupReuseSources: Array.isArray(this.backupReuseSources) ? this.backupReuseSources : [],
     };
   }
 
@@ -281,11 +282,16 @@ export class DesktopController {
   }
 
   async originalClientBackups(layout, createOnMount = false) {
-    return resolveClientBackups({
+    // g20：把「这份原版备份是从哪个同机安装复用的」记下来给界面用；返回结构保持不变。
+    const reuse = [];
+    const result = await resolveClientBackups({
       layout, dataDir: this.dataDir, appData: this.appData, createOnMount,
+      onSiblingReuse: dirs => { for (const dir of dirs) if (!reuse.includes(dir)) reuse.push(dir); },
       readFeappStatus: path => this.readFeappStatus(path),
       readWebplayerStatus: path => this.readWebplayerStatus(path),
     });
+    if (reuse.length) this.backupReuseSources = reuse;
+    return result;
   }
 
   async readNativeWidgetStatus(layout) {
