@@ -61,7 +61,7 @@ try {
       $text=[Text.Encoding]::UTF8.GetString($content);
       [ordered]@{
         name=$entry.FullName; hash=([BitConverter]::ToString($sha.ComputeHash($content))).Replace('-','').ToLowerInvariant(); patched=$text.Contains('OliviaSoulPatch');
-        knownFeLocalePatch=($entry.FullName -match '^assets/main-[^/]+[.]js$' -and ($text.StartsWith('/*OliviaSoulPatch:mail-music-v29*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v30*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v31*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v32*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v33*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v34*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v35*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v36*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v37*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v38*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v39*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v40*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v41*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v42*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v43*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v44*/')));
+        knownFeLocalePatch=($entry.FullName -match '^assets/main-[^/]+[.]js$' -and ($text.StartsWith('/*OliviaSoulPatch:mail-music-v29*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v30*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v31*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v32*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v33*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v34*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v35*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v36*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v37*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v38*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v39*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v40*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v41*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v42*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v43*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v44*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v45*/')));
         localeBase64=if($entry.FullName -match '^assets/zh-cn-[^/]+[.]js$' -and $content.Length -le 1048576){[Convert]::ToBase64String($content)}else{$null}
       }
     } finally { $entryStream.Dispose(); $out.Dispose() }
@@ -248,7 +248,7 @@ export async function resolveClientBackups({ layout, dataDir, appData, roamingAp
       const status = await readFeappStatus(layout.feappPath);
       knownFeLocale = currentFe.knownFeLocalePatch && status.clientFound === true && status.managed === true
         && (status.mounted === true || status.updateAvailable === true)
-        && ['v29', 'v30', 'v31', 'v32', 'v33', 'v34', 'v35', 'v36', 'v37', 'v38', 'v39', 'v40', 'v41', 'v42', 'v43', 'v44'].includes(status.revision);
+        && ['v29', 'v30', 'v31', 'v32', 'v33', 'v34', 'v35', 'v36', 'v37', 'v38', 'v39', 'v40', 'v41', 'v42', 'v43', 'v44', 'v45'].includes(status.revision);
     }
     return sameIdentity(original, currentFe, knownFeLocale);
   }

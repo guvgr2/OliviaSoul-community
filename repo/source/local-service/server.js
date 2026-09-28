@@ -4352,7 +4352,10 @@ export async function createOliviaService(options = {}) {
         console.error(`[model-startup-detect] ${safeModelError(error)}`);
       });
       if (usersettingsPath && !storagePollTimer) {
-        const interval = Math.max(250, Number(options.storagePollIntervalMs) || 2000);
+        // g19：原来每 2 秒读一次 usersettings.dat。曲库目录不会两秒一变，
+        // 而这是长期常驻的定时器（每次都要读盘 + 解析），在内存/IO 紧张的机器上是纯负担。
+        // 10 秒足够：界面上的存储状态本来就不是实时量，改目录后手动刷新也会立刻重读。
+        const interval = Math.max(250, Number(options.storagePollIntervalMs) || 10_000);
         storagePollTimer = setInterval(() => {
           void refreshStorageStatus().catch(error => {
             console.error(`[storage-refresh] ${error instanceof Error ? error.message : error}`);

@@ -428,11 +428,11 @@ export class DesktopController {
     ]));
     const originals = await this.clientStage("originals", () => this.originalClientBackups(layout, true));
     this.mountRollbackContext = { layout, originals };
-    if (current.updateAvailable || (current.mounted && ["v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44"].includes(current.revision) && layout.version === "0.0.9.627")) {
-      if (["v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44"].includes(current.revision)) {
+    if (current.updateAvailable || (current.mounted && ["v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44", "v45"].includes(current.revision) && layout.version === "0.0.9.627")) {
+      if (["v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44", "v45"].includes(current.revision)) {
         const originalFile = originals.feapp;
         // FE-only v28/v29/v30 upgrades must not disturb a current same-port player.
-        const keepWebplayer = ["v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44"].includes(current.revision)
+        const keepWebplayer = ["v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44", "v45"].includes(current.revision)
           && currentWebplayer.mounted && currentWebplayer.port === port;
         const originalWebplayer = keepWebplayer ? null : originals.webplayer;
         if (port !== this.currentPort) await assertPortAvailable(port);

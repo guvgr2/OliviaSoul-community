@@ -46,6 +46,8 @@ function fixture() {
   const state = {};
   const context = vm.createContext({
     window: state, console: { log() {}, info() {}, warn() {} }, AbortController,
+    document: { visibilityState: "visible", addEventListener() {}, removeEventListener() {} },
+    queueMicrotask,
     Date: { now: () => now },
     sessionStorage: { getItem: () => null, setItem() {} },
     i: { value: video }, l: { value: [video] }, a: { value: video.duration },
@@ -124,9 +126,9 @@ function fixture() {
   };
 }
 
-test("player polling is one-second and does not overlap", async () => {
+test("player polling is three-seconds and does not overlap", async () => {
   const player = fixture();
-  assert.equal(player.intervalDelay(), 1000);
+  assert.equal(player.intervalDelay(), 3000);
   const respond = player.holdCommand();
   const first = player.poll();
   await Promise.resolve();

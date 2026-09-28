@@ -874,7 +874,7 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
   ]);
   // 当前补丁标记是 v44（与《使用说明》里写的「FE v44 / WebPlayer v18」一致）；
   // 这里钉住它，改补丁版本时测试会提醒你同步文档
-  assert.match(patchScript, /OliviaSoulPatch:mail-music-v44/u);
+  assert.match(patchScript, /OliviaSoulPatch:mail-music-v45/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v32/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v30/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v29/u);
@@ -961,7 +961,7 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
   assert.match(patchScript, /h\.value==="songlist"/u);
   assert.match(patchScript, /OliviaSoulFinishLocalPlayback\(B\)/u);
   assert.match(patchScript, /p\.value===ot\.Single&&u\.value&&a\(u\.value\)\?M\(u\.value\):U\(\)/u);
-  assert.match(webplayerScript, /OliviaSoulPatch:webplayer-instant-seamless-v18/u);
+  assert.match(webplayerScript, /OliviaSoulPatch:webplayer-instant-seamless-v19/u);
   assert.match(webplayerScript, /\/toy\/player-command/u);
   assert.match(webplayerScript, /\/toy\/player-state/u);
   assert.match(webplayerScript, /sessionId/u);
@@ -1037,7 +1037,7 @@ assert.match(controller, /\["v24", "v25", "v26", "v27", "v28", "v29", "v30", "v3
   assert.doesNotMatch(patchScript, /he\.value\.splice\(0,he\.value\.length,\.\.\.at\.list\)/u);
   assert.match(patchScript, /OliviaSoulSearchComposing/u);
   assert.match(patchScript, /onCompositionstart:OliviaSoulCompositionStart,onCompositionend:OliviaSoulCompositionEnd/u);
-  assert.match(patchScript, /OliviaSoulUploadRefresh=setInterval\(\(\)=>\{Q\.value&&OliviaSoulSilentRefresh\(\)\},5000\)/u);
+  assert.match(patchScript, /OliviaSoulUploadRefresh=setInterval\(\(\)=>\{const vis=typeof document==="undefined"\|\|document\.visibilityState==="visible";if\(vis\)window\.__OliviaSoulUploadSawVisible=!0;if\(window\.__OliviaSoulUploadSawVisible&&!vis\)return;Q\.value&&OliviaSoulSilentRefresh\(\)\},30000\)/u);
   assert.match(patchScript, /OliviaSoulSearchTimer=null,OliviaSoulUploadRefresh=null,OliviaSoulUploadRevision=null/u);
   assert.doesNotMatch(patchScript, /RefreshTo = 'let OliviaSoulUploadRefresh/u);
   assert.match(patchScript, /OliviaSoulUploadRefresh&&\(clearInterval\(OliviaSoulUploadRefresh\),OliviaSoulUploadRefresh=null\)/u);
@@ -1065,8 +1065,8 @@ test("webplayer 补丁精确移除桌面 UID 水印并可从原版备份还原",
     readFile(new URL("../../tools/restore-webplayer-original.ps1", import.meta.url), "utf8"),
   ]);
   const watermark = 'S(n)?(k(),we(l,{key:0,uid:S(n)},null,8,["uid"])):Re("",!0)';
-  assert.match(patch, /OliviaSoulPatch:webplayer-instant-seamless-v18/u);
-  assert.match(status, /OliviaSoulPatch:webplayer-instant-seamless-v18/u);
+  assert.match(patch, /OliviaSoulPatch:webplayer-instant-seamless-v19/u);
+  assert.match(status, /OliviaSoulPatch:webplayer-instant-seamless-v19/u);
   assert.match(status, /OliviaSoulPatch:webplayer-no-watermark-direct-http-progress-v13/u);
   assert.match(status, /OliviaSoulPatch:webplayer-no-watermark-direct-http-progress-v12/u);
   assert.match(status, /OliviaSoulPatch:webplayer-no-watermark-direct-http-progress-v11/u);
@@ -1077,7 +1077,7 @@ test("webplayer 补丁精确移除桌面 UID 水印并可从原版备份还原",
   assert.match(patch, /__OliviaSoulPlayerPollBusy/u);
   assert.match(patch, /__OliviaSoulPlayerPost/u);
   assert.match(patch, /arrayBuffer/u);
-  assert.match(patch, /setInterval\(window\.__OliviaSoulRequestPlayerPoll,1e3\)/u);
+  assert.match(patch, /setInterval\(\(\)=>\{const visible=typeof document==="undefined"\|\|document\.visibilityState==="visible";if\(visible\)window\.__OliviaSoulPlayerPollSawVisible=!0;if\(window\.__OliviaSoulPlayerPollSawVisible&&!visible\)return;window\.__OliviaSoulRequestPlayerPoll\(\)\},3e3\)/u);
   assert.match(patch, /\/toy\/player-command/u);
   assert.match(patch, /\/toy\/player-state/u);
   assert.ok(patch.includes(watermark));
@@ -4227,7 +4227,7 @@ test("管理前端包含视频维护、上方插入和本地服务状态", async
   assert.doesNotMatch(patch, /\$listWaitingCondition|\$listWaitingReply|\$waitingCondition/u);
   assert.match(patch, /\$pollingStateTo/u);
   assert.match(patch, /\$processingIconTo/u);
-  assert.match(patch, /OliviaSoulPatch:mail-music-v44/u);
+  assert.match(patch, /OliviaSoulPatch:mail-music-v45/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v32/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v30/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v29/u);

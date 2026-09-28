@@ -15,7 +15,7 @@ function fixture(){
  const window={__OliviaSoulSongId:'a',__OliviaSoulSessionEpoch:4,__OliviaSoulPendingPlay:{},
   addEventListener:(event,fn)=>listeners[event]=fn,
   OliviaSoulSongEditor:{stableId:item=>item.id,applyMetadata(){},notify:message=>toasts.push(message),playbackMessage:()=> '歌曲暂时无法播放'}};
- const state={window,x:{value:[song]},u:{value:song},f:{value:null},m:{value:true},d:{value:12},queueMicrotask,setInterval(){}};
+ const state={window,x:{value:[song]},u:{value:song},f:{value:null},m:{value:true},d:{value:12},queueMicrotask,setInterval(){},document:{visibilityState:'visible',addEventListener(){},removeEventListener(){}}};
  state.G=()=>{state.m.value=false;state.u.value=state.f.value=null;state.d.value=0};
  vm.runInNewContext(source,state);
  return {state,window,listeners,toasts};

@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)][string]$GameRoot,
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$OriginalFile,
@@ -39,7 +39,7 @@ if ($mainFiles.Count -ne 1) { throw "expected one main-*.js, got $($mainFiles.Co
 $utf8 = New-Object System.Text.UTF8Encoding $false
 $mainPath = $mainFiles[0].FullName
 $text = [IO.File]::ReadAllText($mainPath, $utf8)
-$patchMarker = '/*OliviaSoulPatch:mail-music-v44*/'
+$patchMarker = '/*OliviaSoulPatch:mail-music-v45*/'
 if ($text.Contains($patchMarker)) { throw "original feapp already contains current patch" }
 $text = $patchMarker + $text
 $playerCommandUrl = $ServiceUrl.TrimEnd("/") + "/toy/player-command"
@@ -384,7 +384,7 @@ $text = $text.Replace($midiRemainingFrom, $midiRemainingTo)
 
 $myUploadRefreshFrom = 'He(async()=>{if(w.value){await W().finally(()=>{a.value=!1}),Po();return}await Ua(),await W().finally(()=>{a.value=!1}),Po()});'
 $myUploadRefreshOfflineFrom = 'He(async()=>{if(w.value){a.value=!1;return}await Ua(),await W().finally(()=>{a.value=!1}),Po()});'
-$myUploadRefreshTo = 'He(async()=>{window.addEventListener("oliviasoul-song-metadata",OliviaSoulUploadMetadata),OliviaSoulUploadRefresh=setInterval(()=>{Q.value&&OliviaSoulSilentRefresh()},5000);if(w.value){await W().finally(()=>{a.value=!1}),Po();return}await Ua(),await W().finally(()=>{a.value=!1}),Po()}),Ot(()=>{window.removeEventListener("oliviasoul-song-metadata",OliviaSoulUploadMetadata),OliviaSoulUploadRefresh&&(clearInterval(OliviaSoulUploadRefresh),OliviaSoulUploadRefresh=null),OliviaSoulSearchTimer&&(clearTimeout(OliviaSoulSearchTimer),OliviaSoulSearchTimer=null)});'
+$myUploadRefreshTo = 'He(async()=>{window.addEventListener("oliviasoul-song-metadata",OliviaSoulUploadMetadata),OliviaSoulUploadRefresh=setInterval(()=>{const vis=typeof document==="undefined"||document.visibilityState==="visible";if(vis)window.__OliviaSoulUploadSawVisible=!0;if(window.__OliviaSoulUploadSawVisible&&!vis)return;Q.value&&OliviaSoulSilentRefresh()},30000);if(w.value){await W().finally(()=>{a.value=!1}),Po();return}await Ua(),await W().finally(()=>{a.value=!1}),Po()}),Ot(()=>{window.removeEventListener("oliviasoul-song-metadata",OliviaSoulUploadMetadata),OliviaSoulUploadRefresh&&(clearInterval(OliviaSoulUploadRefresh),OliviaSoulUploadRefresh=null),OliviaSoulSearchTimer&&(clearTimeout(OliviaSoulSearchTimer),OliviaSoulSearchTimer=null)});'
 $myUploadRefreshCount = ([regex]::Matches($text, [regex]::Escape($myUploadRefreshFrom))).Count
 $myUploadRefreshTo = $myUploadRefreshTo.Replace('window.addEventListener("oliviasoul-song-metadata",OliviaSoulUploadMetadata),','window.addEventListener("oliviasoul-song-metadata",OliviaSoulUploadMetadata),window.addEventListener("oliviasoul-songs-removed",OliviaSoulUploadRemoved),')
 $myUploadRefreshTo = $myUploadRefreshTo.Replace('window.removeEventListener("oliviasoul-song-metadata",OliviaSoulUploadMetadata),','window.removeEventListener("oliviasoul-song-metadata",OliviaSoulUploadMetadata),window.removeEventListener("oliviasoul-songs-removed",OliviaSoulUploadRemoved),')
