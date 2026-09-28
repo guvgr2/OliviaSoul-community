@@ -71,7 +71,8 @@
     if (!rows.length) { box.append(node("p", "没有匹配的事件。", "fieldHint")); return; }
     const list = node("ul", null, "ln-diagList");
     for (const item of rows.slice(0, 200)) {
-      const line = node("li");
+      // ln-diagRow：只有时间轴的行才走三列布局；崩溃卡片的 li 是纯文本，保持块级
+      const line = node("li", null, "ln-diagRow");
       line.append(
         node("span", item.at, "ln-diagStage"),
         node("strong", item.type, "ln-diagType"),
@@ -113,7 +114,9 @@
       renderTimeline();
       renderCrashes();
       ui.status.textContent = report?.available
-        ? `读完了：崩溃 ${(report.crashes ?? []).length} 次，热事件 ${(report.timeline ?? []).length} 条`
+        // 说明口径：这里数的是「游戏日志里记到的」，不是崩溃记录目录里的总条数
+        // （日志会轮转，更早的崩溃已经不在里面了），否则两个数字对不上会让人以为程序数错了
+        ? `读完了：游戏日志里记到崩溃 ${(report.crashes ?? []).length} 次（更早的可能已随日志轮转），热事件 ${(report.timeline ?? []).length} 条`
         : (report?.hint ?? "没读到游戏日志");
     } catch (error) {
       ui.status.textContent = `读取失败：${error.message}`;

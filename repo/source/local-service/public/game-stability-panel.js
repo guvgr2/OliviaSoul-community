@@ -58,8 +58,27 @@
       box.append(tip);
     }
 
+    // 实验性标注：这个开关的效果没有保证，必须让人一眼看到，不能让人以为"打开就修好了"
+    const experimental = node("section", null, "settingsBlock ln-diagPending");
+    experimental.append(node("strong", "⚠ 实验性功能，请谨慎使用"));
+    experimental.append(node("p",
+      "这个开关只是把 Chromium 的一个官方开关写进 Steam 启动项，效果没有保证：游戏会给内嵌浏览器"
+      + "重建一份自己的命令行，外部传进去的参数不一定能到那里。它不改动游戏任何文件、随时可以关掉，"
+      + "但请不要把它当成「已经修好了」。", "fieldHint"));
+    box.append(experimental);
+
     if (data.enabled) {
       box.append(node("p", "✓ 已经启用。下次从 Steam 启动游戏时生效。", "result"));
+    }
+
+    // 已经开着、但装开关之后同一处又崩过 —— 直接把结论说出来，别让用户自己猜
+    if (data.flagIneffective) {
+      const verdict = node("section", null, "settingsBlock ln-diagPending");
+      verdict.append(node("strong", "✗ 这个参数没能阻止崩溃"));
+      verdict.append(node("p", `开关装上时间：${String(data.flagIneffective.since).slice(0, 19).replace("T", " ")}（本地时间）`, "fieldHint"));
+      verdict.append(node("p", `之后同一处又崩过：${data.flagIneffective.lastCrashAt}${data.flagIneffective.signature ? "（" + data.flagIneffective.signature + "）" : ""}`, "fieldHint"));
+      verdict.append(node("p", data.flagIneffective.verdict, "fieldHint"));
+      box.append(verdict);
     }
 
     ui.toggle.checked = data.enabled === true;

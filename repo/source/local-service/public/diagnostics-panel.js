@@ -562,7 +562,7 @@
     const crashHead = node("div", null, "settingsBlockHead ln-diagSpacer ln-diagCrash");
     crashHead.append(
       node("strong", "游戏崩溃记录"),
-      node("small", "点下面「解读崩溃报告」→ 读游戏的 crash.txt / crash.dmp，告诉你崩在哪个模块、是不是本程序改过的文件，并生成一段可以发给官方的文本；如果反复崩在同一处，可用下面的「游戏崩溃规避」尝试规避"),
+      node("small", "点下面「解读崩溃报告」→ 读游戏的 crash.txt / crash.dmp，告诉你崩在哪个模块、是不是本程序改过的文件，并生成一段可以发给官方的文本；如果反复崩在同一处，也可以试试下面的「游戏崩溃规避」—— 但它是实验性功能、实测对本游戏无效（参数到不了游戏的内嵌浏览器），程序会在开启后又崩时直接把结论写在那个面板里"),
     );
     const crashActions = node("div", null, "actions");
     const crashButton = node("button", "解读崩溃报告", "secondary");

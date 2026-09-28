@@ -238,9 +238,34 @@
 .ln-diagCard { margin: 0; padding: 10px 12px; }
 .ln-diagCard > strong { display: block; margin-bottom: 6px; font-size: 13px; }
 .ln-diagList { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
-.ln-diagList li { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
+.ln-diagList li { font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
+/* 事件时间轴：固定「时间 | 类型 | 正文」三列。
+   以前 .ln-diagType 没有任何规则，被 flex 压到最小宽度，中文就逐字竖排（"壁/纸/重/同/步"）。 */
+.ln-diagRow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.ln-diagRow:nth-child(odd) { background: rgba(255, 255, 255, 0.022); }
+.ln-diagStage {
+  flex: 0 0 auto;
+  width: 104px;
+  color: #8ab4f8;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.ln-diagType {
+  flex: 0 0 auto;
+  min-width: 74px;
+  color: #e8eaed;
+  font-size: 12px;
+  white-space: nowrap;   /* 整词显示，绝不逐字竖排 */
+}
+.ln-diagRow > small { flex: 1 1 auto; min-width: 0; color: #9aa0a6; font-size: 12px; }
 .ln-diagList small { color: #7f7f87; font-size: 11px; }
-.ln-diagStage { min-width: 132px; color: #8ab4f8; font-family: Consolas, "Courier New", monospace; font-size: 12px; }
 .ln-diagChips { display: flex; flex-wrap: wrap; gap: 6px; }
 .ln-diagChips .ln-chip[data-kind="fault"] { color: #e48c87; }
 

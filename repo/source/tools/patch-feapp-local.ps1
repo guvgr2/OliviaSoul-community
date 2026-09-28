@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Mandatory = $true)][string]$GameRoot,
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$OriginalFile,
@@ -97,7 +97,12 @@ function OliviaSoulCaptureStoppedPlayback(state){
   if(!window.__OliviaSoulStoppedPlayback)window.__OliviaSoulStoppedPlayback={songId:window.__OliviaSoulSongId,sessionId:window.__OliviaSoulSessionId,playing:m.value};
 }
 window.addEventListener('oliviasoul-songs-removed',event=>OliviaSoulForgetRemoved(event.detail.ids));
-setInterval(async()=>{
+let OliviaSoulSawVisible=document.visibilityState==="visible";
+const OliviaSoulSyncTitles=async()=>{
+  // 生效前提：只有"曾经见过可见状态"才按可见性跳过。
+  // 游戏的 CEF 是多视图的，某些视图可能一直报 hidden —— 那种情况下不能跳过，
+  // 否则"改完曲名游戏里不同步"这个功能会被直接弄坏。
+  if(OliviaSoulSawVisible&&document.visibilityState!=="visible")return;
   if(OliviaSoulTitleBusy)return;
   const records=[u.value,f.value,...x.value].filter(item=>String(item&&item.videoUrl||"").includes("/toy/midi/songs/"));
   const ids=[...new Set(records.map(item=>window.OliviaSoulSongEditor.stableId(item)))],epoch=OliviaSoulTitleEpoch;
@@ -108,7 +113,12 @@ setInterval(async()=>{
       else if(response.status===404&&body.code==='MIDI_SONG_NOT_FOUND')OliviaSoulForgetRemoved([id]);
     }catch{}
   }))}finally{OliviaSoulTitleBusy=false}
-},5000);
+};
+// 原来这里是 setInterval(...,5000)：每 5 秒一轮、且完全不看窗口是否在前台，
+// 只要游戏开着就一直在发请求（实测游戏每小时向本地服务发 240 次以上）。
+// 曲名同步是给人看的，30 秒一轮足够；回到前台时立刻补一次。
+setInterval(OliviaSoulSyncTitles,30000);
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"){OliviaSoulSawVisible=true;OliviaSoulSyncTitles()}});
 '@
 $songTitleSync = $songTitleSync.Replace('__OLIVIA_SONG_EDITOR_BASE__', $songEditorBase)
 $endpoints = @(

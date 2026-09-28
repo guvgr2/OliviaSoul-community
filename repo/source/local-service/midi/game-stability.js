@@ -7,7 +7,7 @@
 // 本模块**只改 Steam 启动项里的一个参数**：不改游戏任何文件、随时可关、可完全还原，
 // 并且直接复用 steam-launch-options.mjs 里那套"备份 + 清单 + 原子替换"的安全写入。
 import { readFile } from "node:fs/promises";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -193,11 +193,39 @@ async function crashSummary() {
       total: items.length,
       sameModule: same.length,
       lastAt: items[0]?.at ?? "",
+      // 同一处崩溃里最新的一次 —— 用来判断"开关打开之后是不是还在崩"
+      lastSameAt: same[0]?.at ?? "",
       signature: same[0]?.exception ? `${same[0].exception.module} + ${same[0].exception.moduleOffset}` : "",
     };
   } catch {
-    return { total: 0, sameModule: 0, lastAt: "", signature: "" };
+    return { total: 0, sameModule: 0, lastAt: "", lastSameAt: "", signature: "" };
   }
+}
+
+/**
+ * 开关是什么时候装上的：看 Steam 启动项备份文件的写入时间。
+ * 关闭开关时程序会把备份删掉（见 configureGameFlag 的隐私处理），所以"开着就有备份"。
+ */
+function flagInstalledAt(userDataDir) {
+  // 备份目录就在 <UserData>\Backups\steam-launcher（不要再往上取一层）
+  const dir = join(String(userDataDir ?? ""), "Backups", "steam-launcher");
+  try {
+    if (!existsSync(dir)) return "";
+    let newest = 0;
+    for (const name of readdirSync(dir)) {
+      try { newest = Math.max(newest, statSync(join(dir, name)).mtimeMs); } catch { /* 忽略 */ }
+    }
+    return newest ? new Date(newest).toISOString() : "";
+  } catch {
+    return "";
+  }
+}
+
+/** 把 "YYYY-MM-DD HH:MM:SS.mmm"（崩溃记录的时间格式）转成可比较的时间戳。 */
+function crashTimeMs(value) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?/u.exec(String(value ?? ""));
+  if (!m) return 0;
+  return new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}.${(m[7] ?? "0").padEnd(3, "0")}+08:00`).getTime();
 }
 
 // ---------------------------------------------------------------- 对外接口
@@ -232,12 +260,27 @@ export async function gameStabilityStatus({ databasePath, steamRoot } = {}) {
   let editableReason = "";
   try { editor.buildFlagOptions(current, STABILITY_FLAG, current.split(/\s+/u).includes(STABILITY_FLAG)); }
   catch (error) { editable = false; editableReason = String(error?.message ?? error); }
+  const enabled = current.split(/\s+/u).includes(STABILITY_FLAG);
+  // 开关开着、而且"装开关之后同一处又崩过" —— 这是最该直接说出来的结论，
+  // 否则用户只能自己猜"到底生效没有"。判定用的是崩溃记录时间 vs 开关备份文件时间。
+  const installedAt = enabled ? flagInstalledAt(found.userDataDir) : "";
+  const installedMs = installedAt ? Date.parse(installedAt) : 0;
+  const flagIneffective = enabled && installedMs > 0 && crashTimeMs(crashes.lastSameAt) > installedMs
+    ? {
+      since: installedAt,
+      lastCrashAt: crashes.lastSameAt,
+      signature: crashes.signature,
+      verdict: "这个参数没能阻止崩溃：装开关之后同一处又崩过。实测游戏会给内嵌浏览器重建一份命令行，"
+        + "外部传进去的参数到不了那里，所以换别的启动参数同样不会有效。",
+    }
+    : null;
   return {
     supported: true, flag: STABILITY_FLAG, feature: FEATURE_NAME,
     appId: found.appId, configPath: found.configPath, toolPath,
     gameRoot: found.gameRoot,
     launchOptions: current,
-    enabled: current.split(/\s+/u).includes(STABILITY_FLAG),
+    enabled,
+    flagIneffective,
     editable,
     editableReason,
     crashes,
