@@ -160,12 +160,21 @@ async function assertSafeOptionalStagingPath(dataDir, staged) {
   }
 }
 
-export async function planVerifiedOptionalClientBackups({ layout, dataDir, appData, roamingAppData = process.env.APPDATA }) {
+export async function planVerifiedOptionalClientBackups({ layout, dataDir, appData, roamingAppData = process.env.APPDATA, localAppData = process.env.LOCALAPPDATA }) {
   const key = createHash('md5').update(`${layout.gameRoot.toLowerCase()}\n${layout.version.toLowerCase()}`).digest('hex');
   const managed = join(dataDir, 'client-backups'), staged = join(managed, 'resources-only', key);
   await assertSafeOptionalStagingPath(dataDir, staged);
-  const dirs = [...new Set([staged, managed, appData && join(appData, 'client-backups'), roamingAppData && join(roamingAppData, 'OliviaSoul', 'client-backups')]
-    .filter(Boolean).map(path => resolve(path)))];
+  // g19：备份是「同一台机器 + 同一个游戏文件」的原版副本，跟哪个实例建的无关。
+  // 便携版每次新版都解压到新目录 → 新数据目录里没有备份，更新补丁会直接失败；
+  // 所以查找范围要覆盖用户级共享目录与安装版的默认数据目录。
+  const sharedBackups = roamingAppData && join(roamingAppData, 'OliviaSoul', 'client-backups');
+  const dirs = [...new Set([
+    staged, managed,
+    appData && join(appData, 'client-backups'),
+    sharedBackups,
+    localAppData && join(localAppData, 'OliviaSoul', 'client-backups'),
+    localAppData && join(localAppData, 'Programs', 'OliviaSoul', 'UserData', 'database', 'client-backups'),
+  ].filter(Boolean).map(p => resolve(p)))];
   const { plans, files } = await planVerifiedNativeBackups({ layout, dirs, staged });
   return { dataDir: resolve(dataDir), staged, layout: { ...layout }, dirs, plans, files };
 }
@@ -191,12 +200,22 @@ export async function stageVerifiedOptionalClientBackups(options) {
   return commitVerifiedOptionalClientBackups(plan);
 }
 
-export async function resolveClientBackups({ layout, dataDir, appData, roamingAppData = process.env.APPDATA, createOnMount = false, readFeappStatus, readWebplayerStatus }) {
+export async function resolveClientBackups({ layout, dataDir, appData, roamingAppData = process.env.APPDATA, localAppData = process.env.LOCALAPPDATA, createOnMount = false, readFeappStatus, readWebplayerStatus }) {
   const key = createHash('md5').update(`${layout.gameRoot.toLowerCase()}\n${layout.version.toLowerCase()}`).digest('hex');
   const oldKey = createHash('md5').update(layout.gameRoot.toLowerCase()).digest('hex');
   const managed = join(dataDir, 'client-backups');
   const staged = join(managed, 'resources-only', key);
-  const dirs = [...new Set([staged, managed, appData && join(appData, 'client-backups'), roamingAppData && join(roamingAppData, 'OliviaSoul', 'client-backups')].filter(Boolean).map(p => resolve(p)))];
+  // g19：备份是「同一台机器 + 同一个游戏文件」的原版副本，跟哪个实例建的无关。
+  // 便携版每次新版都解压到新目录 → 新数据目录里没有备份，更新补丁会直接失败；
+  // 所以查找范围要覆盖用户级共享目录与安装版的默认数据目录。
+  const sharedBackups = roamingAppData && join(roamingAppData, 'OliviaSoul', 'client-backups');
+  const dirs = [...new Set([
+    staged, managed,
+    appData && join(appData, 'client-backups'),
+    sharedBackups,
+    localAppData && join(localAppData, 'OliviaSoul', 'client-backups'),
+    localAppData && join(localAppData, 'Programs', 'OliviaSoul', 'UserData', 'database', 'client-backups'),
+  ].filter(Boolean).map(p => resolve(p)))];
   const [stagedFe, stagedWp] = await Promise.all(['feapp', 'webplayer'].map(kind => exists(join(staged, `${key}.${kind}.dat`))));
   if (stagedFe !== stagedWp) throw new Error('backup staging incomplete pair conflict');
   // An already registered pair is independent of external originals. Selection
@@ -234,7 +253,10 @@ export async function resolveClientBackups({ layout, dataDir, appData, roamingAp
         .map(field => `${field}=${diagnostic[field].value}:${diagnostic[field].type}`);
       if (info.patched) reasons.push('archiveMarker=true');
       if (source === 'current' && info.patched) {
-        throw Object.assign(new Error(`检测到旧补丁或补丁残留，未找到可用的干净原始备份。请退出游戏和本软件，在 Steam 验证游戏文件完整性后重新启用；请保留现有备份。backup original is invalid or patched: ${filename}; ${reasons.join(',')}`), {code:'CLIENT_ORIGINAL_RECOVERY_REQUIRED'});
+        throw Object.assign(new Error(`检测到旧补丁或补丁残留，而本机没有找到可用的干净原始备份（原文：backup original is invalid or patched: ${filename}; ${reasons.join(',')}）。`
+          + `如果你在另一个 OliviaSoul 目录（安装版，或旧版便携包）里打过补丁，把它的 UserData\\database\\client-backups 整个文件夹复制到下面任一位置再重试即可：`
+          + `${dirs.join('；')}。`
+          + `实在没有备份时，退出游戏与本软件，在 Steam 里对游戏执行「验证文件完整性」，再回到这里重新启用（只会重新下载被改过的那两个文件）。`), {code:'CLIENT_ORIGINAL_RECOVERY_REQUIRED'});
       }
       throw new Error(`backup original is invalid or patched: ${filename}; ${reasons.join(',')}`.slice(0, 220));
     }
@@ -279,12 +301,19 @@ export async function resolveClientBackups({ layout, dataDir, appData, roamingAp
   if (!feapp) throw new Error('backup FE original missing for current version');
   let webplayer = await exact('webplayer', readWebplayerStatus, currentWp);
   if (!webplayer) {
+    // g19：先按旧命名（md5(gameRoot)，不含版本）在所有候选目录里找成对的 feapp+webplayer 备份。
+    // 便携版换目录后，原版备份往往就是这种旧命名、且躺在用户级目录或安装版数据目录里。
+    const matches = [];
+    const pairs = [];
+    for (const dir of dirs.slice(1)) pairs.push([join(dir, `${oldKey}.feapp.dat`), join(dir, `${oldKey}.webplayer.dat`)]);
     let files = [];
     try { files = await readdir(managed); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    const matches = [];
-    for (const name of files.filter(n => /^[a-f0-9]{32}\.feapp\.dat$/u.test(n) && n !== `${key}.feapp.dat`)) {
-      const fePath = join(managed, name), wpPath = join(managed, name.replace('.feapp.dat', '.webplayer.dat'));
-      if (!(await exists(fePath)) || hash(await readFile(fePath)) !== feapp.hash || !(await exists(wpPath))) continue;
+    for (const name of files.filter(n => /^[a-f0-9]{32}\.feapp\.dat$/u.test(n) && n !== `${key}.feapp.dat` && n !== `${oldKey}.feapp.dat`)) {
+      pairs.push([join(managed, name), join(managed, name.replace('.feapp.dat', '.webplayer.dat'))]);
+    }
+    for (const [fePath, wpPath] of pairs) {
+      if (!(await exists(fePath)) || !(await exists(wpPath))) continue;
+      if (hash(await readFile(fePath)) !== feapp.hash) continue;
       await clean(fePath, readFeappStatus);
       const info = await clean(wpPath, readWebplayerStatus);
       if (!sameIdentity(info, currentWp)) throw new Error('backup WP archive identity mismatch');
@@ -325,6 +354,20 @@ export async function resolveClientBackups({ layout, dataDir, appData, roamingAp
   for (const [kind, info] of Object.entries({ feapp, webplayer })) {
     try { await writeFile(result[kind], info.bytes, { flag: 'wx' }); }
     catch (error) { if (error.code !== 'EEXIST' || !(await exists(result[kind])) || hash(await readFile(result[kind])) !== info.hash) throw error; }
+  }
+  // g19：再往用户级共享目录留一份。便携版换目录、或改用安装版时，靠这份就能找到原版，
+  // 不必再让用户去 Steam 验证文件完整性。共享目录写不进去（权限等）不影响主流程。
+  if (sharedBackups) {
+    try {
+      await mkdir(sharedBackups, { recursive: true });
+      for (const [kind, info] of Object.entries({ feapp, webplayer })) {
+        const target = join(sharedBackups, `${key}.${kind}.dat`);
+        if (await exists(target)) continue;
+        await writeFile(target, info.bytes, { flag: 'wx' });
+      }
+    } catch (error) {
+      console.error(`[client-backup] shared copy skipped: ${error instanceof Error ? error.message : error}`);
+    }
   }
   for (const item of optionalToStage) await atomicStage(item.path, item.bytes);
   return result;
