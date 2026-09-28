@@ -226,16 +226,27 @@
         const data = await api("/community/contribution/build", { method: "POST", body: JSON.stringify({}) });
         openUrl = (data && data.openUrl) || openUrl;
         open.disabled = !openUrl;
-        file.textContent = (data && data.file) || "";
+        const parts = Array.isArray(data?.parts) ? data.parts : [];
+        // 拆成多份时，把每份文件名都摆出来；否则只显示那一个文件
+        file.textContent = parts.length > 1
+          ? `${(data && data.outboxDir) || ""}\\${parts.map(part => part.fileName).join("、")}`
+          : ((data && data.file) || "");
         lastContent = String((data && data.content) || "");
         copy.disabled = !lastContent;
         contentBox.textContent = lastContent;
         contentBox.hidden = true;
         renderDisclosure(data);
-        result.textContent = `已生成投稿文件：${(data && data.count) ?? 0} 首，${Math.round(((data && data.bytes) || 0) / 1024)} KB。`
-          + (lastContent
-            ? "先点「复制文件内容」，再点「打开提交页面」，粘贴到输入框后提交即可。"
-            : "文件较大未内嵌显示；请在下方路径找到文件后复制其内容。");
+        if (parts.length > 1) {
+          result.textContent = `已生成投稿文件：${(data && data.count) ?? 0} 首，${Math.round(((data && data.bytes) || 0) / 1024)} KB —— `
+            + `超过 GitHub 单条 issue 正文上限（65536 字符），已自动拆成 ${parts.length} 份。`
+            + `请每份单独开一条 issue：「复制文件内容」复制的是第 1 份，其余在下面路径里逐个打开复制；`
+            + `也可以直接把完整文件放进仓库的 data/inbox/ 提交。`;
+        } else {
+          result.textContent = `已生成投稿文件：${(data && data.count) ?? 0} 首，${Math.round(((data && data.bytes) || 0) / 1024)} KB。`
+            + (lastContent
+              ? "先点「复制文件内容」，再点「打开提交页面」，粘贴到输入框后提交即可。"
+              : "文件较大未内嵌显示；请在下方路径找到文件后复制其内容。");
+        }
         await loadCounts();
       } catch (error) {
         result.textContent = `生成失败：${error.message}`;

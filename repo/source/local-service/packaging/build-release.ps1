@@ -24,7 +24,7 @@ function Step-Mark([string]$Name) {
 }
 
 $baseVersion = "2008.2.7"
-$version = "2008.2.7-linli9-g17"
+$version = "2008.2.7-linli9-g18"
 $packagePath = Join-Path $project "package.json"
 $packageText = [IO.File]::ReadAllText($packagePath, $utf8NoBom)
 $package = $packageText | ConvertFrom-Json

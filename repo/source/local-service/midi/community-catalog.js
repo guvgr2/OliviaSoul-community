@@ -63,6 +63,11 @@ export const CONTRIBUTION_LOG_VERSION = 1;
 // 提交入口：仓库固定为 guvgr2/OliviaSoul-community，走 Issue 模板；用户自己点开、自己贴内容，程序绝不自动上传。
 export const CONTRIBUTION_TEMPLATE_URL = "https://github.com/guvgr2/OliviaSoul-community/issues/new?template=song_title.md";
 
+// GitHub 对「预填/粘贴进 issue 正文」的内容上限是 65536 字符，超了就直接拒收
+// （页面报 "Body can not be longer than 65536 characters"）。每首曲目约 1.6 KB，
+// 所以一百多首必然爆。这里留出余量，超过就自动拆成多份文件。
+export const GITHUB_ISSUE_BODY_LIMIT = 65536;
+export const CONTRIBUTION_BODY_SAFE_LIMIT = 60000;
 const HTTP_TIMEOUT_MS = 30_000;
 const MAX_CATALOG_BYTES = 8 * 1024 * 1024;
 // 算指纹要逐首解码音频（每首 3 段 × 60 秒），很慢：一次请求只补算一小批，剩下的由前端再叫一次。
@@ -1180,21 +1185,62 @@ export async function buildContributionFile(options = {}) {
     throw httpError(409, `没有可投稿的内容：${reason}`, "COMMUNITY_NOTHING_TO_SUBMIT");
   }
 
-  const document = {
+  const metaDocument = {
     version: CATALOG_VERSION,
     algo: FP_ALGO,
     algoVersion: FP_VERSION,
     segments: FP_SEGMENTS,
-    entries,
   };
-  const fileName = `contribution-${stamp()}.json`;
-  const file = join(context.outboxDir, fileName);
+
+  // 按「实际序列化后的长度」贪心装填：GitHub 正文上限 65536 字符，超了会被直接拒收。
+  // 不用"平均长度估算"是因为文件是美化输出的，每条还会多出缩进，估算容易压线；
+  // 这里每加一条就真序列化一次量长度，保证每一份都不超。
+  const entryKeys = Object.keys(entries);
+  const groups = [];
+  let current = [];
+  for (const key of entryKeys) {
+    const candidate = current.concat(key);
+    const subset = {};
+    for (const k of candidate) subset[k] = entries[k];
+    const candidateLength = JSON.stringify({ ...metaDocument, entries: subset }, null, 2).length;
+    if (current.length && candidateLength > CONTRIBUTION_BODY_SAFE_LIMIT) {
+      groups.push(current);
+      current = [key];
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.length) groups.push(current);
+
+  const fileStamp = stamp();
   await mkdir(context.outboxDir, { recursive: true });
-  const text = `${JSON.stringify(document, null, 2)}\n`;
-  await writeFile(file, text, "utf8");
+  const parts = [];
+  let primaryText = "";
+  for (let index = 0; index < groups.length; index += 1) {
+    const subset = {};
+    for (const key of groups[index]) subset[key] = entries[key];
+    const partName = groups.length > 1
+      ? `contribution-${fileStamp}-part${String(index + 1).padStart(2, "0")}.json`
+      : `contribution-${fileStamp}.json`;
+    const partFile = join(context.outboxDir, partName);
+    const partText = `${JSON.stringify({ ...metaDocument, entries: subset }, null, 2)}\n`;
+    if (index === 0) primaryText = partText;
+    await writeFile(partFile, partText, "utf8");
+    parts.push({
+      fileName: partName,
+      file: partFile,
+      count: Object.keys(subset).length,
+      chars: partText.length,
+      bytes: Buffer.byteLength(partText, "utf8"),
+    });
+  }
+  const primary = parts[0];
+  const fileName = primary.fileName;
+  const file = primary.file;
+  const text = `${JSON.stringify({ ...metaDocument, entries }, null, 2)}\n`;
 
   // 本机记录：这些编号已经投稿（只是本地标记，用户随时可以再生成一份）
-  await markContributionSubmitted(chosen, { file: fileName }, options);
+  await markContributionSubmitted(chosen, { file: fileName, parts: parts.length }, options);
 
   return {
     file,
@@ -1203,10 +1249,19 @@ export async function buildContributionFile(options = {}) {
     bytes: Buffer.byteLength(text, "utf8"),
     openUrl: CONTRIBUTION_TEMPLATE_URL,
     outboxDir: context.outboxDir,
+    parts,
+    partCount: parts.length,
+    partLimit: CONTRIBUTION_BODY_SAFE_LIMIT,
+    warning: parts.length > 1
+      ? `共 ${count} 首，超过 GitHub 单条 issue 正文上限（${GITHUB_ISSUE_BODY_LIMIT} 字符），已自动拆成 ${parts.length} 份：`
+        + "每份单独开一条 issue 粘贴，或者直接把完整文件放进仓库的 data/inbox/。"
+      : "",
     // g11 可核验闭环：把刚写出的内容原样回传，让用户先看清"要公开什么"，再复制去提交。
     // 只回传这一份文件本身（全是自己填的曲名 + 指纹），不含任何路径与账号信息。
-    content: text.length <= CONTRIBUTION_CONTENT_LIMIT ? text : "",
-    contentTruncated: text.length > CONTRIBUTION_CONTENT_LIMIT,
+    // 回传给界面预览/复制的，是"第一份"而不是全部：拆过之后完整内容粘不进 issue，
+    // 回传第一份才能让「复制文件内容」按钮直接可用。
+    content: primaryText,
+    contentTruncated: false,
     contentPreview: chosen.slice(0, 10).map(item => ({
       folder: item.folder,
       name: item.name,
