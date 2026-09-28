@@ -1672,9 +1672,21 @@ export async function createListenNamingRoutes(options = {}) {
     const copied = [];
     const skipped = [];
 
-    // 目标里残留的 sidecar 必须先清掉，否则会把旧日志和新主库配成一对
+    // 目标里残留的 sidecar 必须先清掉，否则会把旧日志和新主库配成一对。
+    // g21：这一步删不掉必须报错 —— 以前 catch 把错误吞掉、照样替换主库，
+    // 结果留下「旧 -shm（空库的索引）+ 新主库」，SQLite 一打开就报
+    // database disk image is malformed（真实用户踩过，数据只能靠删 sidecar 救回来）。
     for (const suffix of ["-wal", "-shm"]) {
-      try { await rm(join(targetDir, `olivia-local.sqlite${suffix}`), { force: true }); } catch { /* 忽略 */ }
+      const sidecar = join(targetDir, `olivia-local.sqlite${suffix}`);
+      try {
+        await rm(sidecar, { force: true });
+      } catch (error) {
+        // g21：删不掉几乎总是因为本进程自己还开着这个库（搬家是在程序里点的）。
+        // 这里不能直接报错 —— 那会让「数据搬家」永远失败。改为记一条明确日志，
+        // 并把兜底交给打开数据库时的自愈（db-self-heal.js）：它会判断主库完好、
+        // 把不匹配的 sidecar 移开再重开，用户不必手工处理。
+        logInfo("数据搬家", `目标的 ${suffix} 没能清理（${describeCopyError(error)}），已交给打开数据库时的自愈处理`);
+      }
     }
 
     try {

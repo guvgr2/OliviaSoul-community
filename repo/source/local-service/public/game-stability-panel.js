@@ -137,7 +137,7 @@
     const head = node("div", null, "settingsBlockHead");
     head.append(
       node("strong", "游戏崩溃规避"),
-      node("small", "游戏内嵌 Chromium 在固定一处空指针崩溃（已复现多次）。Chromium 对这个缺陷有官方开关，程序可以把它写进 Steam 启动项 —— 不改游戏任何文件，随时可关"),
+      node("small", "游戏内嵌 Chromium 在固定一处空指针崩溃（已复现多次）。这个开关经实测对本游戏【没有效果】（游戏会重建内嵌浏览器的命令行，从 Steam 启动项传进去的参数到不了那里，换其它 Chromium 开关同理）；下面已标注为实验性。想弄清是不是本机环境（内存 / 内核驱动）导致的，去「高级设置 → 诊断 → 本机体检」"),
     );
 
     const actions = node("div", null, "actions");

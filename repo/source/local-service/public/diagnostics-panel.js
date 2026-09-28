@@ -502,6 +502,35 @@
     }
   }
 
+  // g21 ①：本机体检结果的展示（内存 / 内核池 / 页面文件 / 常驻进程 / 崩溃概览）。
+  // 结论是参考信息：面板上标了「实验性」，数据只在本机显示、不上传。
+  function renderSystemCheck(data) {
+    const wrap = node("div");
+    const system = data && data.system ? data.system : {};
+    const crashes = data && data.crashes ? data.crashes : {};
+    const memory = system.memory || {};
+    const pool = system.kernelPool || {};
+    if (system.error) wrap.append(node("p", `没取到系统状态：${system.error}`, "fieldHint"));
+    if (memory.availableMB != null) wrap.append(node("p", `可用物理内存：${memory.availableMB} MB（本机共 ${memory.totalMB != null ? memory.totalMB : "?"} MB）`));
+    if (memory.commitPercent != null) wrap.append(node("p", `提交内存：${memory.commitPercent}%（已用 ${memory.committedMB} MB，上限 ${memory.commitLimitMB} MB）`));
+    if (pool.nonpagedMB != null) {
+      wrap.append(node("p", `内核非分页池：${pool.nonpagedMB} MB`));
+      if (pool.note) wrap.append(node("p", pool.note, "fieldHint"));
+    }
+    if (system.pageFile && system.pageFile.totalGB != null) wrap.append(node("p", `页面文件：${system.pageFile.totalGB} GB`));
+    if (system.uptimeHours != null) wrap.append(node("p", `已开机：${system.uptimeHours} 小时`));
+    const known = system.processes && Array.isArray(system.processes.known) ? system.processes.known : [];
+    if (known.length) {
+      wrap.append(node("p", "常驻进程（只列与本程序、游戏相关的）："));
+      for (const item of known.slice(0, 8)) wrap.append(node("p", `　${item.name} × ${item.count}，提交 ${item.commitMB} MB`, "fieldHint"));
+    }
+    if (crashes.total != null) wrap.append(node("p", `游戏崩溃记录：${crashes.total} 次${crashes.lastAt ? `，最近一次 ${crashes.lastAt}` : ""}`));
+    const warnings = system.warnings && Array.isArray(system.warnings) ? system.warnings : [];
+    for (const text of warnings) wrap.append(node("p", `⚠ ${text}`, "fieldHint"));
+    if (!wrap.childNodes.length) wrap.append(node("p", "没有取到可显示的信息（可能是系统权限限制）", "fieldHint"));
+    return wrap;
+  }
+
   function buildPanel() {
     const box = node("section", null, "settingsBlock ln-diagnostics");
     const head = node("div", null, "settingsBlockHead");
@@ -509,6 +538,29 @@
       node("strong", "诊断"),
       node("small", "启动慢在哪 · 曲库有没有脏数据 · 游戏崩在哪；要给作者报障，用下面的「一键诊断包」"),
     );
+
+    // g21 ①：本机体检放在诊断页最上面 —— 它直接回答「游戏为什么崩、是不是本程序的问题」。
+    const checkBox = node("section", null, "settingsBlock ln-diagSystem");
+    checkBox.append(
+      node("strong", "本机体检（实验性）"),
+      node("small", "内存 / 内核内存池 / 页面文件 / 常驻进程 + 崩溃概览。结论只是参考，数据只在本机显示、不会上传", "fieldHint"),
+    );
+    const checkActions = node("div", null, "actions");
+    const checkButton = node("button", "一键体检", "secondary");
+    checkButton.type = "button";
+    checkActions.append(checkButton);
+    const checkOut = node("div", null, "ln-diagOut");
+    checkBox.append(checkActions, checkOut);
+    checkButton.addEventListener("click", async () => {
+      checkButton.disabled = true;
+      checkOut.replaceChildren(node("p", "正在读取本机状态（约 1~2 秒）…", "fieldHint"));
+      try {
+        const data = await api("/diagnostics/system");
+        checkOut.replaceChildren(renderSystemCheck(data));
+      } catch (error) {
+        checkOut.replaceChildren(node("p", `体检失败：${error && error.message ? error.message : error}`, "fieldHint"));
+      } finally { checkButton.disabled = false; }
+    });
 
     // g13：这一页很长，先给一条"本页目录 + 直达按钮"，新用户才不会以为诊断只有上面几块
     const navBox = node("section", null, "settingsBlock ln-diagNav");

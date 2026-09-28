@@ -32,7 +32,7 @@
   function renderItems(host, data) {
     host.replaceChildren();
     if (!data.items || !data.items.length) {
-      host.append(node("p", "没有在本机找到其它 OliviaSoul 数据目录。", "fieldHint"));
+      host.append(node("p", "没有在本机找到其它 OliviaSoul 数据目录。如果你确定用过旧版，留意它可能被解压在别的盘符根目录（本功能只扫盘根下一层）。", "fieldHint"));
       return;
     }
     for (const item of data.items) {
@@ -80,7 +80,7 @@
     const head = node("div", null, "settingsBlockHead");
     head.append(
       node("strong", "数据搬家"),
-      node("small", "如果本机还装过别的 OliviaSoul，可以把那份数据复制到当前安装来（只读探测，复制前会先备份）"),
+      node("small", "如果本机还装过别的 OliviaSoul（含旧版便携包），可以把那份数据复制到当前安装来。换了新版、重装之后曲名 / 时段 / 信件看着不见了，多半就是数据目录变了，用这里搬回来（只读探测，复制前会先备份）"),
     );
     const actions = node("div", null, "actions");
     const scan = node("button", "扫描本机其它安装", "secondary");

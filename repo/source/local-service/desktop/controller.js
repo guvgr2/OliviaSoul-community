@@ -471,7 +471,20 @@ export class DesktopController {
           throw error;
         }
         await this.changeServicePort(port);
-        return this.clientStage("read-after", () => this.getClientStatus());
+        const after = await this.clientStage("read-after", () => this.getClientStatus());
+        // g21 ③：更新后自检 —— 补丁写进去了不代表生效（marker 对了但端点不全的情况真实存在）。
+        // 自检不过就还原到更新前的状态，并把原因说清楚，免得用户带着半套补丁去启动游戏。
+        if (after.updateAvailable === true) {
+          await this.clientWrite(join(this.root, "tools", "restore-feapp-original.ps1"), [
+            "-GameRoot", layout.gameRoot, "-Version", layout.version, "-OriginalFile", originalFile,
+            ...await this.nativeRestoreArgs(layout, originalFile),
+          ]);
+          if (!keepWebplayer) await this.clientWrite(join(this.root, "tools", "restore-webplayer-original.ps1"), [
+            "-GameRoot", layout.gameRoot, "-Version", layout.version, "-OriginalFile", originalWebplayer,
+          ]);
+          throw new Error(`更新后自检未通过：补丁仍显示「可更新」（界面 ${after.feappRevision ?? "未知"}，播放器 ${after.webplayerRevision ?? "未知"}），已还原到更新前的状态。`);
+        }
+        return after;
       }
       if (port !== this.currentPort) await assertPortAvailable(port);
       const upgradeScript = join(this.root, "tools", ["v22", "v23"].includes(current.revision)

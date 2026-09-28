@@ -24,7 +24,7 @@ function Step-Mark([string]$Name) {
 }
 
 $baseVersion = "2008.2.7"
-$version = "2008.2.7-linli9-g20"
+$version = "2008.2.7-linli9-g21"
 $packagePath = Join-Path $project "package.json"
 $packageText = [IO.File]::ReadAllText($packagePath, $utf8NoBom)
 $package = $packageText | ConvertFrom-Json
@@ -385,17 +385,24 @@ if (Test-Path -LiteralPath $nodeModules) {
 }
 Copy-Item -LiteralPath (Join-Path $project "public") -Destination (Join-Path $stage "app\public") -Recurse -Force
 Ensure-Directory (Join-Path $stage "app\midi")
-foreach ($name in @(
+$midiModules = @(
     "store.js", "routes.js", "song-metadata.js", "song-preview-source.js", "song-name-corrections.js",
     "playback-clock.js", "library-importer.js", "library-removal.js", "library-sources.js", "library-watch.js", "media-probe.js", "duration-repair.js",
     "process-runner.js", "catalog-manifest.js", "catalog-relink.js",
     # --- 本分支新增的后端模块（漏了它们，装出来的程序接口会全部 404）---
     "listen-naming.js", "time-of-day.js", "community-catalog.js", "fingerprint.js", "dependency-check.js", "logs.js",
     # --- g13 新增 ---
-    "startup-report.js", "diagnostic-package.js", "crash-report.js", "game-log.js", "data-safety.js", "sqlite-snapshot.js", "game-stability.js"
-)) {
+    "startup-report.js", "diagnostic-package.js", "crash-report.js", "game-log.js", "data-safety.js", "sqlite-snapshot.js", "game-stability.js",
+    "system-probe.js", "db-self-heal.js"
+)
+foreach ($name in $midiModules) {
     Copy-Item -LiteralPath (Join-Path (Join-Path $project "midi") $name) -Destination (Join-Path $stage "app\midi") -Force
 }
+# g21：反向检查 —— midi 目录里有 .js 没被列进清单，就说明这里漏了。
+# 漏掉的后果是包内 import 不到那个模块，app 直接起不来（g21 第一版打包踩过）。
+$midiMissing = @(Get-ChildItem -LiteralPath (Join-Path $project "midi") -Filter "*.js" -File |
+    Where-Object { $midiModules -notcontains $_.Name } | ForEach-Object { $_.Name })
+if ($midiMissing.Count -gt 0) { Write-Warning "midi 目录里有未列入打包清单的模块（若它们被 import，打包就会漏）：$($midiMissing -join '、')" }
 foreach ($name in @(
     "controller.js",
     "node-host.js",

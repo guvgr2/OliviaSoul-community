@@ -20,6 +20,8 @@ import { crashReport } from "./crash-report.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const INSTALL_ROOT = resolve(here, "..", "..");
+import { probeSystem } from "./system-probe.js";
+
 const USER_DATA = process.env.OLIVIA_USER_DATA || join(INSTALL_ROOT, "UserData");
 const OUT_DIR = join(USER_DATA, "diagnostics");
 const APPDATA = process.env.APPDATA || "";
@@ -236,12 +238,14 @@ async function collect() {
   const scrub = text => scrubWith(paths, text);
   const dbPath = join(USER_DATA, "database", "olivia-local.sqlite");
 
-  const [dependencies, startup, mount, crashes, gameLogs] = await Promise.all([
+  const [dependencies, startup, mount, crashes, gameLogs, system] = await Promise.all([
     dependencyReport().catch(error => ({ error: error.message })),
     startupReport({ userDataDir: USER_DATA, limit: 3 }).catch(error => ({ error: error.message })),
     mountSummary(),
     crashSummary(),
     gameLogSummary(),
+    // g21：本机环境（内存池/可用内存/页面文件/常驻进程汇总）。拿不到就记 error，不影响整包。
+    probeSystem().catch(error => ({ error: error.message })),
   ]);
 
   // 崩溃记录带上解读结果（异常码 / 落在哪个模块 / 归因），比只列时间有用得多
@@ -294,9 +298,14 @@ async function collect() {
     "  · database.json       数据库完整性检查结论 + 各表行数（不含任何内容）",
     "  · game-crashes.json   游戏本体的崩溃记录清单（时间 / 是否有 dump）",
     "  · game-logs.json      游戏日志文件清单（大小 / 时间）",
+    "  · system.json         本机环境：可用内存 / 内核内存池 / 页面文件 / 开机时长 / 常驻进程汇总",
     "  · runtime.log.txt     本程序宿主日志尾部",
     "  · runtime.previous.log.txt",
     "  · listen-naming.log.txt 命名模块日志尾部",
+    "",
+    "关于 system.json 的边界（可以放心读）：它只包含内存数字与进程的数量与内存汇总；",
+    "进程名只写本程序、游戏与常见系统组件，你在后台跑的其它程序（银行、工作软件之类）不会被写进名字；",
+    "它只在你本机生成，不会上传。",
     "",
     "不含（刻意不打包）：",
     ...EXCLUDED.map(item => "  · " + item),
@@ -313,6 +322,7 @@ async function collect() {
     { name: "database.json", data: JSON.stringify(dbSummary(dbPath), null, 2) },
     { name: "game-crashes.json", data: JSON.stringify(crashAnalysis ?? crashes, null, 2) },
     { name: "game-logs.json", data: JSON.stringify(gameLogs, null, 2) },
+    { name: "system.json", data: JSON.stringify(system, null, 2) },
   ];
   if (runtimeLog) entries.push({ name: "runtime.log.txt", data: scrub(runtimeLog) });
   if (runtimePrev) entries.push({ name: "runtime.previous.log.txt", data: scrub(runtimePrev) });
@@ -326,6 +336,17 @@ async function collect() {
 export async function createDiagnosticRoutes() {
   return async function handle(req, url) {
     const path = String(url?.pathname || "").replace(/^\/toy/u, "");
+
+    // g21 ①：本机体检（内存 / 内核池 / 页面文件 / 常驻进程 + 崩溃概览）。
+    // 面板点「一键体检」时调这里；只读本机信息，不写文件、不上传。
+    if (path === "/listen-naming/diagnostics/system") {
+      if (req.method !== "GET") return null;
+      const [system, crashes] = await Promise.all([
+        probeSystem().catch(error => ({ error: error instanceof Error ? error.message : String(error) })),
+        crashSummary().catch(error => ({ error: error instanceof Error ? error.message : String(error) })),
+      ]);
+      return { system, crashes, checkedAt: new Date().toISOString() };
+    }
 
     // 先看会打包什么（不落盘）
     if (path === "/listen-naming/diagnostics/package/preview") {

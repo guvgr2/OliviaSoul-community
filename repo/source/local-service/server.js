@@ -60,6 +60,7 @@ import { importPerformanceLibrary, scanPerformanceLibrary } from "./midi/library
 import { watchPerformanceLibrary } from "./midi/library-watch.js";
 import { createVideoDurationProbe } from "./midi/media-probe.js";
 import { DurationRepair } from "./midi/duration-repair.js";
+import { openDatabaseHealing } from "./midi/db-self-heal.js";
 import { checkMigrationCapacity, resolveSongStoragePath, storageDirectories } from "./storage-paths.js";
 import { createStorageMigrationManager } from "./storage-migration.js";
 import { mergeLegacyDatabases, restoreLegacyModelConfig } from "./data-migration.js";
@@ -183,6 +184,24 @@ function legacyDeepSeekPayload(profile) {
     model: profile.model,
     baseUrl: profile.baseUrl,
   };
+}
+
+/**
+ * g21 ⑧：连通性测试失败时给出「该查哪儿」的分诊结论，而不是只丢一句英文错误。
+ * 判断完全基于错误文本（状态码 / 常见网络错误码），不发请求、不读 Key、不做任何副作用。
+ */
+function diagnoseModelFailure(error) {
+  const text = String(error?.message ?? error);
+  const status = Number(/\b(4\d{2}|5\d{2})\b/u.exec(text)?.[1] ?? 0);
+  if (status === 401) return "〔分诊〕Key 无效或未授权：确认 Key 复制完整、属于这家服务商、末尾没有多余空格。";
+  if (status === 403) return "〔分诊〕账号没有这个模型的权限：常见于该模型未开通或额度不足（智谱尤其常见），先去服务商控制台确认你的账号能调用哪个模型 ID。";
+  if (status === 404) return "〔分诊〕地址或模型名不对：检查接口地址（很多服务需要以 /v1 结尾）和模型 ID 拼写 —— 模型名写错会直接返回 404。";
+  if (status === 429) return "〔分诊〕被限流或额度用尽：稍后再试，或检查账户余额。";
+  if (status >= 500) return "〔分诊〕对方服务异常：稍后再试即可，不是你这边配置错了。";
+  if (/ENOTFOUND|EAI_AGAIN/iu.test(text)) return "〔分诊〕域名解析失败：检查接口地址拼写、DNS 与代理设置。";
+  if (/ECONNREFUSED/iu.test(text)) return "〔分诊〕对方拒绝连接：地址或端口不对；本地服务（Ollama / LM Studio 等）需要先启动。";
+  if (/ETIMEDOUT|timeout|timed out|aborted/iu.test(text)) return "〔分诊〕连接超时：网络或代理不通，也可能是服务端太慢。";
+  return "";
 }
 
 function safeModelError(error) {
@@ -715,7 +734,14 @@ export async function createOliviaService(options = {}) {
   } catch (error) {
     console.error(`[data-safety] 启动前处理失败（继续启动）：${error?.message ?? error}`);
   }
-  const db = initDatabase(databasePath);
+  // g21：数据搬家踩过一个坑 —— 目标的 -wal/-shm 没清掉却替换了主库，
+  // 于是「空库的 -shm + 真实主库」配成一对，SQLite 一打开就报
+  // database disk image is malformed，用户以为数据没了。
+  // 这里只在【真的打不开且属于损坏】时才补救：把可重建的伴随文件移开再重开一次；
+  // 主库自身也坏了就原样抛出。正常路径一个文件都不碰（之前做预检探测会自己生成 -wal）。
+  const db = openDatabaseHealing(databasePath, () => initDatabase(databasePath), {
+    log: message => console.log(message),
+  }).db;
   const midiStore = new MidiStore({ db, root: mediaIndexRoot });
   const resolveSongPreview = createSongPreviewResolver({
     resolvePath: path => midiStore.resolvePath(path),
@@ -753,6 +779,8 @@ export async function createOliviaService(options = {}) {
     store: midiStore,
     probeVideoDurationUs,
     concurrency: options.midiDurationRepairConcurrency ?? 2,
+    // g21：逐首留 120 毫秒，避免连续起 ffprobe 把启动阶段的 CPU 顶满。
+    throttleMs: options.midiDurationRepairThrottleMs ?? 120,
   });
   const midiRoutes = createMidiRoutes({
     store: midiStore,
@@ -899,6 +927,7 @@ export async function createOliviaService(options = {}) {
   let workerPromise = null;
   let memoryRetryTimer;
   let midiLibrarySyncTimer;
+  let durationRepairTimer;
   let midiLibrarySyncPromise = null;
   let midiLibraryWatcher = null;
   let midiLibraryWatchedRoot = "";
@@ -3819,7 +3848,7 @@ export async function createOliviaService(options = {}) {
       try {
         await executeModelProbe(call);
       } catch (error) {
-        throw httpError(502, `${provider} 模型检测失败，未切换：${safeModelError(error)}`);
+        throw httpError(502, `${provider} 模型检测失败，未切换：${safeModelError(error)}${diagnoseModelFailure(error)}`);
       }
       const saved = await queueModelConfigWrite(async () => {
         assertCurrentModelMutation(operationGeneration);
@@ -3855,7 +3884,7 @@ export async function createOliviaService(options = {}) {
       try {
         await executeModelProbe(call);
       } catch (error) {
-        throw httpError(502, `${provider} 连通性测试失败，原配置已保留：${safeModelError(error)}`);
+        throw httpError(502, `${provider} 连通性测试失败，原配置已保留：${safeModelError(error)}${diagnoseModelFailure(error)}`);
       }
       try {
         const saved = await queueModelConfigWrite(async () => {
@@ -3888,7 +3917,7 @@ export async function createOliviaService(options = {}) {
         await executeModelProbe(call);
         return ok(req, res, { connected: true, provider });
       } catch (error) {
-        throw httpError(502, `${provider} 连通性测试失败：${safeModelError(error)}`);
+        throw httpError(502, `${provider} 连通性测试失败：${safeModelError(error)}${diagnoseModelFailure(error)}`);
       }
     }
 
@@ -4340,9 +4369,15 @@ export async function createOliviaService(options = {}) {
           console.error(`[storage-startup-refresh] ${error instanceof Error ? error.message : error}`);
         });
       }
-      void midiDurationRepair.start().catch(error => {
-        console.error(`[midi-duration-repair] ${error instanceof Error ? error.message : error}`);
-      });
+      // g21：启动时不要立刻跑时长修复 —— 它会为每首缺时长的歌起一次 ffprobe，
+      // 实测启动后一段时间 CPU 占 30~40% 单核，与界面首屏、曲库同步抢资源。
+      // 延后 20 秒再开始（配合逐首间隔把峰值摊平）；界面上的「立即修复」按钮不受影响。
+      durationRepairTimer = setTimeout(() => {
+        void midiDurationRepair.start().catch(error => {
+          console.error(`[midi-duration-repair] ${error instanceof Error ? error.message : error}`);
+        });
+      }, Math.max(0, Number(options.midiDurationRepairDelayMs ?? 20_000)));
+      durationRepairTimer.unref?.();
       void syncSavedMidiLibrary().catch(error => {
         console.error(`[midi-library-sync] ${error instanceof Error ? error.message : error}`);
       });
@@ -4377,6 +4412,7 @@ export async function createOliviaService(options = {}) {
       clearTimeout(workerTimer);
       clearTimeout(memoryRetryTimer);
       clearTimeout(midiLibrarySyncTimer);
+      clearTimeout(durationRepairTimer);
       clearInterval(storagePollTimer);
       midiLibraryWatcher?.close();
       midiLibraryWatcher = null;

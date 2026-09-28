@@ -1,11 +1,13 @@
 export class DurationRepair {
-  constructor({ store, probeVideoDurationUs, concurrency = 2 }) {
+  constructor({ store, probeVideoDurationUs, concurrency = 2, throttleMs = 0 }) {
     if (!store) throw new TypeError("DurationRepair requires a store");
     if (typeof probeVideoDurationUs !== "function")
       throw new TypeError("DurationRepair requires a video duration probe");
     this.store = store;
     this.probeVideoDurationUs = probeVideoDurationUs;
     this.concurrency = Math.max(1, Math.trunc(concurrency));
+    // g21：每首之间留一点间隔，把启动时的 CPU/IO 峰值摊平（探测时长要起 ffprobe 子进程）。
+    this.throttleMs = Math.max(0, Math.trunc(throttleMs));
     this.current = {
       state: "idle",
       total: 0,
@@ -51,6 +53,7 @@ export class DurationRepair {
           this.current.failed += 1;
           this.current.lastError = error instanceof Error ? error.message : String(error);
         }
+        if (this.throttleMs > 0) await new Promise(resolve => setTimeout(resolve, this.throttleMs));
       }
     };
     await Promise.all(Array.from(
