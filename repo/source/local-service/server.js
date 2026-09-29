@@ -56,6 +56,8 @@ import { removeLibrarySongs } from './midi/library-removal.js';
 import { summarizeLibrarySources } from './midi/library-sources.js';
 import { createSongNameCorrections } from "./midi/song-name-corrections.js";
 import { playbackTimeOfDay } from "./midi/playback-clock.js";
+import { createFaststartCache } from "./midi/faststart-cache.js";
+import { runProcess as runManagedProcess } from "./midi/process-runner.js";
 import { importPerformanceLibrary, scanPerformanceLibrary } from "./midi/library-importer.js";
 import { watchPerformanceLibrary } from "./midi/library-watch.js";
 import { createVideoDurationProbe } from "./midi/media-probe.js";
@@ -2678,6 +2680,17 @@ export async function createOliviaService(options = {}) {
   const nativeLyricsControl=createNativeLyricsControl({getState:()=>nativeLyrics.state(),notify:()=>commandEvents.notify('player')});
   const lyricsPlayback = createLyricsPlayback({getState:()=>nativeLyrics.state() || localPlayerState,notify:()=>commandEvents.notify('lyrics')});
 
+  // g23（实验性）：本地作品多为 moov（解码索引）落在文件末尾的 MP4，播放器必须先读到
+  // 文件末尾才能开始解码 —— 表现就是切歌卡几秒、而同一首重播却很快。
+  // 这里维护一份索引前置（faststart）副本；没有缓存时仍用原文件，并在后台生成一份。
+  // 生成绝不修改原始媒体文件，缓存也只落在应用自己的数据目录里。
+  const faststartCache = createFaststartCache({
+    root,
+    ffmpegPath: join(runtimeDir, "ffmpeg", "bin", "ffmpeg.exe"),
+    runProcess: runManagedProcess,
+    log: message => console.log(message),
+  });
+
   async function resolvePlaybackSource(song, key) {
     try {
       // Use the same identity/root/variant validation as preview recovery. A
@@ -2688,7 +2701,7 @@ export async function createOliviaService(options = {}) {
         const info = await handle.stat();
         if (!info.isFile() || !info.size) throw new Error("Unavailable media");
       } finally { await handle.close(); }
-      return file;
+      return faststartCache.prefer(file, song?.contentHash, key) ?? file;
     } catch {
       // g22：已从曲库移除的作品不该说成「文件不存在」，那会让人以为文件丢了。
       if (song?.removed) throw playbackMediaError(404, "该作品已从曲库移除，请刷新曲库后重试", "MEDIA_SONG_REMOVED");
@@ -4413,6 +4426,7 @@ export async function createOliviaService(options = {}) {
       nativeLyricsControl.close();
       lyricsPlayback.close();
       const downloadsClosed = updateDownloads.close();
+      faststartCache.close();
       const nameCorrectionsClosed = songNameCorrections.close();
       const previewSourcesClosed = resolveSongPreview.close?.();
       clearTimeout(workerTimer);

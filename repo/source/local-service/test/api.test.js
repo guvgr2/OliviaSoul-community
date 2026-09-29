@@ -874,7 +874,7 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
   ]);
   // 当前补丁标记是 v44（与《使用说明》里写的「FE v44 / WebPlayer v18」一致）；
   // 这里钉住它，改补丁版本时测试会提醒你同步文档
-  assert.match(patchScript, /OliviaSoulPatch:mail-music-v45/u);
+  assert.match(patchScript, /OliviaSoulPatch:mail-music-v46/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v32/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v30/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v29/u);
@@ -941,7 +941,8 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
   assert.match(v23UpgradeScript, /String\(B&&B\.videoUrl\|\|""\)\.includes\("\/toy\/midi\/songs\/"\)/u);
   assert.match(patchScript, /h\.beginLocalPlayback\(q\)/u,
     "我的上传必须复用播放器存储中的唯一会话入口");
-  assert.match(patchScript, /beginLocalPlayback:OliviaSoulBeginLocalPlayback/u);
+  assert.ok(patchScript.includes('beginLocalPlayback:B=>{const OliviaSoulR=OliviaSoulBeginLocalPlayback(B);try{h.value="songlist"}catch{}return OliviaSoulR}'),
+    "本地播放必须把 playSource 设为 songlist，否则游戏原生不会让背景音让位");
   assert.match(patchScript, /e&&e\.cmd==="pause"\?\{\.\.\.e,cmd:"stop"\}:e/u,
     "所有暂停命令必须归一为终止播放");
   assert.match(patchScript, /restoreDefault:!1/u,
@@ -4227,7 +4228,7 @@ test("管理前端包含视频维护、上方插入和本地服务状态", async
   assert.doesNotMatch(patch, /\$listWaitingCondition|\$listWaitingReply|\$waitingCondition/u);
   assert.match(patch, /\$pollingStateTo/u);
   assert.match(patch, /\$processingIconTo/u);
-  assert.match(patch, /OliviaSoulPatch:mail-music-v45/u);
+  assert.match(patch, /OliviaSoulPatch:mail-music-v46/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v32/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v30/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v29/u);

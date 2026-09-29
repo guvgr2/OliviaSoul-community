@@ -24,7 +24,7 @@ function Step-Mark([string]$Name) {
 }
 
 $baseVersion = "2008.2.7"
-$version = "2008.2.7-linli9-g22"
+$version = "2008.2.7-linli9-g23"
 $packagePath = Join-Path $project "package.json"
 $packageText = [IO.File]::ReadAllText($packagePath, $utf8NoBom)
 $package = $packageText | ConvertFrom-Json
@@ -393,7 +393,7 @@ $midiModules = @(
     "listen-naming.js", "time-of-day.js", "community-catalog.js", "fingerprint.js", "dependency-check.js", "logs.js",
     # --- g13 新增 ---
     "startup-report.js", "diagnostic-package.js", "crash-report.js", "game-log.js", "data-safety.js", "sqlite-snapshot.js", "game-stability.js",
-    "system-probe.js", "db-self-heal.js"
+    "system-probe.js", "db-self-heal.js", "faststart-cache.js"
 )
 foreach ($name in $midiModules) {
     Copy-Item -LiteralPath (Join-Path (Join-Path $project "midi") $name) -Destination (Join-Path $stage "app\midi") -Force

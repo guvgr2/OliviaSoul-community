@@ -39,7 +39,7 @@ if ($mainFiles.Count -ne 1) { throw "expected one main-*.js, got $($mainFiles.Co
 $utf8 = New-Object System.Text.UTF8Encoding $false
 $mainPath = $mainFiles[0].FullName
 $text = [IO.File]::ReadAllText($mainPath, $utf8)
-$patchMarker = '/*OliviaSoulPatch:mail-music-v45*/'
+$patchMarker = '/*OliviaSoulPatch:mail-music-v46*/'
 if ($text.Contains($patchMarker)) { throw "original feapp already contains current patch" }
 $text = $patchMarker + $text
 $playerCommandUrl = $ServiceUrl.TrimEnd("/") + "/toy/player-command"
@@ -190,7 +190,12 @@ $nativeProgressFrom = 'case"timeupdate":d.value=B.currentTime;break'
 if (([regex]::Matches($text,[regex]::Escape($nativeProgressFrom))).Count -ne 1) { throw 'expected one native progress observer' }
 $text = $text.Replace($nativeProgressFrom, 'case"timeupdate":if(!window.__OliviaSoulSongId&&te.value&&m.value){window.__OliviaSoulNativeProgressAt=Date.now();d.value=B.currentTime;}break')
 $playerStateExportFrom = 'playSonglistItem:A,resetStore:Ge}})'
-$playerStateExportTo = 'playSonglistItem:A,applyLocalPlayerState:OliviaSoulApplyPlayerState,beginLocalPlayback:OliviaSoulBeginLocalPlayback,applySongMetadata:OliviaSoulApplySongMetadata,resetStore:Ge}})'
+# v46：本地播放开始时，把播放器 store 里的 playSource 设成 "songlist"（官方曲库播放时的取值）。
+# 原因：游戏原生的「播放音乐时让背景音让位」只认曲库/歌单这类来源；本地作品停留在 "upload"，
+# 原生不认为在播音乐，于是背景音与音乐叠在一起（只有个人上传会出现，官方音乐正常）。
+# h 就是该 store 里的 playSource ref；try/catch 是防御——万一变量名变了，也不影响播放本身。
+# 停止时 store 的 resetStore 会把 h.value 设回 "playlist"，无需额外处理。
+$playerStateExportTo = 'playSonglistItem:A,applyLocalPlayerState:OliviaSoulApplyPlayerState,beginLocalPlayback:B=>{const OliviaSoulR=OliviaSoulBeginLocalPlayback(B);try{h.value="songlist"}catch{}return OliviaSoulR},applySongMetadata:OliviaSoulApplySongMetadata,resetStore:Ge}})'
 $playerStateExportCount = ([regex]::Matches($text, [regex]::Escape($playerStateExportFrom))).Count
 if ($playerStateExportCount -ne 1) { throw "expected one player store export, got $playerStateExportCount" }
 $text = $text.Replace($playerStateExportFrom, $playerStateExportTo)
