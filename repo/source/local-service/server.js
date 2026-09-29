@@ -750,8 +750,9 @@ export async function createOliviaService(options = {}) {
     // g24：真实读探测 —— SQLite 是惰性读取的，原来的 SELECT 1 碰不到坏页，
     // 会让自愈睡过去。这里连业务表一起读一次，让惰性损坏在启动阶段就暴露。
     verify: handle => {
+      // 只读 schema（sqlite_master 必然存在）。不要在这里查业务表 —— 它们由各模块
+      // 稍后创建（例如 user_songs 由 MidiStore 建立），在这里查会把全新安装判死。
       handle.prepare("SELECT COUNT(*) AS n FROM sqlite_master").get();
-      handle.prepare("SELECT COUNT(*) AS n FROM user_songs").get();
     },
   }).db;
   const midiStore = new MidiStore({ db, root: mediaIndexRoot });

@@ -118,6 +118,15 @@ export function openDatabaseHealing(databasePath, open, { log = () => {}, verify
     try {
       probe(db);
     } catch (error) {
+      // 探测只是为暴露“惰性损坏”。非损坏类错误（例如业务表还没建、权限问题）
+      // 绝不能影响启动 —— 否则会把一个能正常跑的库判死。
+      // 真实事故：g24 第一版在这里查 user_songs，而该表由 MidiStore 稍后创建，
+      // 结果全新安装第一次启动就 no such table: user_songs，服务连续退出 3 次。
+      const message = String(error?.message ?? error);
+      if (!SQLITE_CORRUPTION.test(message)) {
+        log(`[db-self-heal] 探测未通过但不是损坏，忽略：${message}`);
+        return db;
+      }
       try { db.close(); } catch { /* 忽略 */ }
       throw error;
     }
