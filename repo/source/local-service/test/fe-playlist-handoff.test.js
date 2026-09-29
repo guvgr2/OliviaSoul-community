@@ -8,8 +8,10 @@ const replacement = name => patch.match(new RegExp(`^\\$${name} = '([^\\r\\n]*)'
   .replaceAll("' + $playerCommandUrl + '", "http://test/command")
   .replaceAll("' + $playerStateUrl + '", "http://test/state");
 const store = replacement("playerStateStoreTo");
-const finish = store.match(/OliviaSoulFinishLocalPlayback=(async B=>\{[\s\S]*?\}),OliviaSoulApplyPlayerState=/u)[1];
-const apply = store.match(/OliviaSoulApplyPlayerState=(B=>\{[\s\S]*?\}),OliviaSoulEnsurePlayerPoll=/u)[1];
+// 注意：不能假设 finish 与 applyLocalPlayerState 相邻 —— 注入的函数会被后续版本插在中间
+  // （g27 就插入了 OliviaSoulApplyResumePoint）。这里以「}, 紧跟另一个注入函数名或 Ge=」作为边界。
+  const finish = store.match(/OliviaSoulFinishLocalPlayback=(async B=>[\s\S]*?\}),(?=OliviaSoul|Ge=)/u)[1];
+const apply = store.match(/OliviaSoulApplyPlayerState=(B=>[\s\S]*?\}),(?=OliviaSoul|Ge=)/u)[1];
 
 function fixture({ mode = "list", source = "playlist" } = {}) {
   const window = { __OliviaSoulSessionEpoch: 1, __OliviaSoulSongId: "upload", __OliviaSoulSessionId: "session" };

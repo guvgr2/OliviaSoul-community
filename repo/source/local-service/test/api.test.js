@@ -874,7 +874,7 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
   ]);
   // 当前补丁标记是 v44（与《使用说明》里写的「FE v44 / WebPlayer v18」一致）；
   // 这里钉住它，改补丁版本时测试会提醒你同步文档
-  assert.match(patchScript, /OliviaSoulPatch:mail-music-v46/u);
+  assert.match(patchScript, /OliviaSoulPatch:mail-music-v48/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v32/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v30/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v29/u);
@@ -1019,9 +1019,9 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
   assert.match(webplayerUpgradeScript, /__OliviaSoulPlayerCommandKey===null/u);
   assert.match(controller, /upgrade-feapp-v22-v23\.ps1/u);
   assert.match(controller, /upgrade-webplayer-v6-v7\.ps1/u);
-assert.match(controller, /\["v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40"\]\.includes\(current\.revision\)[\s\S]{0,1600}patch-feapp-local\.ps1/u,
+assert.match(controller, /feappRevisionAtLeast\(current\.revision, "v24"\)/u,
     "v24 through v30 upgrades must rebuild current FE from pristine backup");
-  assert.match(controller, /\["v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40"\]\.includes\(current\.revision\)[\s\S]{0,2600}patch-webplayer-local\.ps1/u,
+assert.match(controller, /feappRevisionAtLeast\(current\.revision, "v28"\)/u,
     "v24 through v30 upgrades must rebuild the WebPlayer when it is not current at the requested port");
   assert.match(webplayerScript, /\[string\]\$ServiceUrl/u);
   assert.doesNotMatch(patchScript, /OliviaSoulPendingUpload=b\(null\)/u);
@@ -1281,7 +1281,8 @@ test("v18 发布配置只同步当前 Harness 文件并清理旧文件", async (
   assert.match(desktopMain, /width:\s*Math\.min\(1120,\s*Math\.max\(820,/u);
   assert.match(desktopMain, /height:\s*Math\.min\(720,\s*Math\.max\(620,/u);
   assert.match(installer, /PrivilegesRequired=lowest/u);
-  assert.match(installer, /DefaultDirName=\{localappdata\}\\Programs\\OliviaSoul/u);
+  assert.match(installer, /DefaultDirName=\{code:GetDefaultDir\}/u);
+    assert.match(installer, /function GetDefaultDir/u);
   assert.doesNotMatch(installer, /\{commonappdata\}\\OliviaSoul/u);
   assert.doesNotMatch(nodeHost, /copyIfPresent\(join\(template, "\.cursor", "rules"/u);
   assert.match(nodeHost, /prepareWorkspaceIncrementally/u);
@@ -4228,7 +4229,7 @@ test("管理前端包含视频维护、上方插入和本地服务状态", async
   assert.doesNotMatch(patch, /\$listWaitingCondition|\$listWaitingReply|\$waitingCondition/u);
   assert.match(patch, /\$pollingStateTo/u);
   assert.match(patch, /\$processingIconTo/u);
-  assert.match(patch, /OliviaSoulPatch:mail-music-v46/u);
+  assert.match(patch, /OliviaSoulPatch:mail-music-v48/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v32/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v30/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v29/u);

@@ -62,7 +62,7 @@ try {
       $text=[Text.Encoding]::UTF8.GetString($content);
       [ordered]@{
         name=$entry.FullName; hash=([BitConverter]::ToString($sha.ComputeHash($content))).Replace('-','').ToLowerInvariant(); patched=$text.Contains('OliviaSoulPatch');
-        knownFeLocalePatch=($entry.FullName -match '^assets/main-[^/]+[.]js$' -and ($text.StartsWith('/*OliviaSoulPatch:mail-music-v29*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v30*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v31*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v32*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v33*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v34*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v35*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v36*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v37*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v38*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v39*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v40*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v41*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v42*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v43*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v44*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v45*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v46*/')));
+        knownFeLocalePatch=($entry.FullName -match '^assets/main-[^/]+[.]js$' -and ($text.StartsWith('/*OliviaSoulPatch:mail-music-v29*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v30*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v31*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v32*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v33*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v34*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v35*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v36*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v37*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v38*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v39*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v40*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v41*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v42*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v43*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v44*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v45*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v46*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v47*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v48*/')));
         localeBase64=if($entry.FullName -match '^assets/zh-cn-[^/]+[.]js$' -and $content.Length -le 1048576){[Convert]::ToBase64String($content)}else{$null}
       }
     } finally { $entryStream.Dispose(); $out.Dispose() }
@@ -75,7 +75,7 @@ try {
     if (info.hash !== hash(bytes)) throw new Error('archive changed during validation');
     const entries = info.entries;
     if (!Array.isArray(entries) || new Set(entries.map(e => e.name)).size !== entries.length) throw new Error('duplicate archive entries');
-    const mains = entries.filter(e => /^assets\/main-[^/]+\.js$/u.test(e.name));
+    const mains = entries.filter(e => /^assets[\\/]main-[^\\/]+\.js$/u.test(e.name));
     if (mains.length !== 1) throw new Error('archive requires exactly one main asset');
     return { bytes, hash: info.hash, entries, main: mains[0].name, knownFeLocalePatch: mains[0].knownFeLocalePatch === true, patched: entries.some(e => e.patched) };
   } catch (error) { throw new Error(`backup archive validation failed: ${error.killed ? 'read timed out after 15 seconds' : (error.stderr || error.message).slice(0, 1000)}`, { cause: error }); }
@@ -97,7 +97,7 @@ function sameIdentity(original, current, allowKnownFeLocale = false) {
   if (original.main !== current.main || original.entries.length !== current.entries.length) return false;
   const entries = new Map(current.entries.map(e => [e.name, e]));
   const nonMain = original.entries.filter(e => e.name !== original.main && !e.name.endsWith('/'));
-  const locales = original.entries.filter(e => /^assets\/zh-cn-[^/]+\.js$/u.test(e.name));
+  const locales = original.entries.filter(e => /^assets[\\/]zh-cn-[^\\/]+\.js$/u.test(e.name));
   return nonMain.length > 0 && original.entries.every(e => entries.has(e.name) && (
     e.name === original.main || e.hash === entries.get(e.name).hash
     || (allowKnownFeLocale && locales.length === 1 && e.name === locales[0].name

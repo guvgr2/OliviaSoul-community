@@ -59,7 +59,7 @@ test("game upload and playlist caches receive editor saves in place", () => {
 
 test("current session duration updates both songlist and playlist display without changing identity", () => {
   const store = patch.match(/^\$playerStateStoreTo = '([^\r\n]*)'\r?$/mu)?.[1] || "";
-  const apply = store.match(/OliviaSoulApplyPlayerState=(B=>\{[\s\S]*?\}),OliviaSoulEnsurePlayerPoll=/u)?.[1];
+  const apply = store.match(/OliviaSoulApplyPlayerState=(B=>[\s\S]*?\}),(?=OliviaSoul|Ge=)/u)?.[1];
   assert.ok(apply);
   const current = { id: "work", duration: 1, videoDuration: 1 }, songlist = { id: "work", duration: 1, videoDuration: 1 };
   const window = { document: {}, __OliviaSoulSongId: "work", __OliviaSoulSessionId: "session" };
@@ -75,7 +75,7 @@ test("current session duration updates both songlist and playlist display withou
 
 test("current playlist duration cannot overwrite a stale songlist object from another work", () => {
   const store = patch.match(/^\$playerStateStoreTo = '([^\r\n]*)'\r?$/mu)?.[1] || "";
-  const apply = store.match(/OliviaSoulApplyPlayerState=(B=>\{[\s\S]*?\}),OliviaSoulEnsurePlayerPoll=/u)?.[1];
+  const apply = store.match(/OliviaSoulApplyPlayerState=(B=>[\s\S]*?\}),(?=OliviaSoul|Ge=)/u)?.[1];
   assert.ok(apply);
   const current = { itemId: "playlist-entry", videoUrl: "/toy/midi/songs/work-A/video", duration: 1, videoDuration: 1 };
   const staleSonglist = { id: "work-B", videoUrl: "/toy/midi/songs/work-B/video", duration: 90, videoDuration: 90 };

@@ -11,6 +11,7 @@ assert.ok(playBranch, "the patch must expose its play command replacement");
 
 function playerFixture(withVideo = true) {
   const calls = [];
+  const swapCalls = [];
   const state = {
     __OliviaSoulActivePlayerRevision: 1,
     __OliviaSoulActiveSongId: "previous-song",
@@ -37,9 +38,12 @@ function playerFixture(withVideo = true) {
     window: state,
     i: { value: withVideo ? video : null },
     le(url, options) { calls.push(["play", url, JSON.parse(JSON.stringify(options)), video.src, video.currentSrc]); },
+    // 本地会话的切换由该注入函数负责（真实定义在 tools/webplayer-pause.js）；
+    // 这里记录调用以验证接线，而不是在 vm 里重演它的异步内部流程。
+    OliviaSoulSwapPlayback(url, options) { swapCalls.push([url, JSON.parse(JSON.stringify(options))]); },
   });
   return {
-    calls, video, state,
+    calls, swapCalls, video, state,
     play(command) {
       context.e = { cmd: "play", ...command };
       vm.runInContext(`switch(e.cmd){${playBranch}}`, context);
@@ -53,28 +57,26 @@ const localCommand = {
   mute: false, offset: 0,
 };
 
-test("switching official media to a local session unloads the old source before play", () => {
-  const player = playerFixture();
-  player.play(localCommand);
-  assert.deepEqual(player.calls, [
-    ["remember", "https://media.example.test/official.mp4", 84, true],
-    ["pause", null],
-    ["removeAttribute", "src"],
-    ["load", "", null],
-    ["play", localCommand.url, { loop: false, mute: false, offset: 0 }, "", ""],
-  ]);
-  assert.equal(player.state.__OliviaSoulActivePlayerRevision, 2);
-  assert.equal(player.state.__OliviaSoulActiveSongId, "uploaded-song");
-  assert.equal(player.state.__OliviaSoulActiveSessionId, "new-session");
-});
+  test("switching official media to a local session hands the source to the swap path", () => {
+    const player = playerFixture();
+    player.play(localCommand);
+    // 先记住原官方播放位置（供「恢复默认画面」使用）
+    assert.deepEqual(player.calls, [["remember", "https://media.example.test/official.mp4", 84, true]]);
+    // 本地会话必须交给 OliviaSoulSwapPlayback，绝不能走 native le()
+    assert.deepEqual(player.swapCalls, [[localCommand.url, { loop: false, mute: false, offset: 0 }]]);
+    // 会话所有权被建立
+    assert.equal(player.state.__OliviaSoulActivePlayerRevision, 2);
+    assert.equal(player.state.__OliviaSoulActiveSongId, "uploaded-song");
+    assert.equal(player.state.__OliviaSoulActiveSessionId, "new-session");
+  });
 
-test("a replayed local session also unloads the previous media resource", () => {
-  const player = playerFixture();
-  player.video.src = player.video.currentSrc = "http://127.0.0.1:27149/toy/midi/songs/upload/video?playSession=old-session";
-  player.play(localCommand);
-  assert.equal(player.video.currentTime, 0);
-  assert.deepEqual(player.calls.slice(1, 4), [["pause", null], ["removeAttribute", "src"], ["load", "", null]]);
-});
+  test("a replayed local session also goes through the swap path", () => {
+    const player = playerFixture();
+    player.video.src = player.video.currentSrc = "http://127.0.0.1:27149/toy/midi/songs/upload/video?playSession=old-session";
+    player.play(localCommand);
+    assert.deepEqual(player.swapCalls, [[localCommand.url, { loop: false, mute: false, offset: 0 }]]);
+    assert.equal(player.state.__OliviaSoulActiveSessionId, "new-session");
+  });
 
 test("official and default wallpaper commands keep the native switching path", () => {
   const player = playerFixture();
@@ -87,10 +89,11 @@ test("official and default wallpaper commands keep the native switching path", (
   assert.equal(player.state.__OliviaSoulActiveSessionId, null);
 });
 
-test("a local command without a mounted video still reaches the native play handler", () => {
-  const player = playerFixture(false);
-  assert.doesNotThrow(() => player.play(localCommand));
-  assert.equal(player.calls.length, 1);
-  assert.equal(player.calls[0][0], "play");
-  assert.equal(player.state.__OliviaSoulActiveSessionId, "new-session");
-});
+  test("a local command without a mounted video is still accepted and claims the session", () => {
+    const player = playerFixture(false);
+    assert.doesNotThrow(() => player.play(localCommand));
+    // 没有挂载视频时不应回落到 native 路径，但仍要建立会话所有权
+    assert.deepEqual(player.calls, []);
+    assert.equal(player.swapCalls.length, 1);
+    assert.equal(player.state.__OliviaSoulActiveSessionId, "new-session");
+  });

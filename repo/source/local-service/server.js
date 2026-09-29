@@ -648,6 +648,12 @@ function runProcess(command, args, cwd, timeoutMs = GENERATION_TIMEOUT_MS, onSpa
   });
 }
 
+// g28：SQLite 损坏错误的判定（导出供测试）。
+// 注意只认「损坏」类错误：表不存在、权限等都不是损坏，不能触发自愈。
+export function isSqliteCorruptionError(error) {
+  return /malformed|not a database|unsupported file format/iu.test(String((error && error.message) ?? error ?? ""));
+}
+
 export function validateHarnessReply(stdout, reply) {
   if (!stdout.includes("HARNESS LIVE DONE"))
     throw new Error("Harness 未报告完成");
@@ -745,14 +751,44 @@ export async function createOliviaService(options = {}) {
   // 这正是用户实际遇到的形态：主库完好，但陈旧的 -shm 指向不存在的页，
   // 启动时读不到、运行中一读就报 malformed（日志里表现为 20 秒后开始满屏报错）。
   cleanStaleSidecars(databasePath, { log: message => console.log(message) });
+
+  // g28：运行中反复撞到「数据库损坏」时，主动结束进程，交给宿主自动拉起。
+  // 为什么必须这样：搬家常留下陈旧的 -wal/-shm（本进程持有、删不掉），SQLite 一读就 malformed；
+  // 而 db-self-heal 的清理只在【服务启动时】执行 —— 于是服务会一直坏着，界面与游戏只能看到报错，
+  // 用户必须手动重启程序（真实事故）。让服务自己重启，就把清理机会创造出来了。
+  // 宿主对连续异常退出最多重启 3 次；正常情况一次即可恢复。
+  // 诊断/测试可用 OLIVIA_DISABLE_AUTO_RESTART=1 关闭本机制。
+  const autoRestartEnabled = process.env.OLIVIA_DISABLE_AUTO_RESTART !== "1";
+  const SQLITE_CORRUPTION_RE = /malformed|not a database|unsupported file format/iu;
+  const sqliteCorruption = { count: 0, since: 0, exiting: false };
+  function noteSqliteCorruption(error) {
+    const message = String((error && error.message) ?? error ?? "");
+    if (!autoRestartEnabled || sqliteCorruption.exiting) return;
+    if (!isSqliteCorruptionError(message)) return;
+    const now = Date.now();
+    if (now - sqliteCorruption.since > 30_000) { sqliteCorruption.count = 0; sqliteCorruption.since = now; }
+    sqliteCorruption.count += 1;
+    if (sqliteCorruption.count < 3) return;
+    sqliteCorruption.exiting = true;
+    console.error("[db-self-heal] 运行中连续检测到数据库损坏，正在重启本地服务以自愈（宿主会自动拉起，约几秒）");
+    setTimeout(() => process.exit(87), 200);
+  }
   const db = openDatabaseHealing(databasePath, () => initDatabase(databasePath), {
     log: message => console.log(message),
     // g24：真实读探测 —— SQLite 是惰性读取的，原来的 SELECT 1 碰不到坏页，
     // 会让自愈睡过去。这里连业务表一起读一次，让惰性损坏在启动阶段就暴露。
     verify: handle => {
-      // 只读 schema（sqlite_master 必然存在）。不要在这里查业务表 —— 它们由各模块
-      // 稍后创建（例如 user_songs 由 MidiStore 建立），在这里查会把全新安装判死。
+      // 先读 schema（sqlite_master 必然存在）。
       handle.prepare("SELECT COUNT(*) AS n FROM sqlite_master").get();
+      // g28：再读一次业务表 —— 只读 schema 碰不到数据页，会让「惰性损坏」漏过去
+      // （g24 原本读 user_songs，但空库会崩；g26 我改成只读 schema，等于削弱了探测能力）。
+      // 这里两者兼顾：表还不存在（全新安装）不是损坏，db-self-heal 会把非损坏类错误忽略掉；
+      // 只有真正的读失败（malformed 等）才会抛出去触发自愈。
+      try {
+        handle.prepare("SELECT COUNT(*) AS n FROM user_songs").get();
+      } catch (error) {
+        if (!/no such table/iu.test(String(error?.message ?? error))) throw error;
+      }
     },
   }).db;
   const midiStore = new MidiStore({ db, root: mediaIndexRoot });
@@ -1446,6 +1482,7 @@ export async function createOliviaService(options = {}) {
         await syncSavedMidiLibrary();
       } catch (error) {
         console.error(`[midi-library-sync] ${error instanceof Error ? error.message : error}`);
+        noteSqliteCorruption(error);
       } finally {
         if (!closing) scheduleMidiLibrarySync();
       }
@@ -2202,6 +2239,7 @@ export async function createOliviaService(options = {}) {
         triggerMemoryRefresh(localUser.person);
       } catch (error) {
         console.error(`[memory-retry-error] message=${error.message}`);
+        noteSqliteCorruption(error);
         setMemoryStatus(localUser.person, "failed", error.message);
       } finally {
         resetMemoryRetryTimer();
@@ -2660,6 +2698,19 @@ export async function createOliviaService(options = {}) {
   }
 
   let localPlayerCommand = { revision: 0, command: null };
+  // g27：本地播放续播点。游戏 UI 的「暂停」实际发送 stop（游戏原生 JS 里没有 pause/resume），
+  // 会话因此被销毁、进度丢失 —— 表现就是「暂停后继续只能从头」。
+  // 这里在 stop 时记住位置，同一首歌在窗口内再次 play 时下发 resumeAt，由前端 seek 过去。
+  const LOCAL_RESUME_WINDOW_MS = 30 * 60 * 1000;
+  // g27：续播是实验性功能，可用 settings.pause_resume_enabled=false 关闭。
+  // 关闭后 resumeAt 恒为 0，播放行为与本版之前完全一致 —— 其他功能不受影响。
+  function localResumeEnabled() {
+    try {
+      const row = db.prepare("SELECT value FROM settings WHERE key = 'pause_resume_enabled'").get();
+      return !row || String(row.value) !== 'false';
+    } catch { return true; }
+  }
+  let localResumePoint = null;
   let localPlayerPlayRequest = 0;
   let localPlayerResolvedSource = null;
   let localPlayerPendingSeek = null;
@@ -3097,6 +3148,24 @@ export async function createOliviaService(options = {}) {
         command,
       };
       const previousState = localPlayerState;
+      // g27：stop 时记住位置（正在播、且已播过 1 秒以上，避免片头就记）
+      if (localResumeEnabled() && cmd === "stop" && previousState.playbackState === "playing"
+        && previousState.songId && Number(previousState.currentTime) > 1) {
+        localResumePoint = {
+          songId: previousState.songId,
+          currentTime: Number(previousState.currentTime),
+          at: Date.now(),
+        };
+      }
+      // g27：play 同一首歌且未超窗口 → 下发续播起点；用掉即清除（换歌也会清除）
+      let resumeAt = 0;
+      if (cmd === "play") {
+        if (localResumeEnabled() && localResumePoint && localResumePoint.songId === songId
+          && Date.now() - localResumePoint.at <= LOCAL_RESUME_WINDOW_MS) {
+          resumeAt = localResumePoint.currentTime;
+        }
+        localResumePoint = null;
+      }
       const song = cmd === "play" ? midiStore.getUserSong(songId) : null;
       const knownDuration = song?.durationUs > 0 ? song.durationUs / 1_000_000 : 0;
       const playbackState = cmd === "play" || cmd === "resume"
@@ -3130,6 +3199,8 @@ export async function createOliviaService(options = {}) {
         event: cmd,
         playbackState,
         currentTime,
+        // g27：续播起点（0 表示从头）。前端注入代码据此 seek。
+        resumeAt,
         duration: cmd === "play" ? knownDuration : previousState.duration,
         mediaUrl: cmd === "play" ? command.url : previousState.mediaUrl,
       };
@@ -4353,7 +4424,9 @@ export async function createOliviaService(options = {}) {
         const status = error.status ?? 500;
         const responseStatus = req.url.startsWith("/toy/") && !error.mediaResponse ? 200 : status;
         if (req.url.startsWith("/toy/letter/"))
-          console.error(`[letter-error] ${req.method} ${req.url} code=${error.code ?? -1} message=${error.message}`);
+          console.error(`[letter-error] ${req.method} ${req.url} code=${error.code ?? -1} message=${
+          error.message}`);
+          noteSqliteCorruption(error);
         if (req.url.includes("/toy/addToPlaylist") || req.url.includes("/toy/delFromPlaylist") || req.url.includes("/toy/searchPlaylist"))
           console.error(`[playlist-error] ${req.method} ${req.url} code=${error.code ?? -1} message=${error.message}`);
         // 只把"真出错"写进运行日志：404（浏览器常常自己来要 /favicon.ico）属于噪音，
@@ -4424,6 +4497,7 @@ export async function createOliviaService(options = {}) {
         storagePollTimer = setInterval(() => {
           void refreshStorageStatus().catch(error => {
             console.error(`[storage-refresh] ${error instanceof Error ? error.message : error}`);
+        noteSqliteCorruption(error);
           });
         }, interval);
         storagePollTimer.unref?.();

@@ -41,7 +41,7 @@ test('batch removal skips removed or unavailable successors and can continue wit
 test('a stopped-state poll arriving before removal does not lose the intent to continue playback',()=>{
  const f=fixture(),next={id:'official'};f.state.x.value.push(next);f.state.a=()=>true;
  f.state.M=song=>{f.state.u.value=song;f.state.m.value=true;};
- const apply=replacement('playerStateStoreTo').match(/OliviaSoulApplyPlayerState=(B=>\{[\s\S]*?\}),OliviaSoulEnsurePlayerPoll=/)[1];
+ const apply=replacement('playerStateStoreTo').match(/OliviaSoulApplyPlayerState=(B=>[\s\S]*?\}),(?=OliviaSoul|Ge=)/)[1];
  vm.runInNewContext(`(${apply})({songId:'a',playbackState:'stopped'})`,f.state);
  assert.equal(f.state.m.value,false);
  vm.runInNewContext(`(${apply})({songId:'a',playbackState:'stopped'})`,f.state);

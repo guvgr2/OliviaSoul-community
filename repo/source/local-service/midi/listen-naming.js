@@ -1712,6 +1712,18 @@ export async function createListenNamingRoutes(options = {}) {
       ? "对方的数据库正被另一个程序占用（那边的 OliviaSoul 或游戏可能还开着），有一段日志没能复制：最近一次改动可能不在搬过来的库里。建议完全退出那边的程序后重试。"
       : (sourceBusy ? "对方的数据库可能正被另一个程序占用，搬过来的数据以最近一次已落盘的内容为准。" : "");
     logInfo("数据搬家完成", `从候选目录复制 ${copied.length} 个数据库文件（${match.songCount} 首，已命名 ${match.namedCount}），旧库已备份${warning ? "；有提示" : ""}`);
+
+    // g28：主库已被替换，但旧的 -wal/-shm 还在 —— 本进程正打开着它们，删不掉。
+    // SQLite 会继续用那份陈旧的共享内存索引，于是搬家后一读数据就 malformed
+    // （真实事故：用户搬家后满屏报错，必须手动重启程序才能恢复）。
+    // 处理：主动结束本进程，交给宿主自动拉起（NodeBackend 对异常退出最多重启 3 次）；
+    // 重启时 db-self-heal 会在打开数据库之前清掉这些陈旧伴随文件。
+    // 用非 0 退出码，宿主才会视为「意外退出」并重启。
+    // 诊断/测试可用 OLIVIA_DISABLE_AUTO_RESTART=1 关闭本机制（否则测试进程会被结束）。
+    if (process.env.OLIVIA_DISABLE_AUTO_RESTART !== "1") {
+      logInfo("数据搬家", "正在重启本地服务以清理陈旧的数据库伴随文件（宿主会自动拉起，约几秒）");
+      setTimeout(() => process.exit(86), 150); // 先让本次响应返回给界面
+    }
     return {
       copied, skipped, backup, source: match.path, target: currentUserDataDir(),
       songCount: match.songCount, namedCount: match.namedCount, warning, restartRequired: true,

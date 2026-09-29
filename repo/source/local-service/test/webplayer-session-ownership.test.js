@@ -33,6 +33,7 @@ function fixture() {
   let consumedBodies = 0;
   const progress = [];
   const nativeEvents = [];
+  const swapCalls = [];
   const timeouts = new Map();
   let timerId = 0;
   const video = {
@@ -76,6 +77,16 @@ function fixture() {
       video.play();
     },
     fe() { video.pause(); }, ae() {}, ce() { video.play(); }, K(offset) { video.currentTime = offset; },
+    // 补丁注入的另外三个函数（真实定义在 tools/webplayer-pause.js）。
+    // 测试关心的是「会话所有权」，这里只提供受控实现并记录调用。
+    OliviaSoulSwapPlayback(url, options) {
+        swapCalls.push([url, JSON.parse(JSON.stringify(options ?? {}))]);
+        // 真实实现是双缓冲切换（见 tools/webplayer-pause.js）；这里直接把新媒体挂到播放器上，
+        // 让「会话所有权」相关的断言能观察到实际效果。
+        if (video && url) { video.src = video.currentSrc = url; video.currentTime = Number(options?.offset) || 0; if (typeof options?.loop === "boolean") video.loop = options.loop; if (typeof options?.mute === "boolean") video.muted = options.mute; }
+      },
+    async OliviaSoulNativeLyricsCommand(command) { nativeEvents.push({ nativeLyrics: command }); },
+    OliviaSoulReportPausedPlayback() {},
     Z(event) { nativeEvents.push(event); }, de() {}, ye() {}, ve(loop) { video.loop = loop; },
   });
   vm.runInContext(`${nativeControl}
@@ -84,20 +95,26 @@ function fixture() {
     ${replacement("timeUpdateTo")}
     ${replacement("endedTo")}
     ${replacement("mountedTo")}`, context);
+  // interval 回调只负责「触发」；真正的轮询是 async 的 __OliviaSoulPlayerPollNow。
+  // 必须 await 它才能等到这一轮请求处理完，否则断言会跑在轮询之前。
+  async function runPoll() {
+    if (typeof state.__OliviaSoulPlayerPollNow === "function") { await state.__OliviaSoulPlayerPollNow(); return; }
+    await runPoll();
+  }
   return {
-    video, state, progress, nativeEvents,
+    video, state, progress, nativeEvents, swapCalls,
     native(command) { return nativeHandler(command); },
     direct(command) { context.pe(command); },
     async start() {
-      await poll();
+      await runPoll();
       serviceCommand = { revision: 1, command: { cmd: "play", url: localUrl, songId: "local-song", sessionId: "local-session" } };
       serviceState = { revision: 1, commandRevision: 1, sessionId: "local-session", songId: "local-song", name: "Example song",
         playbackState: "playing", event: "play", currentTime: 0, duration: 360.566667, mediaUrl: localUrl };
-      await poll();
+      await runPoll();
       assert.equal(state.__OliviaSoulActiveSessionId, "local-session", "fixture must start real local playback before injecting late commands");
       assert.equal(video.currentSrc, localUrl);
     },
-    async command(command, revision = 2) { serviceCommand = { revision, command }; await poll(); },
+    async command(command, revision = 2) { serviceCommand = { revision, command }; await runPoll(); },
     setState(next) { serviceState = next; },
     offline() { fetchFailure = true; },
     holdState() {

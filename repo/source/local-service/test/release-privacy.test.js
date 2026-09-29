@@ -409,8 +409,8 @@ test("生产 trusted 文件白名单使用源码固定 SHA-256 常量", async ()
     ["nodeExeSha256", "bae898add4643fcf890a83ad8ae56e20dce7e781cab161a53991ceba70c99ffb"],
     ["whisperTalkLlamaExeSha256", "31dbb055479cde7d05919dcabfdb7aa792f0fbb46c848e50f44aa8688c47801e"],
     ["whisperModelSha256", "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"],
-    ["ffmpegExeSha256", "b25445154b6f77e46f321b0de49a3d9fe4a462a5fdb7765c1ff4a9ce9950f44e"],
-    ["ffprobeExeSha256", "beec24941e9d77db32e6ce6b21731575e18c92dff4d7c04988e0d115021a8259"],
+    ["ffmpegExeSha256", "5de64676fdbe2b734a585f6d64c607ca8a89870089b990c3e779ecb2ad47f0f8"],
+    ["ffprobeExeSha256", "73f69946a19ec306b3d1e973b7843b182d22a6ca2db008cb6c9330614191683b"],
   ];
   for (const [name, hash] of expectedPins) {
     assert.match(source, new RegExp(`\\$${name}\\s*=\\s*"${hash}"`, "u"));
