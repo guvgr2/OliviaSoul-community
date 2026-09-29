@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { feappRevisionAtLeast, isKnownFeappRevision } from "./feapp-revisions.js";
 import { createHash, randomUUID } from 'node:crypto';
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -61,7 +62,7 @@ try {
       $text=[Text.Encoding]::UTF8.GetString($content);
       [ordered]@{
         name=$entry.FullName; hash=([BitConverter]::ToString($sha.ComputeHash($content))).Replace('-','').ToLowerInvariant(); patched=$text.Contains('OliviaSoulPatch');
-        knownFeLocalePatch=($entry.FullName -match '^assets/main-[^/]+[.]js$' -and ($text.StartsWith('/*OliviaSoulPatch:mail-music-v29*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v30*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v31*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v32*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v33*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v34*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v35*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v36*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v37*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v38*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v39*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v40*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v41*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v42*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v43*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v44*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v45*/')));
+        knownFeLocalePatch=($entry.FullName -match '^assets/main-[^/]+[.]js$' -and ($text.StartsWith('/*OliviaSoulPatch:mail-music-v29*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v30*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v31*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v32*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v33*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v34*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v35*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v36*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v37*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v38*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v39*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v40*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v41*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v42*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v43*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v44*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v45*/') -or $text.StartsWith('/*OliviaSoulPatch:mail-music-v46*/')));
         localeBase64=if($entry.FullName -match '^assets/zh-cn-[^/]+[.]js$' -and $content.Length -le 1048576){[Convert]::ToBase64String($content)}else{$null}
       }
     } finally { $entryStream.Dispose(); $out.Dispose() }
@@ -319,9 +320,16 @@ export async function resolveClientBackups({ layout, dataDir, appData, roamingAp
     if (sameIdentity(original, currentFe)) return true;
     if (knownFeLocale === undefined) {
       const status = await readFeappStatus(layout.feappPath);
-      knownFeLocale = currentFe.knownFeLocalePatch && status.clientFound === true && status.managed === true
-        && (status.mounted === true || status.updateAvailable === true)
-        && ['v29', 'v30', 'v31', 'v32', 'v33', 'v34', 'v35', 'v36', 'v37', 'v38', 'v39', 'v40', 'v41', 'v42', 'v43', 'v44', 'v45'].includes(status.revision);
+      // g26：真正的根因是这里要求 managed === true && (mounted || updateAvailable) ——
+      // 但「服务未挂载」时它们本来就可能为假，而需要备份去还原的恰恰常是这种状态：
+      // 补丁已打进游戏、程序却认为未挂载 → 判定恒为 false → 干净备份被判「身份不符」，
+      // 用户看到 backup feapp archive identity mismatch（上游没有这层校验，所以从不报错）。
+      // 现在只要求「当前 main 带本支已知补丁标记 + revision 是本支已知版本」。
+      // 注意仍要枚举已知版本：仓库测试要求拒绝无法识别的版本号与未知 marker。
+      // ⚠️ 以后每次新增补丁版本（FE vNN），这里与 tools/get-feapp-status.ps1 的 knownMarkers 都要同步。
+      knownFeLocale = currentFe.knownFeLocalePatch === true
+        && status.clientFound === true
+        && isKnownFeappRevision(status.revision) && feappRevisionAtLeast(status.revision, 'v29');
     }
     return sameIdentity(original, currentFe, knownFeLocale);
   }

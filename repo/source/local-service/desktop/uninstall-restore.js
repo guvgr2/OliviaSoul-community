@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { feappRevisionAtLeast, isKnownFeappRevision } from "./feapp-revisions.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { lstat, mkdir, open, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
@@ -106,7 +107,7 @@ async function defaultValidateLegacyArchivePair({ originals, targets, statuses }
   ]);
   if (originalFe.patched || originalWp.patched || !currentFe.patched || !currentWp.patched) return false;
   return sameClientArchiveIdentity(originalFe, currentFe, {
-    allowKnownFeLocale: currentFe.knownFeLocalePatch && ["v29", "v30", "v31", "v32"].includes(statuses.feapp.revision),
+    allowKnownFeLocale: currentFe.knownFeLocalePatch && feappRevisionAtLeast(statuses.feapp.revision, "v29"),
   }) && sameClientArchiveIdentity(originalWp, currentWp);
 }
 

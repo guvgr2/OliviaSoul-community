@@ -24,7 +24,7 @@ function Step-Mark([string]$Name) {
 }
 
 $baseVersion = "2008.2.7"
-$version = "2008.2.7-linli9-g25"
+$version = "2008.2.7-linli9-g26"
 $packagePath = Join-Path $project "package.json"
 $packageText = [IO.File]::ReadAllText($packagePath, $utf8NoBom)
 $package = $packageText | ConvertFrom-Json
@@ -403,7 +403,7 @@ foreach ($name in $midiModules) {
 $midiMissing = @(Get-ChildItem -LiteralPath (Join-Path $project "midi") -Filter "*.js" -File |
     Where-Object { $midiModules -notcontains $_.Name } | ForEach-Object { $_.Name })
 if ($midiMissing.Count -gt 0) { Write-Warning "midi 目录里有未列入打包清单的模块（若它们被 import，打包就会漏）：$($midiMissing -join '、')" }
-foreach ($name in @(
+$desktopModules = @(
     "controller.js",
     "node-host.js",
     "workspace-template.js",
@@ -411,10 +411,18 @@ foreach ($name in @(
     "client-execution.js",
     "client-patch-registry.js",
     "uninstall-restore.js",
+    # --- g26 新增：FE 补丁版本序列的唯一权威来源（漏了它，desktop 侧 import 会直接失败）---
+    "feapp-revisions.js",
     "startup-task.ps1"
-)) {
+)
+foreach ($name in $desktopModules) {
     Copy-PublicFile (Join-Path $project "desktop\$name") (Join-Path $stage "app\desktop\$name")
 }
+# g26：与 midi 相同的反向检查 —— desktop 里有 .js 没进清单就报警。
+# 之前 desktop 没有这道检查，新增的 feapp-revisions.js 差点被漏掉（漏了程序起不来）。
+$desktopMissing = @(Get-ChildItem -LiteralPath (Join-Path $project "desktop") -Filter "*.js" -File |
+    Where-Object { $desktopModules -notcontains $_.Name } | ForEach-Object { $_.Name })
+if ($desktopMissing.Count -gt 0) { Write-Warning "desktop 目录里有未列入打包清单的模块（若被 import，打包就会漏）：$($desktopMissing -join '、')" }
 
 # Official finished MP4 files are validated with the packaged FFmpeg tools.
 # The release intentionally excludes Godot, FluidSynth, SoundFont and MIDI rendering bootstrap files.

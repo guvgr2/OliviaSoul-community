@@ -83,7 +83,7 @@ test('v11 legacy route set is upgradeable with verified originals; missing or mi
   const f = await fixture();
   const endpoints = ['/signIn','/getUserInfo','/letter/send','/letter/list','/letter/detail','/letter/unread_count','/letter/share','/letter/resend','/addToPlaylist','/delFromPlaylist','/searchPlaylist'];
   const main = '/*OliviaSoulPatch:mail-music-v11*/' + endpoints.map(e => `"http://127.0.0.1:27149/toy${e}"`).join(';');
-  const status = path => JSON.parse(execFileSync('powershell.exe',['-NoProfile','-File',fileURLToPath(new URL('../../tools/get-feapp-status.ps1',import.meta.url)),'-FeappPath',path],{encoding:'utf8',windowsHide:true}));
+  const status = path => JSON.parse(execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',fileURLToPath(new URL('../../tools/get-feapp-status.ps1',import.meta.url)),'-FeappPath',path],{encoding:'utf8',windowsHide:true}));
   await writeFile(f.layout.feappPath,zip(main));
   assert.deepEqual(status(f.layout.feappPath), {clientFound:true,mounted:false,managed:true,updateAvailable:true,revision:'v11',port:27149});
   f.readFeappStatus = async path => status(path); f.createOnMount = true;
@@ -338,10 +338,24 @@ test('inline locale identity permits the current v32 FE after mount registration
   assert.deepEqual(await readFile(result.webplayer), zip('player()'));
 });
 
-for (const revision of ['v41', 'v42', 'v43', 'v44']) test(`inline locale identity permits ${revision} FE after mount registration`, async () => {
+for (const revision of ['v41', 'v42', 'v43', 'v44', 'v45', 'v46']) test(`inline locale identity permits ${revision} FE after mount registration`, async () => {
   const f = await inlineLocaleFixture({ revision, markerRevision: revision });
   f.readFeappStatus = async path => path === f.layout.feappPath
     ? { clientFound: true, mounted: true, managed: true, updateAvailable: false, revision, port: 27149 }
+    : { clientFound: true, mounted: false, managed: false, updateAvailable: false, revision: null, port: null };
+  const result = await resolver(f);
+  assert.deepEqual(await readFile(result.feapp), f.original);
+  assert.deepEqual(await readFile(result.webplayer), zip('player()'));
+});
+// g26：补丁已经打进游戏、但注册信息里还没有挂载记录（界面显示「服务未挂载」）——
+// 这是换新版/重装后最常见的状态，也正是「需要用原版备份去还原并重新打补丁」的状态。
+// 修复前 knownFeLocale 的判定额外要求 managed && (mounted || updateAvailable)，
+// 在这里恒为 false，于是干净备份被判「身份不符」，用户看到
+// backup feapp archive identity mismatch（上游没有这层校验，所以从不报错）。
+for (const revision of ['v29', 'v45', 'v46']) test(`inline locale identity permits unmanaged ${revision} FE whose file is already patched`, async () => {
+  const f = await inlineLocaleFixture({ revision, markerRevision: revision });
+  f.readFeappStatus = async path => path === f.layout.feappPath
+    ? { clientFound: true, mounted: false, managed: false, updateAvailable: false, revision, port: null }
     : { clientFound: true, mounted: false, managed: false, updateAvailable: false, revision: null, port: null };
   const result = await resolver(f);
   assert.deepEqual(await readFile(result.feapp), f.original);

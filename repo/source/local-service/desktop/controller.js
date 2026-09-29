@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { feappRevisionAtLeast, isKnownFeappRevision } from "./feapp-revisions.js";
 import { createHash, randomUUID } from "node:crypto";
 import { access, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
@@ -143,7 +144,8 @@ export class DesktopController {
     return { autoStart: enabled };
   }
 
-  async runElevatedScript(script, args = [], executionMode = "local") {
+  // 把参数数组格式化成 PowerShell 调用片段（原 runElevatedScript 内的逻辑，抽出来给批量调用复用）。
+  formatScriptArgs(args) {
     if (args.length % 2 !== 0) throw new Error("提权脚本参数必须成对传入");
     const formattedArgs = [];
     for (let index = 0; index < args.length; index += 2) {
@@ -154,11 +156,24 @@ export class DesktopController {
         formattedArgs.push(`${parameter}:$${value === true || value === "true" ? "true" : "false"}`);
       } else formattedArgs.push(parameter, powershellLiteral(value));
     }
+    return formattedArgs;
+  }
+
+  // g26：一次提权把多个脚本跑完。
+  // 原来「启用本地服务」逐个脚本各提权一次 —— 用户会连续看到多个权限确认窗口，
+  // 而且中途拒绝一次就整体失败。现在把它们拼成一条命令，只提权一次。
+  // 语义与逐个执行一致：任一步出错即中断（$ErrorActionPreference='Stop' + 单一 try/catch），
+  // 错误信息仍经 errorFile 回传，上层回滚逻辑无需改动。
+  async runElevatedScripts(steps, executionMode = "local") {
+    if (!steps.length) return;
     const errorFile = join(this.appData, `elevated-${randomUUID()}.txt`);
-    const invoke = [`& ${powershellLiteral(script)}`, ...formattedArgs].join(" ");
+    const invokes = steps
+      .map(({ script, args = [] }) => [`& ${powershellLiteral(script)}`, ...this.formatScriptArgs(args)].join(" "))
+      .join("; ");
+    const first = steps[0].args ?? [];
     const preflight = executionMode === "network"
-      ? networkClosedGamePreflight(args[args.indexOf("-GameRoot") + 1], this.clientExePath) : "";
-    const command = `$ErrorActionPreference = 'Stop'; try { ${preflight} ${invoke} } catch { [IO.File]::WriteAllText(${powershellLiteral(errorFile)}, $_.Exception.Message, (New-Object Text.UTF8Encoding $false)); exit 1 }`;
+      ? networkClosedGamePreflight(first[first.indexOf("-GameRoot") + 1], this.clientExePath) : "";
+    const command = `$ErrorActionPreference = 'Stop'; try { ${preflight} ${invokes} } catch { [IO.File]::WriteAllText(${powershellLiteral(errorFile)}, $_.Exception.Message, (New-Object Text.UTF8Encoding $false)); exit 1 }`;
     const encoded = Buffer.from(command, "utf16le").toString("base64");
     const elevate = `$process = Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}' -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $process.ExitCode`;
     try {
@@ -175,6 +190,11 @@ export class DesktopController {
       await rm(errorFile, { force: true });
     }
   }
+
+  async runElevatedScript(script, args = [], executionMode = "local") {
+    return this.runElevatedScripts([{ script, args }], executionMode);
+  }
+
 
   async selectedClientLayout() {
     if (!this.clientExePath) return null;
@@ -365,6 +385,21 @@ export class DesktopController {
         return this.runElevatedScript(script, args, mode);
       });
   }
+  // g26：与 clientWrite 相同，但一次提权把多个脚本跑完（只探测一次执行环境，只弹一次权限确认）。
+  async clientWriteBatch(steps) {
+    const names = steps.map(({ script }) => basename(script, ".ps1").replace(/[^a-z0-9-]/gu, "")).join("+");
+    return this.clientStage(names, async () => {
+      const first = steps[0]?.args ?? [];
+      const index = first.indexOf("-GameRoot");
+      if (index < 0 || typeof first[index + 1] !== "string" || !first[index + 1])
+        throw new Error("缺少游戏目录参数");
+      const mode = await runProcess("powershell.exe", powershellCommand(clientPathProbe(first[index + 1])),
+        { timeoutMs: 15_000 });
+      if (mode !== "network" && mode !== "local") throw new Error("无法确认游戏目录执行环境");
+      return this.runElevatedScripts(steps, mode);
+    });
+  }
+
 
   async clientOperationGuard(operation, run) {
     if (this.clientOperation) throw Object.assign(new Error("客户端启停操作仍在执行，请等待完成"), {
@@ -434,11 +469,11 @@ export class DesktopController {
     ]));
     const originals = await this.clientStage("originals", () => this.originalClientBackups(layout, true));
     this.mountRollbackContext = { layout, originals };
-    if (current.updateAvailable || (current.mounted && ["v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44", "v45"].includes(current.revision) && layout.version === "0.0.9.627")) {
-      if (["v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44", "v45"].includes(current.revision)) {
+    if (current.updateAvailable || (current.mounted && feappRevisionAtLeast(current.revision, "v31") && layout.version === "0.0.9.627")) {
+      if (feappRevisionAtLeast(current.revision, "v24")) {
         const originalFile = originals.feapp;
         // FE-only v28/v29/v30 upgrades must not disturb a current same-port player.
-        const keepWebplayer = ["v28", "v29", "v30", "v31", "v32", "v33", "v34", "v35", "v36", "v37", "v38", "v39", "v40", "v41", "v42", "v43", "v44", "v45"].includes(current.revision)
+        const keepWebplayer = feappRevisionAtLeast(current.revision, "v28")
           && currentWebplayer.mounted && currentWebplayer.port === port;
         const originalWebplayer = keepWebplayer ? null : originals.webplayer;
         if (port !== this.currentPort) await assertPortAvailable(port);
