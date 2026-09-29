@@ -125,7 +125,11 @@ test("actual playback recovers the mapped legacy source after two permanent rena
   // A URL without an explicit variant still means the registered default, not the current clock slot.
   assert.equal(await fetch(ctx.videoUrl(source.song.id)).then(response => response.text()), "DAY ORIGINAL");
   assert.deepEqual(ctx.storedIdentity(source.song.id), identity);
-  assert.deepEqual((await ctx.json("/toy/player-command")).data, started.data);
+  // 状态轮询会带上 nativeCommand / nativeLyrics 之类的附加字段，命令回执没有；
+  // 两者不该做全等比较，只比共同的关键字段。
+  const polled = (await ctx.json("/toy/player-command")).data;
+  assert.equal(polled.revision, started.data.revision);
+  assert.deepEqual(polled.command, started.data.command);
 });
 
 test("missing playback media returns real HEAD and GET 404 and rejects play before replacing an active session", async t => {

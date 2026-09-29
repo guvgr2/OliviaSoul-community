@@ -81,6 +81,7 @@
     head.append(
       node("strong", "数据搬家"),
       node("small", "如果本机还装过别的 OliviaSoul（含旧版便携包），可以把那份数据复制到当前安装来。换了新版、重装之后曲名 / 时段 / 信件看着不见了，多半就是数据目录变了，用这里搬回来（只读探测，复制前会先备份）"),
+      node("p", "搬完请按提示重启程序。如果游戏里还列着旧作品或提示「官方演奏视频不存在」，让游戏重新读取一次曲库（重开游戏最稳）——那是游戏自己缓存的列表，不是数据没搬过来。", "fieldHint"),
     );
     const actions = node("div", null, "actions");
     const scan = node("button", "扫描本机其它安装", "secondary");

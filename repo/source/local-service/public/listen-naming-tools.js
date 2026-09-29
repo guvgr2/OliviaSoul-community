@@ -288,7 +288,26 @@
     const contribute = node("button", "生成投稿文件（填 GitHub 用户名）", "secondary");
     actions.append(refresh, autoName, contribute);
     const result = node("p", "", "result");
-    block.append(head, status, actions, result, buildContributionSection());
+    // g22：便携版每个新版都是新的数据目录，很容易出现「游戏里明明有歌、就是播不了」，
+    // 根子就是当前曲库是空的、数据还在别的安装里。这里主动探测并直接给出搬家入口。
+    const migrateNotice = node("div", null, "ln-migrateNotice");
+    block.append(head, status, migrateNotice, actions, result, buildContributionSection());
+
+    async function checkEmptyLibrary() {
+      try {
+        const detect = await api("/migrate/detect");
+        const items = Array.isArray(detect?.items) ? detect.items : [];
+        const current = items.find(item => item.isCurrent);
+        const currentSongs = Number(current?.songCount ?? 0);
+        const donors = items.filter(item => !item.isCurrent && Number(item.songCount ?? 0) > 0);
+        if (currentSongs > 0 || !donors.length) { migrateNotice.replaceChildren(); return; }
+        const best = donors.sort((a, b) => Number(b.songCount ?? 0) - Number(a.songCount ?? 0))[0];
+        migrateNotice.replaceChildren(
+          node("p", `⚠ 当前曲库是空的（0 首），但本机还有一份旧数据：${best.path}（${best.songCount} 首）。`, "fieldHint"),
+          node("p", "便携版每个新版都是新的数据目录 —— 游戏里就算还列着歌，播放时也会说「官方演奏视频不存在」。到「数据搬家」把旧数据复制过来即可。", "fieldHint"),
+        );
+      } catch { /* 探测失败就不提示，不打扰 */ }
+    }
 
     async function loadStatus() {
       try {
@@ -298,6 +317,7 @@
       } catch (error) {
         status.textContent = `读取状态失败：${error.message}`;
       }
+      await checkEmptyLibrary();
     }
 
     refresh.addEventListener("click", async () => {

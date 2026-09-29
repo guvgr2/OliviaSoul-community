@@ -2690,6 +2690,8 @@ export async function createOliviaService(options = {}) {
       } finally { await handle.close(); }
       return file;
     } catch {
+      // g22：已从曲库移除的作品不该说成「文件不存在」，那会让人以为文件丢了。
+      if (song?.removed) throw playbackMediaError(404, "该作品已从曲库移除，请刷新曲库后重试", "MEDIA_SONG_REMOVED");
       throw playbackMediaError(404, "官方演奏视频不存在或无法确认对应关系，请检查原导入目录后重试");
     }
   }
@@ -3005,7 +3007,9 @@ export async function createOliviaService(options = {}) {
         songId = String(body.songId ?? urlSongId).trim();
         if (!songId || songId !== urlSongId) throw httpError(400, "作品与播放地址不匹配");
         const song = midiStore.getUserSong(songId);
-        if (!song?.videoPath) throw playbackMediaError(404, "官方演奏视频不存在");
+        if (!song?.videoPath) throw playbackMediaError(404, song?.removed
+          ? "该作品已从曲库移除，请刷新曲库后重试"
+          : "官方演奏视频不存在");
         const sessionId = randomUUID();
         const playbackUrl = new URL(mediaUrl);
         const view = songVariants(song).find(item => item.key === playbackUrl.searchParams.get("variant"))?.view
@@ -3111,7 +3115,7 @@ export async function createOliviaService(options = {}) {
       lyrics.observe(localPlayerState, localPlayerResolvedSource);
       console.log(`[player-command] revision=${localPlayerCommand.revision} cmd=${cmd} song=${songId}`);
       commandEvents.notify('player');
-      return ok(req, res, localPlayerCommand, { "Cache-Control": "no-store" });
+      return ok(req, res, { ...localPlayerCommand, nativeCommand: nativeLyricsControl.poll() }, { "Cache-Control": "no-store" });
     }
     if (req.method === "GET" && path === "/toy/player-state") {
       return ok(req, res, localPlayerState, { "Cache-Control": "no-store" });
@@ -3219,7 +3223,9 @@ export async function createOliviaService(options = {}) {
             file = await resolvePlaybackSource(item, key);
           }
         } else {
-          if (!item?.videoPath) throw playbackMediaError(404, "官方演奏视频不存在");
+          if (!item?.videoPath) throw playbackMediaError(404, item?.removed
+            ? "该作品已从曲库移除，请刷新曲库后重试"
+            : "官方演奏视频不存在");
           file = midiStore.resolvePath(item.videoPath);
         }
         await serveVideoFile(req, res, file, "官方演奏视频不存在");
