@@ -62,7 +62,7 @@ import { importPerformanceLibrary, scanPerformanceLibrary } from "./midi/library
 import { watchPerformanceLibrary } from "./midi/library-watch.js";
 import { createVideoDurationProbe } from "./midi/media-probe.js";
 import { DurationRepair } from "./midi/duration-repair.js";
-import { openDatabaseHealing } from "./midi/db-self-heal.js";
+import { cleanStaleSidecars, openDatabaseHealing } from "./midi/db-self-heal.js";
 import { checkMigrationCapacity, resolveSongStoragePath, storageDirectories } from "./storage-paths.js";
 import { createStorageMigrationManager } from "./storage-migration.js";
 import { mergeLegacyDatabases, restoreLegacyModelConfig } from "./data-migration.js";
@@ -741,8 +741,18 @@ export async function createOliviaService(options = {}) {
   // database disk image is malformed，用户以为数据没了。
   // 这里只在【真的打不开且属于损坏】时才补救：把可重建的伴随文件移开再重开一次；
   // 主库自身也坏了就原样抛出。正常路径一个文件都不碰（之前做预检探测会自己生成 -wal）。
+  // g24：打开之前先清掉「明显不一致」的伴随文件（-shm 存在但 -wal 为空）。
+  // 这正是用户实际遇到的形态：主库完好，但陈旧的 -shm 指向不存在的页，
+  // 启动时读不到、运行中一读就报 malformed（日志里表现为 20 秒后开始满屏报错）。
+  cleanStaleSidecars(databasePath, { log: message => console.log(message) });
   const db = openDatabaseHealing(databasePath, () => initDatabase(databasePath), {
     log: message => console.log(message),
+    // g24：真实读探测 —— SQLite 是惰性读取的，原来的 SELECT 1 碰不到坏页，
+    // 会让自愈睡过去。这里连业务表一起读一次，让惰性损坏在启动阶段就暴露。
+    verify: handle => {
+      handle.prepare("SELECT COUNT(*) AS n FROM sqlite_master").get();
+      handle.prepare("SELECT COUNT(*) AS n FROM user_songs").get();
+    },
   }).db;
   const midiStore = new MidiStore({ db, root: mediaIndexRoot });
   const resolveSongPreview = createSongPreviewResolver({

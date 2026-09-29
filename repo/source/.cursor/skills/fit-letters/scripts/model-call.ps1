@@ -1,4 +1,4 @@
-# Provider-neutral OpenAI-compatible model transport. PowerShell 5.x.
+﻿# Provider-neutral OpenAI-compatible model transport. PowerShell 5.x.
 # Dot-source this file, call Import-ModelConfig once, then Invoke-ModelChat.
 
 $script:ModelUtf8NoBom = New-Object System.Text.UTF8Encoding $false
