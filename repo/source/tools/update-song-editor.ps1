@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)][string]$ArchivePath,
     [Parameter(Mandatory = $true)][string]$PreviousEditor,
     [Parameter(Mandatory = $true)][string]$NewEditor,

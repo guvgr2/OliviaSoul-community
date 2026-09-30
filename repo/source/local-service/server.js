@@ -2717,6 +2717,9 @@ export async function createOliviaService(options = {}) {
   // 会话因此被销毁、进度丢失 —— 表现就是「暂停后继续只能从头」。
   // 这里在 stop 时记住位置，同一首歌在窗口内再次 play 时下发 resumeAt，由前端 seek 过去。
   const LOCAL_RESUME_WINDOW_MS = 30 * 60 * 1000;
+  // 续播位置表的条目上限：超出时按插入顺序淘汰最旧的一条（Map 保持插入序），
+  // 避免长期运行后无限增长。
+  const LOCAL_RESUME_MAX_ENTRIES = 200;
   // g27：续播是实验性功能，可用 settings.pause_resume_enabled=false 关闭。
   // 关闭后 resumeAt 恒为 0，播放行为与本版之前完全一致 —— 其他功能不受影响。
   function localResumeEnabled() {
@@ -3190,6 +3193,17 @@ export async function createOliviaService(options = {}) {
       // g27：stop 时记住位置（正在播、且已播过 1 秒以上，避免片头就记）
       if (localResumeEnabled() && cmd === "stop" && previousState.playbackState === "playing"
         && previousState.songId && Number(previousState.currentTime) > 1) {
+        // 先清理过期条目，再限制总量：这个 Map 会随播放过的歌曲增长，
+        // 不清理的话长期运行会缓慢积累（每首约几十字节，但不能无界）。
+        const expireBefore = Date.now() - LOCAL_RESUME_WINDOW_MS;
+        for (const [key, value] of localResumePoints) {
+          if (!value || value.at < expireBefore) localResumePoints.delete(key);
+        }
+        while (localResumePoints.size >= LOCAL_RESUME_MAX_ENTRIES) {
+          const oldest = localResumePoints.keys().next();
+          if (oldest.done) break;
+          localResumePoints.delete(oldest.value);
+        }
         localResumePoints.set(previousState.songId, {
           currentTime: Number(previousState.currentTime),
           at: Date.now(),
@@ -3254,9 +3268,11 @@ export async function createOliviaService(options = {}) {
     }
     if (req.method === "POST" && path === "/toy/player-state") {
       const body = await readJson(req);
-      const commandRevision = Number(body.commandRevision);
-      if (false && (!Number.isInteger(commandRevision) || commandRevision < 1))
-        throw httpError(400, "播放命令版本无效");
+      // WebPlayer 在会话切换的瞬间可能发出 commandRevision 缺失或为 0 的上报。
+      // 这类上报不该被硬性拒绝（否则那一瞬间的进度会丢），也不该被当作合法版本；
+      // 归一为 -1 后，交给下面的一致性检查自然忽略即可。
+      const rawRevision = Number(body.commandRevision);
+      const commandRevision = Number.isInteger(rawRevision) && rawRevision >= 1 ? rawRevision : -1;
       if (commandRevision !== localPlayerCommand.revision)
         return ok(req, res, localPlayerState, { "Cache-Control": "no-store" });
       const songId = String(body.songId ?? "").trim();

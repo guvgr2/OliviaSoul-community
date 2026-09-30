@@ -65,11 +65,34 @@ function runProcess(command, args, { timeoutMs = 0 } = {}) {
   });
 }
 
+/** 探测单个端口是否可用（不抛错，返回布尔）。 */
+function isPortAvailable(port) {
+  return new Promise(resolvePromise => {
+    const probe = createNetServer();
+    probe.once("error", () => resolvePromise(false));
+    probe.listen(port, "127.0.0.1", () => probe.close(() => resolvePromise(true)));
+  });
+}
+
+/**
+ * 从 preferred 开始找一个可用端口（启动阶段使用）。
+ * 全部不可用时返回原值，让后续流程按原来的方式报错 —— 不掩盖真实问题。
+ */
+async function pickAvailablePort(preferred, attempts = 20) {
+  const start = Number(preferred) || DEFAULT_PORT;
+  for (let offset = 0; offset < attempts; offset += 1) {
+    const candidate = start + offset;
+    if (candidate > 65535) break;
+    if (await isPortAvailable(candidate)) return candidate;
+  }
+  return start;
+}
+
 function assertPortAvailable(port) {
   return new Promise((resolvePromise, reject) => {
     const probe = createNetServer();
     probe.once("error", error => {
-      if (error.code === "EADDRINUSE") reject(new Error(`端口 ${port} 已被其他程序占用`));
+      if (error.code === "EADDRINUSE") reject(new Error(`端口 ${port} 已被其他程序占用。请在「设置 → 服务端口」换一个空闲端口，或关闭占用该端口的程序后重试。`));
       else reject(error);
     });
     probe.listen(port, "127.0.0.1", () => probe.close(resolvePromise));
@@ -95,8 +118,14 @@ export class DesktopController {
 
   async initialize() {
     const settings = await this.readRuntimeSettings();
-    this.currentPort = settings.port;
     this.clientExePath = settings.clientExe;
+    // 端口被别的程序占用时自动退让。只在启动阶段做：此时尚未挂载补丁，
+    // 换端口不会影响游戏端（补丁里写死了服务地址，挂载之后不能再悄悄换）。
+    this.currentPort = await pickAvailablePort(settings.port);
+    if (this.currentPort !== settings.port) {
+      console.log(`[port] ${settings.port} 已被占用，改用 ${this.currentPort}`);
+      void this.writeRuntimeSettings().catch(() => {});
+    }
     await this.createOwnedBackend(this.currentPort);
     return this.currentPort;
   }

@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)][string]$GameRoot,
     [Parameter(Mandatory = $true)][string]$CleanFeapp,
     [Parameter(Mandatory = $true)][string]$CatalogRoot,

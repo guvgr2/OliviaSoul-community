@@ -1,4 +1,4 @@
-function Set-OliviaSoulLocalMidiLocale {
+﻿function Set-OliviaSoulLocalMidiLocale {
     param(
         [Parameter(Mandatory = $true)][string]$ExtractedRoot,
         [Parameter(Mandatory = $true)][Text.Encoding]$Utf8

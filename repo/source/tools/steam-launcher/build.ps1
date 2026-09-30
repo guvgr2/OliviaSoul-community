@@ -1,4 +1,4 @@
-param([Parameter(Mandatory = $true)][string]$OutputDirectory)
+﻿param([Parameter(Mandatory = $true)][string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $frameworkRoot = Join-Path $env:SystemRoot 'Microsoft.NET'
 $candidates = @(

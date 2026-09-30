@@ -415,7 +415,13 @@ test("initialize creates the backend without starting or waiting for legacy patc
   ]);
 
   assert.equal(initialized, true);
-  assert.deepEqual(events, [["backend", 27149]]);
+  // initialize 现在会先经 pickAvailablePort 确认端口可用：空闲则沿用，被占用则退让。
+  // 因此断言「后端被创建、端口合法」，而不是钉死数值
+  // （否则结果会取决于机器上 27149 当时是否被占用）。
+  assert.equal(events.length, 1, `应只创建一次后端，实际 ${JSON.stringify(events)}`);
+  assert.equal(events[0][0], "backend");
+  assert.ok(Number.isInteger(events[0][1]), "端口必须是整数");
+  assert.ok(events[0][1] >= 27149, `端口应从 27149 起，实际 ${events[0][1]}`);
 });
 
 test("first mount and port-failure rollback never refresh already verified staged originals", async () => {

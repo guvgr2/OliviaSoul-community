@@ -1,4 +1,4 @@
-param([string]$OutputDirectory = (Join-Path $PSScriptRoot 'test-output'))
+﻿param([string]$OutputDirectory = (Join-Path $PSScriptRoot 'test-output'))
 $ErrorActionPreference = 'Stop'
 $csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $env:OLIVIA_STEAM_WAITER_TEST_ROOT = $OutputDirectory

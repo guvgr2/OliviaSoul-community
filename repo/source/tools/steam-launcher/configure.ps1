@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet('preview', 'install', 'restore')][string]$Mode = 'preview',
     [string]$SteamUserId,
     [string]$SteamPath,

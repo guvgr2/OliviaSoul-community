@@ -54,7 +54,9 @@ export function createFaststartCache({
         await runProcess(ffmpegPath, [
           "-hide_banner", "-loglevel", "error", "-y",
           "-i", originalPath,
-          "-c", "copy", "-movflags", "+faststart",
+          // 产物临时名是 "<target>.part"，ffmpeg 无法从扩展名推断容器格式，
+          // 必须显式指定 -f mp4，否则会报「Unable to find a suitable output format」。
+          "-f", "mp4", "-c", "copy", "-movflags", "+faststart",
           temporary,
         ], { timeoutMs });
         if (existsSync(temporary) && statSync(temporary).size > 0) {

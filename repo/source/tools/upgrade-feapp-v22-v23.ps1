@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)][string]$GameRoot,
     [Parameter(Mandatory = $true)][string]$Version,
     [string]$ServiceUrl = "http://127.0.0.1:27149"

@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$InstallRoot = "",
     [string]$ManifestPath = (Join-Path $PSScriptRoot "..\midi-renderer\runtime-manifest.json"),
     [switch]$VerifyOnly,

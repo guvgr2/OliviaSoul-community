@@ -1,4 +1,4 @@
-function Stop-GameProcessById([int]$ProcessId) {
+﻿function Stop-GameProcessById([int]$ProcessId) {
     try {
         Stop-Process -Id $ProcessId -Force -ErrorAction Stop
     }
