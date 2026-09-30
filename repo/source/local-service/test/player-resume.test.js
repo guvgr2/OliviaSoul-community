@@ -102,7 +102,11 @@ test("暂停后同一首歌再次播放：带上 resumeAt（从上次位置继�
   assert.equal(snapshot.playbackState, "playing");
 });
 
-test("续播点用过即清除：连续第三次播放同一首不再续播", async t => {
+test("续播位置按歌记录：连续多次播放同一首始终带续播点", async t => {
+  // 设计说明（按用户建议，与音乐软件一致）：位置按「歌」保存，不再「用完即清」。
+  // 原因：前端点「继续」时会连发两次 play（先建立会话、再真正播放），
+  //       若首次就把位置清掉，第二次会拿到 0，表现为「从 0 播」。
+  //       换歌不受影响 —— 每首歌取自己的位置。
   const ctx = await fixture(t);
   const song = await ctx.makeSong("resume-b", "Resume B");
   await ctx.playThenStopAt(song, 30);
@@ -110,8 +114,8 @@ test("续播点用过即清除：连续第三次播放同一首不再续播", as
   await ctx.play(song);
   assert.equal((await ctx.state()).resumeAt, 30, "第二次播放带续播点");
 
-  await ctx.play(song); // 第三次（服务端已把记忆点用掉）
-  assert.equal((await ctx.state()).resumeAt, 0, "续播点用过即清除，不做无限续播");
+  await ctx.play(song);
+  assert.equal((await ctx.state()).resumeAt, 30, "第三次播放仍带续播点（按歌保留，不清除）");
 });
 
 test("换一首歌播放不带续播点", async t => {
@@ -123,9 +127,9 @@ test("换一首歌播放不带续播点", async t => {
   await ctx.play(second);
   assert.equal((await ctx.state()).resumeAt, 0, "换歌必须从头播");
 
-  // 而且记忆点已被清除，回到第一首也不该续播
+  // 位置按歌记录：换到第二首不影响第一首自己的位置，回到第一首仍可续播
   await ctx.play(first);
-  assert.equal((await ctx.state()).resumeAt, 0, "中途换歌后旧记忆点不应复活");
+  assert.equal((await ctx.state()).resumeAt, 55, "回到第一首仍记得它自己的位置（换歌互不影响）");
 });
 
 test("几乎没播就停止（≤1 秒）不记续播点，避免片头就续播", async t => {

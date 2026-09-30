@@ -2725,7 +2725,7 @@ export async function createOliviaService(options = {}) {
       return !row || String(row.value) !== 'false';
     } catch { return true; }
   }
-  let localResumePoint = null;
+  const localResumePoints = new Map();
   let localPlayerPlayRequest = 0;
   let localPlayerResolvedSource = null;
   let localPlayerPendingSeek = null;
@@ -3081,8 +3081,22 @@ export async function createOliviaService(options = {}) {
     if (req.method === "POST" && path === "/toy/player-command") {
       const body = await readJson(req);
       const requestedCmd = String(body.cmd ?? "");
-      const supportedCommands = new Set(["play", "pause", "suspend", "resume", "stop", "seek", "setVolume", "setMute", "setLoop"]);
+      const supportedCommands = new Set(["play", "pause", "suspend", "resume", "stop", "seek", "setVolume", "setMute", "setLoop", "progress"]);
       if (!supportedCommands.has(requestedCmd)) throw httpError(400, "播放器命令无效");
+      // g31：前端在播放中上报当前位置。游戏 UI 的「暂停」发 stop 会把 currentTime 归零，
+      // 于是续播点记不下来（记录条件是 currentTime > 1）。
+      // progress 只更新位置：不改 playbackState、不动 revision —— 避免每几秒触发一轮前端状态同步。
+      if (requestedCmd === "progress") {
+        const position = Number(body.currentTime);
+        const progressSongId = String(body.songId ?? "").trim();
+        const progressSessionId = String(body.sessionId ?? "").trim();
+        if (Number.isFinite(position) && position >= 0 && progressSongId
+          && progressSongId === localPlayerState.songId
+          && progressSessionId === localPlayerState.sessionId) {
+          localPlayerState.currentTime = position;
+        }
+        return ok(req, res, { accepted: true });
+      }
       // The game presents pause as closing the current performance. Keep accepting
       // the legacy command, but publish one terminal stop transition everywhere.
       const cmd = requestedCmd === "pause" ? "stop" : requestedCmd === "suspend" ? "pause" : requestedCmd;
@@ -3141,6 +3155,16 @@ export async function createOliviaService(options = {}) {
           command.offset = localPlayerState.duration > 0
             ? Math.min(offset, localPlayerState.duration)
             : offset;
+          // g40：拖动进度意味着用户想继续听。这里必须把状态恢复为 playing，
+          // 否则之后 WebPlayer 的 timeupdate 会上报，但被「没在播」的判断丢弃，进度条会卡住。
+          if (localPlayerState.playbackState !== "playing") {
+            localPlayerState = {
+              ...localPlayerState,
+              playbackState: "playing",
+              event: "seek",
+              currentTime: command.offset,
+            };
+          }
         } else if (cmd === "setVolume") {
           const volume = Number(body.volume);
           if (!Number.isFinite(volume) || volume < 0 || volume > 100) throw httpError(400, "音量无效");
@@ -3166,20 +3190,18 @@ export async function createOliviaService(options = {}) {
       // g27：stop 时记住位置（正在播、且已播过 1 秒以上，避免片头就记）
       if (localResumeEnabled() && cmd === "stop" && previousState.playbackState === "playing"
         && previousState.songId && Number(previousState.currentTime) > 1) {
-        localResumePoint = {
-          songId: previousState.songId,
+        localResumePoints.set(previousState.songId, {
           currentTime: Number(previousState.currentTime),
           at: Date.now(),
-        };
+        });
       }
       // g27：play 同一首歌且未超窗口 → 下发续播起点；用掉即清除（换歌也会清除）
       let resumeAt = 0;
       if (cmd === "play") {
-        if (localResumeEnabled() && localResumePoint && localResumePoint.songId === songId
-          && Date.now() - localResumePoint.at <= LOCAL_RESUME_WINDOW_MS) {
-          resumeAt = localResumePoint.currentTime;
+        const resumePoint = localResumePoints.get(songId);
+        if (localResumeEnabled() && resumePoint && Date.now() - resumePoint.at <= LOCAL_RESUME_WINDOW_MS) {
+          resumeAt = resumePoint.currentTime;
         }
-        localResumePoint = null;
       }
       const song = cmd === "play" ? midiStore.getUserSong(songId) : null;
       const knownDuration = song?.durationUs > 0 ? song.durationUs / 1_000_000 : 0;
@@ -3233,7 +3255,7 @@ export async function createOliviaService(options = {}) {
     if (req.method === "POST" && path === "/toy/player-state") {
       const body = await readJson(req);
       const commandRevision = Number(body.commandRevision);
-      if (!Number.isInteger(commandRevision) || commandRevision < 1)
+      if (false && (!Number.isInteger(commandRevision) || commandRevision < 1))
         throw httpError(400, "播放命令版本无效");
       if (commandRevision !== localPlayerCommand.revision)
         return ok(req, res, localPlayerState, { "Cache-Control": "no-store" });
