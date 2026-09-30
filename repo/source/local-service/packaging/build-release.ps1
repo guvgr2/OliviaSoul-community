@@ -24,13 +24,14 @@ function Step-Mark([string]$Name) {
 }
 
 $baseVersion = "2008.2.7"
-$version = "2008.2.7-linli9-g28"
+$version = "2008.2.7-linli9-1.0"
 $packagePath = Join-Path $project "package.json"
 $packageText = [IO.File]::ReadAllText($packagePath, $utf8NoBom)
 $package = $packageText | ConvertFrom-Json
 if ([string]$package.version -ne $version) { throw "package.json 版本必须与脚本一致：期望 $version，实际 $($package.version)" }
-if ($version -notmatch ('^' + ($baseVersion -replace '\.', '\.') + '(?:-linli9-g\d{2})?$')) {
-    throw "版本号格式必须是 $baseVersion 或 $baseVersion-linli9-gNN"
+# 允许三种本支标识：旧的 gNN、语义化 x.y、以及测试版 x.y-beta.N
+if ($version -notmatch ('^' + ($baseVersion -replace '\.', '\.') + '(?:-linli9-(?:g\d{2}|\d+(?:\.\d+){0,2}(?:-beta\.\d+)?))?$')) {
+    throw "版本号格式必须是 $baseVersion、$baseVersion-linli9-gNN 或 $baseVersion-linli9-1.0（测试版可加 -beta.N）"
 }
 
 $lockPath = Join-Path $project "package-lock.json"

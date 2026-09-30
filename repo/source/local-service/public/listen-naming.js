@@ -97,6 +97,8 @@
 
   let elements = null;
   let state = createState();
+  // g29：用户是否已主动开始过试听。首次进入页面不自动播放，避免浏览时被突然发声打扰。
+  let userStartedPlayback = false;
   let requestEpoch = 0;
 
   function createState() {
@@ -418,10 +420,10 @@
     ui.guideClose?.addEventListener("click", () => hideGuide(true));
     // 进度面板里的「使用引导」：把收起的引导重新打开
     ui.guideButton?.addEventListener("click", () => showGuide());
-    ui.replay.addEventListener("click", () => { void replay(); });
-    ui.nextSegment.addEventListener("click", () => { void shiftSegment(); });
-    ui.skip.addEventListener("click", moveNext);
-    ui.previous.addEventListener("click", movePrevious);
+    ui.replay.addEventListener("click", () => { markUserStartedPlayback(); void replay(); });
+    ui.nextSegment.addEventListener("click", () => { markUserStartedPlayback(); void shiftSegment(); });
+    ui.skip.addEventListener("click", () => { markUserStartedPlayback(); moveNext(); });
+    ui.previous.addEventListener("click", () => { markUserStartedPlayback(); movePrevious(); });
     ui.nameInput.addEventListener("keydown", event => {
       if (event.key !== "Enter") return;
       event.preventDefault();
@@ -431,7 +433,9 @@
     ui.audio.addEventListener("error", () => {
       if (ui.audio.getAttribute("src")) setStatus("这一段取不到音频，可以按 N 换一段，或检查曲库文件和 ffmpeg。", "fault");
     });
-    ui.audio.addEventListener("loadeddata", () => { void autoplay(ui); });
+    ui.audio.addEventListener("loadeddata", () => { if (userStartedPlayback) void autoplay(ui); });
+    // g29：用户点了播放器自带的播放键（鼠标/触摸）即视为主动开始
+    ui.audio.addEventListener("pointerdown", markUserStartedPlayback);
   }
 
   // ------------------------------------------------------------ 渲染
@@ -845,6 +849,8 @@
     return `/toy/listen-naming/clip?folder=${encodeURIComponent(song.folder)}&seg=${segment}`;
   }
 
+  function markUserStartedPlayback() { userStartedPlayback = true; }
+
   async function autoplay(ui) {
     try {
       await ui.audio.play();
@@ -859,9 +865,11 @@
     const url = clipUrl(song, state.segment);
     if (elements.audio.getAttribute("src") === url) elements.audio.currentTime = 0;
     else elements.audio.src = url;
-    setStatus(`正在播放「${song.folder}」第 ${state.segment + 1} 段…`);
+    setStatus(userStartedPlayback
+      ? `正在播放「${song.folder}」第 ${state.segment + 1} 段…`
+      : `已载入「${song.folder}」第 ${state.segment + 1} 段 —— 点播放键或按空格开始试听。`);
     elements.audio.load();
-    void autoplay(elements);
+    if (userStartedPlayback) void autoplay(elements);
   }
 
   async function replay() {
@@ -1029,6 +1037,7 @@
     }
     if (event.key === " " && !inNameInput) {
       event.preventDefault();
+      markUserStartedPlayback();
       void replay();
       return;
     }

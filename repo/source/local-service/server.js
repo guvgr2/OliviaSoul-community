@@ -226,23 +226,38 @@ function modelIdsFromPayload(payload) {
   }).filter(Boolean))].sort((left, right) => left.localeCompare(right));
 }
 
-function releaseVersion(tag) {
-  // 同时接受 -linli.9（上游老格式）与 -linli9-g04（本分支格式）。
-  const match = /^(\d+)\.(\d+)\.(\d+)-linli\.?(\d+)(?:-g(\d+))?$/u.exec(String(tag ?? "").trim());
-  if (!match) return null;
-  // 固定 5 段：[主, 次, 补丁, linli 大版本, g 小版本]；没有 g 的按 0 算，两者才能比较
-  return [Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4]), Number(match[5] ?? 0)];
-}
-
-function isNewerRelease(currentTag, latestTag) {
-  const current = releaseVersion(currentTag);
-  const latest = releaseVersion(latestTag);
-  if (!current || !latest) return String(currentTag) !== String(latestTag);
-  for (let index = 0; index < current.length; index += 1) {
-    if (latest[index] !== current[index]) return latest[index] > current[index];
+  function releaseVersion(tag) {
+    // 支持三种写法，并统一成同一个可比较的段数组：
+    //   2008.2.7-linli.9     上游老格式
+    //   2008.2.7-linli9-g28  本支旧格式（本支序号 = 28）
+    //   2008.2.7-linli9-1.0  本支语义化格式（本支序号 = 1*1000 + 0*10 + 0 = 1000）
+    // 本支序号放在同一维度，保证 1.0(1000) 严格大于任何 gXX，且 1.1 > 1.0、2.0 > 1.9。
+    const text0 = String(tag ?? "").trim();
+    const base = /^(\d+)\.(\d+)\.(\d+)-linli\.?(\d+)/u.exec(text0);
+    if (!base) return null;
+    const head = [Number(base[1]), Number(base[2]), Number(base[3]), Number(base[4])];
+    const legacy = /(?:^|-)g(\d+)$/u.exec(text0);
+    if (legacy) return [...head, Number(legacy[1])];
+    const modern = /-(\d+)(?:\.(\d+))?(?:\.(\d+))?$/u.exec(text0);
+    if (modern) {
+      const major = Number(modern[1]);
+      const minor = Number(modern[2] ?? 0);
+      const patch = Number(modern[3] ?? 0);
+      return [...head, major * 1000 + minor * 10 + patch];
+    }
+    // 既没有 g 段也没有语义化段：按序号 0（等同上游裸版本）
+    return [...head, 0];
   }
-  return false;
-}
+
+  function isNewerRelease(currentTag, latestTag) {
+    const current = releaseVersion(currentTag);
+    const latest = releaseVersion(latestTag);
+    if (!current || !latest) return String(currentTag) !== String(latestTag);
+    for (let index = 0; index < current.length; index += 1) {
+      if (latest[index] !== current[index]) return latest[index] > current[index];
+    }
+    return false;
+  }
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
