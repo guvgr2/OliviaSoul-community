@@ -124,6 +124,13 @@
     return box;
   }
 
+  // 通道说明文字只有一份：读「软件更新」页那个下拉框的选项，不在这里重复写死。
+  function channelLabel(channel) {
+    const value = channel === "beta" ? "beta" : "stable";
+    const option = document.querySelector(`#updateChannel option[value="${value}"]`);
+    return (option && option.textContent ? option.textContent : (value === "beta" ? "测试版" : "稳定版")).trim();
+  }
+
   async function refresh(force) {
     const ui = panel || ensurePanel();
     if (!ui) return;
@@ -138,9 +145,21 @@
       lastTag = String(data.latestTag || "");
       ui.releaseUrl = String(data.releaseUrl || "");
       ui.assetUrl = String(data.assetUrl || "");
+      // 降级（连不上更新服务）：既不能说「有新版本」，更不能说「已经是最新版本」；
+      // 明确说明检查失败，并把发布页链接摆出来让用户手动下载。
+      if (data.degraded === true) {
+        ui.versionLine.textContent = `当前 ${data.currentTag || "?"} · 未能检查更新（${channelLabel(data.channel)}）`;
+        ui.notesBox.textContent = "";
+        ui.openRelease.hidden = !ui.releaseUrl;
+        ui.openAsset.hidden = true;
+        ui.status.textContent = String(data.message || "无法连接更新服务，可手动到发布页下载")
+          + (ui.releaseUrl ? `（发布页：${ui.releaseUrl}）` : "");
+        return;
+      }
       const sizeMb = data.assetSize ? (Number(data.assetSize) / 1048576).toFixed(1) + " MB" : "";
       ui.versionLine.textContent = `当前 ${data.currentTag || "?"} · GitHub 最新 ${lastTag || "?"}`
-        + (data.publishedAt ? ` · 发布于 ${String(data.publishedAt).slice(0, 10)}` : "");
+        + (data.publishedAt ? ` · 发布于 ${String(data.publishedAt).slice(0, 10)}` : "")
+        + ` · ${channelLabel(data.channel)}`;
       setNotes(ui.notesBox, data.notes);
       ui.openRelease.hidden = !ui.releaseUrl;
       ui.openAsset.hidden = !ui.assetUrl;
@@ -150,9 +169,10 @@
         : "当前已经是最新版本";
     } catch (error) {
       ui.notesBox.textContent = "";
-      ui.openRelease.hidden = true;
       ui.openAsset.hidden = true;
-      ui.status.textContent = "读取更新信息失败：" + error.message;
+      if (!ui.releaseUrl) ui.openRelease.hidden = true;
+      ui.status.textContent = "无法连接更新服务，可手动到发布页下载：" + error.message
+        + (ui.releaseUrl ? `（发布页：${ui.releaseUrl}）` : "");
     }
   }
 

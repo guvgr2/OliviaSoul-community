@@ -288,8 +288,18 @@
             </div>
             <div class="actions serviceMountActions">
               <button id="mountService" type="button">启用服务</button>
-              <button id="restoreClient" class="secondary" type="button" hidden>停用服务</button>
+              <button id="restoreClient" class="secondary" type="button" hidden title="停用后会把游戏文件还原成原版（补丁前的状态），存档不受影响">停用服务</button>
               <span id="serviceMountResult" class="result"></span>
+            </div>
+            <!-- 回退补丁（还原原版）：补丁后游戏白屏 / 连不上时的救援入口。
+                 与「停用服务」走的是**同一条还原链路**（client:restore），区别只在语义与文案：
+                      这个入口的名字和说明都写明「会写回原版游戏文件」，而「停用服务」是历史叫法。 -->
+            <div id="rollbackPatchBox" class="rollbackPatchBox" hidden>
+              <div class="rollbackPatchHead">
+                <span id="rollbackPatchBadge" class="mountStatus unmounted">补丁出问题？</span>
+                <button id="rollbackPatch" class="secondary danger" type="button">回退补丁（还原原版）</button>
+              </div>
+              <small id="rollbackPatchHint">补丁后游戏白屏、连不上时点这个按钮：程序会把游戏文件 feapp / webplayer 还原成本机备份里的原版（补丁前状态）—— 这就是「回退补丁」；上面「停用服务」也会还原游戏文件（历史叫法），两者差别只是名字与说明。回退只写游戏安装目录里那几个补丁文件，你的存档在 UserData 里，不会丢；之后可随时点「启用本地服务」重新打补丁。</small>
             </div>
             <div class="serviceMountBody">
               <div class="clientPicker">
@@ -409,6 +419,19 @@
               <strong>软件更新</strong>
               <small id="updateVersion">正在读取版本信息……</small>
             </div>
+            <!-- 更新通道（1.0.4）：不稳定功能只发测试版（GitHub prerelease），用户自己选。
+                 通道存进本机 settings，服务端每次检查现读 —— 切换后立刻生效，不用重启。 -->
+            <div class="updateChannelRow">
+              <div>
+                <label for="updateChannel">更新通道</label>
+                <small id="updateChannelHint">当前通道：稳定版（只收正式 Release）</small>
+              </div>
+              <select id="updateChannel" aria-describedby="updateChannelHint">
+                <option value="stable" selected>稳定版（只收正式 Release）</option>
+                <option value="beta">测试版（含 prerelease，可能不稳定）</option>
+              </select>
+              <span id="updateChannelResult" class="result" role="status"></span>
+            </div>
             <div class="actions updateActions" aria-label="下载操作">
               <button id="checkUpdate" class="secondary" type="button">检查更新</button>
               <button id="downloadUpdate" type="button" hidden>下载安装包</button>
@@ -420,6 +443,16 @@
             <div class="updateDownloadStatus">
               <progress id="updateDownloadProgress" max="100" value="0" aria-label="安装包下载进度" hidden></progress>
               <small id="updateDownloadDetails" aria-live="polite">0.0% · 0.0 KB / 0.0 KB</small>
+            </div>
+            <!-- 降级出路（1.0.4）：连不上更新服务时（本机直连 github.com 的部分 IP 会被 SNI 阻断）
+                 不报错卡死、也不假装成功 —— 说清原因并把发布页交出来，用户可以手动下载。 -->
+            <div id="updateFallback" class="updateFallback" hidden>
+              <p id="updateFallbackMessage" class="fieldHint" role="status"></p>
+              <div class="actions">
+                <button id="openReleasePage" class="secondary" type="button">打开发布页</button>
+                <span id="updateFallbackStatus" class="result" role="status"></span>
+              </div>
+              <p id="updateFallbackUrl" class="fieldHint updateFallbackUrl">https://github.com/guvgr2/OliviaSoul-community/releases</p>
             </div>
           </section>
         </section>

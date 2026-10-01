@@ -872,9 +872,10 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
     readFile(new URL("../../tools/upgrade-webplayer-v6-v7.ps1", import.meta.url), "utf8"),
     readFile(new URL("../desktop/controller.js", import.meta.url), "utf8"),
   ]);
-  // 当前补丁标记是 v59（与《使用说明》里写的「FE v59 / WebPlayer v19」一致）；
+  // 当前补丁标记是 v60（v60 只改了 handleTogglePlay 的「再次播放」恢复逻辑，仍是 FE v59 那套注入；
+  // 文档里写「FE v59 或更高」依然成立）；
   // 这里钉住它，改补丁版本时测试会提醒你同步文档
-  assert.match(patchScript, /OliviaSoulPatch:mail-music-v59/u);
+  assert.match(patchScript, /OliviaSoulPatch:mail-music-v60/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v32/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v30/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v29/u);
@@ -941,6 +942,15 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
   assert.match(v23UpgradeScript, /String\(B&&B\.videoUrl\|\|""\)\.includes\("\/toy\/midi\/songs\/"\)/u);
   assert.match(patchScript, /h\.beginLocalPlayback\(q\)/u,
     "我的上传必须复用播放器存储中的唯一会话入口");
+  // v60：「再次播放跳列表第一首」的最小修复（根因见 .test-twins/g82-跳列表根因.md）
+  //   ① 记住用户实际点过的那一个条目（= Ro 里那个已经能正确播放的 vt），不要再靠「按 id 去 x.value 里找」；
+  //   ② 再次播放时优先复用该条目；命中就必须 return，绝不能落到原生 `!T.value` 分支去播列表第一首。
+  assert.ok(patchScript.includes('window.__OliviaSoulLastPlayedItem={...B,id:OliviaSoulR}'),
+    "必须记住上次播放的本地作品完整条目（只记 id 在 x.value 里必然找不到）");
+  assert.ok(patchScript.includes('const OliviaSoulLastItem=window.__OliviaSoulLastPlayedItem;if(OliviaSoulLastItem&&String(OliviaSoulLastItem.videoUrl||"").includes("/toy/midi/songs/")){try{OliviaSoulBeginLocalPlayback(OliviaSoulLastItem);A(OliviaSoulLastItem);}catch{}return;}'),
+    "再次播放必须优先复用记住的本地作品，且命中即返回（不得回落到「播列表第一首」）");
+  assert.doesNotMatch(patchScript, /try\{m\.value=OliviaSoulItem\.id\}catch\{\}/u,
+    "不得把条目的 id 写进布尔 isPlaying（写字符串会让「正在播放」状态失真）");
   // 背景音让位的实现换过一次，断言跟着换：
   //   旧方案（已撤销）：本地播放时把 playSource 改成 songlist 骗游戏原生让位 —— 曾导致游戏黑屏。
   //   现方案（v57 起）：调用游戏自己的 ambientSound store（acquireExclusive / releaseExclusive），
@@ -4237,7 +4247,7 @@ test("管理前端包含视频维护、上方插入和本地服务状态", async
   assert.doesNotMatch(patch, /\$listWaitingCondition|\$listWaitingReply|\$waitingCondition/u);
   assert.match(patch, /\$pollingStateTo/u);
   assert.match(patch, /\$processingIconTo/u);
-  assert.match(patch, /OliviaSoulPatch:mail-music-v59/u);
+  assert.match(patch, /OliviaSoulPatch:mail-music-v60/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v32/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v30/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v29/u);

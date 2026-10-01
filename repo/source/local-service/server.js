@@ -103,6 +103,19 @@ const BULK_SUMMARY_PROMPT_VERSION = "v4-source-attribution";
 const MAX_VIDEO_BYTES = 512 * 1024 * 1024;
 const MAX_TRANSCRIPTION_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024;
 const DEFAULT_UPDATE_REPOSITORY = "guvgr2/OliviaSoul-community";
+// 更新通道（1.0.4）：不稳定功能只发测试版（GitHub 上标成 prerelease），用户自己选通道。
+//   · stable：只认正式 Release（GitHub 的 /releases/latest 天然排除 draft 与 prerelease）
+//   · beta  ：额外接受 prerelease
+// 通道值存在本机 settings（settings 表的 update_channel 键），默认 stable。
+const UPDATE_CHANNELS = Object.freeze(["stable", "beta"]);
+const UPDATE_CHANNEL_SETTING = "update_channel";
+const DEFAULT_UPDATE_CHANNEL = "stable";
+
+function normalizeUpdateChannel(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+  return UPDATE_CHANNELS.includes(text) ? text : DEFAULT_UPDATE_CHANNEL;
+}
+
 const DEFAULT_UPDATE_TAG = (() => {
   // 当前版本标记：优先读随包的 package.json（打包脚本每次都会写入版本号），
   // 读不到才退回内置值。这样以后升版本号，升级检测的"当前版本"自动跟着走，不会漏改。
@@ -864,29 +877,24 @@ export async function createOliviaService(options = {}) {
   const request = options.fetch ?? fetch;
   const updateRequest = options.updateFetch ?? options.fetch ?? createUpdateFetch();
 
-  async function fetchLatestRelease(signal) {
-    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(updateRepository))
-      throw new Error("更新仓库配置无效");
-    const response = await updateRequest(`https://api.github.com/repos/${updateRepository}/releases/latest`, {
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
-      headers: {
-        Accept: "application/vnd.github+json",
-        "User-Agent": "OliviaSoul-Updater",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-    });
-    if (response.status === 404)
-      throw new Error("这个仓库还没有发布任何版本（Releases 里是空的），所以查不到更新");
-    if (!response.ok) throw new Error(`GitHub HTTP ${response.status}`);
-    const release = await response.json();
+  // 把一条 GitHub Release 转成界面要的形态。
+  // optional=true 时（beta 列表里逐条挑）没有安装包的条目返回 null 而不是抛错 ——
+  // 测试版偶尔会先建 Release 再传安装包，不能因此让整条通道查不到更新。
+  function releasePayloadFromRelease(release, { optional = false } = {}) {
     const latestTag = String(release?.tag_name ?? "").trim();
     const asset = Array.isArray(release?.assets)
       ? release.assets.find(item => /OliviaSoul-.*-Setup\.exe$/iu.test(String(item?.name ?? "")))
       : null;
-    if (!latestTag || !asset) throw new Error("最新 Release 没有安装包");
-    const downloadUrl = new URL(String(asset.browser_download_url ?? ""));
-    if (downloadUrl.protocol !== "https:" || downloadUrl.hostname !== "github.com")
+    if (!latestTag || !asset) {
+      if (optional) return null;
+      throw new Error("最新 Release 没有安装包");
+    }
+    let downloadUrl = null;
+    try { downloadUrl = new URL(String(asset.browser_download_url ?? "")); } catch { downloadUrl = null; }
+    if (!downloadUrl || downloadUrl.protocol !== "https:" || downloadUrl.hostname !== "github.com") {
+      if (optional) return null;
       throw new Error("安装包下载地址无效");
+    }
     return {
       latestTag,
       releaseUrl: String(release.html_url ?? `https://github.com/${updateRepository}/releases/latest`),
@@ -904,18 +912,71 @@ export async function createOliviaService(options = {}) {
     };
   }
 
+  /**
+   * 按通道取候选 Release。
+   * stable → /releases/latest（GitHub 保证是「最新的正式版」，prerelease 一律不算）
+   * beta   → /releases 列表（按发布时间倒序），额外的 prerelease 也在里面，逐条挑「有安装包的下一条」
+   */
+  async function fetchReleaseCandidates(signal, channel) {
+    const beta = normalizeUpdateChannel(channel) === "beta";
+    const endpoint = beta
+      ? `https://api.github.com/repos/${updateRepository}/releases?per_page=30`
+      : `https://api.github.com/repos/${updateRepository}/releases/latest`;
+    const response = await updateRequest(endpoint, {
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "OliviaSoul-Updater",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+    if (response.status === 404)
+      throw new Error("这个仓库还没有发布任何版本（Releases 里是空的），所以查不到更新");
+    if (!response.ok) throw new Error(`GitHub HTTP ${response.status}`);
+    const body = await response.json();
+    if (!beta) return [body];
+    // draft 只有登录后才看得到，这里仍显式排除：将来若改成带 token 请求，也不会把草稿当正式版发出去。
+    return (Array.isArray(body) ? body : []).filter(release => release?.draft !== true);
+  }
+
+  async function fetchLatestRelease(signal, channel = DEFAULT_UPDATE_CHANNEL) {
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(updateRepository))
+      throw new Error("更新仓库配置无效");
+    const beta = normalizeUpdateChannel(channel) === "beta";
+    const candidates = await fetchReleaseCandidates(signal, channel);
+    for (const candidate of candidates) {
+      const release = releasePayloadFromRelease(candidate, { optional: beta });
+      if (release) return release;
+    }
+    throw new Error(beta
+      ? "这个仓库还没有发布任何带安装包的版本（Releases 里是空的），所以查不到更新"
+      : "最新 Release 没有安装包");
+  }
+
   const updateDownloads = await createUpdateDownloader({
     root: updateDataRoot, request: updateRequest,
     canInstall: tag => isNewerRelease(updateCurrentTag, tag),
     fetchRelease: async signal => {
-      const release = await fetchLatestRelease(signal);
+      // 下载必须跟着用户选的通道走：beta 用户看到的是测试版，点「下载安装包」就得拿到那个测试版。
+      const release = await fetchLatestRelease(signal, updateChannel());
       if (!isNewerRelease(updateCurrentTag, release.latestTag)) throw new Error("当前已经是最新版本");
       return release;
     },
   });
 
-  function updatePayload(release) {
+  /** 当前更新通道：每次现读本机 settings，所以用户切换后立刻生效，不用重启服务。 */
+  function updateChannel() {
+    return normalizeUpdateChannel(getSetting(UPDATE_CHANNEL_SETTING));
+  }
+
+  function updateReleasesPageUrl() {
+    return `https://github.com/${updateRepository}/releases`;
+  }
+
+  function updatePayload(release, channel) {
     return {
+      channel: normalizeUpdateChannel(channel),
+      degraded: false,
       currentTag: updateCurrentTag,
       latestTag: release.latestTag,
       updateAvailable: isNewerRelease(updateCurrentTag, release.latestTag),
@@ -926,6 +987,35 @@ export async function createOliviaService(options = {}) {
       assetUrl: String(release.asset.url ?? ""),
       notes: String(release.notes ?? ""),
       releaseName: String(release.releaseName ?? ""),
+    };
+  }
+
+  /**
+   * 降级方案（不是「假装成功」，也不是 502 让界面报错）：查不到更新时，明确说明原因，
+   * 并把发布页交出去让用户手动下载。
+   * 为什么必须有这条路：这台机器直连 github.com 时部分 IP 会被 SNI 阻断（gh CLI 就因此登录失败），
+   * 所以「检查更新失败」是常态而不是异常 —— 界面必须给出可操作的出路。
+   */
+  function updateFailurePayload(error, channel) {
+    const reason = safeModelError(error);
+    const network = error?.name === "AbortError"
+      || /(fetch failed|网络|连接|超时|代理|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|UND_ERR|getaddrinfo|CERT|SSL|TLS|socket)/iu.test(String(reason));
+    return {
+      channel: normalizeUpdateChannel(channel),
+      degraded: true,
+      reason,
+      message: network ? `无法连接更新服务，可手动到发布页下载（原因：${reason}）`
+        : `检查更新失败：${reason}（可手动到发布页下载）`,
+      currentTag: updateCurrentTag,
+      latestTag: "",
+      updateAvailable: false,
+      releaseUrl: updateReleasesPageUrl(),
+      publishedAt: "",
+      assetName: "",
+      assetSize: 0,
+      assetUrl: "",
+      notes: "",
+      releaseName: "",
     };
   }
 
@@ -3861,11 +3951,25 @@ export async function createOliviaService(options = {}) {
     }
 
     if (req.method === "GET" && path === "/admin/api/update") {
+      // 通道现读本机 settings：用户切换通道后下一次检查立刻按新通道走（不用重启服务/程序）。
+      const channel = updateChannel();
       try {
-        return ok(req, res, updatePayload(await fetchLatestRelease()));
+        return ok(req, res, updatePayload(await fetchLatestRelease(null, channel), channel));
       } catch (error) {
-        throw httpError(502, `检查更新失败：${safeModelError(error)}`);
+        // 连不上 GitHub（例如 SNI 被阻断）时走降级：200 + degraded 载荷，说清原因并给发布页链接。
+        // 绝不返回裸错误、也绝不谎报「已是最新版本」—— 界面据此显示「可手动到发布页下载」。
+        logError("检查更新失败（降级为手动下载）", `${channel} :: ${error?.message ?? error}`);
+        return ok(req, res, updateFailurePayload(error, channel));
       }
+    }
+
+    if (req.method === "POST" && path === "/admin/api/update/channel") {
+      const body = await readJson(req);
+      const requested = String(body?.channel ?? "").trim().toLowerCase();
+      if (!UPDATE_CHANNELS.includes(requested))
+        throw httpError(400, "更新通道只能是 stable（稳定版）或 beta（测试版）");
+      setSetting(UPDATE_CHANNEL_SETTING, requested);
+      return ok(req, res, { channel: requested, currentTag: updateCurrentTag });
     }
 
     if (req.method === "POST" && path === "/admin/api/update/download") {

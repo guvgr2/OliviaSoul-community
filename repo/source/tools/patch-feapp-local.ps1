@@ -39,7 +39,7 @@ if ($mainFiles.Count -ne 1) { throw "expected one main-*.js, got $($mainFiles.Co
 $utf8 = New-Object System.Text.UTF8Encoding $false
 $mainPath = $mainFiles[0].FullName
 $text = [IO.File]::ReadAllText($mainPath, $utf8)
-$patchMarker = '/*OliviaSoulPatch:mail-music-v59*/'
+$patchMarker = '/*OliviaSoulPatch:mail-music-v60*/'
 if ($text.Contains($patchMarker)) { throw "original feapp already contains current patch" }
 $text = $patchMarker + $text
 $playerCommandUrl = $ServiceUrl.TrimEnd("/") + "/toy/player-command"
@@ -205,7 +205,13 @@ $playerStateExportFrom = 'playSonglistItem:A,resetStore:Ge}})'
 # 原生不认为在播音乐，于是背景音与音乐叠在一起（只有个人上传会出现，官方音乐正常）。
 # h 就是该 store 里的 playSource ref；try/catch 是防御——万一变量名变了，也不影响播放本身。
 # 停止时 store 的 resetStore 会把 h.value 设回 "playlist"，无需额外处理。
-$playerStateExportTo = 'playSonglistItem:A,applyLocalPlayerState:OliviaSoulApplyPlayerState,beginLocalPlayback:B=>{const OliviaSoulR=OliviaSoulBeginLocalPlayback(B);try{h.value="songlist"}catch{}try{window.__OliviaSoulLastPlayedSongId=OliviaSoulR}catch{}return OliviaSoulR},applySongMetadata:OliviaSoulApplySongMetadata,handleTogglePlay:(...OliviaSoulArgs)=>{try{if(!m.value){const OliviaSoulId=String(window.__OliviaSoulLastPlayedSongId||"");const OliviaSoulItem=OliviaSoulId?(x.value||[]).find(OliviaSoulOne=>OliviaSoulSongIdFromItem(OliviaSoulOne)===OliviaSoulId):null;if(OliviaSoulItem){try{m.value=OliviaSoulItem.id}catch{}try{OliviaSoulBeginLocalPlayback(OliviaSoulItem)}catch{}A(OliviaSoulItem);return;}}else{const OliviaSoulId2=String(window.__OliviaSoulSongId||"");if(OliviaSoulId2)window.__OliviaSoulLastPlayedSongId=OliviaSoulId2;}}catch{}if(typeof N==="function")N(...OliviaSoulArgs);},resetStore:Ge}})'
+# v60：修「停止/结束后再次播放跳到列表第一首」（根因见 .test-twins/g82-跳列表根因.md）：
+#   本地作品的「当前曲」记在 songlist 侧（f.value），停止/结束时被 G() 清空，于是 handleTogglePlay
+#   落到原生 `!T.value` 分支去播 x.value 里第一个可用项；而 x.value 在「我的上传」页面等于右面板那份
+#   /searchPlaylist 收藏歌单，本地作品从来不在里面 —— 所以原来「按 id 到 x.value 里找」必然落空。
+#   现在额外记住用户实际点过的那一个条目（= Ro 里已经能正确播放的 vt），再次播放直接复用它。
+#   仍然不包装 playSong、不碰播放会话；万一恢复失败，最坏结果只是这一次点击不播（不会播错歌）。
+$playerStateExportTo = 'playSonglistItem:A,applyLocalPlayerState:OliviaSoulApplyPlayerState,beginLocalPlayback:B=>{const OliviaSoulR=OliviaSoulBeginLocalPlayback(B);try{h.value="songlist"}catch{}try{window.__OliviaSoulLastPlayedSongId=OliviaSoulR;window.__OliviaSoulLastPlayedItem={...B,id:OliviaSoulR}}catch{}return OliviaSoulR},applySongMetadata:OliviaSoulApplySongMetadata,handleTogglePlay:(...OliviaSoulArgs)=>{try{if(!m.value){const OliviaSoulLastItem=window.__OliviaSoulLastPlayedItem;if(OliviaSoulLastItem&&String(OliviaSoulLastItem.videoUrl||"").includes("/toy/midi/songs/")){try{OliviaSoulBeginLocalPlayback(OliviaSoulLastItem);A(OliviaSoulLastItem);}catch{}return;}const OliviaSoulId=String(window.__OliviaSoulLastPlayedSongId||"");const OliviaSoulItem=OliviaSoulId?(x.value||[]).find(OliviaSoulOne=>OliviaSoulSongIdFromItem(OliviaSoulOne)===OliviaSoulId):null;if(OliviaSoulItem){try{OliviaSoulBeginLocalPlayback(OliviaSoulItem)}catch{}A(OliviaSoulItem);return;}}else{const OliviaSoulId2=String(window.__OliviaSoulSongId||"");if(OliviaSoulId2)window.__OliviaSoulLastPlayedSongId=OliviaSoulId2;}}catch{}if(typeof N==="function")N(...OliviaSoulArgs);},resetStore:Ge}})'
 $playerStateExportCount = ([regex]::Matches($text, [regex]::Escape($playerStateExportFrom))).Count
 if ($playerStateExportCount -ne 1) { throw "expected one player store export, got $playerStateExportCount" }
 $text = $text.Replace($playerStateExportFrom, $playerStateExportTo)

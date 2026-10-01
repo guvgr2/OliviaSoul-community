@@ -404,6 +404,10 @@ textarea { min-height: 190px; resize: vertical; line-height: 1.6; font-family: C
 .tabPage[data-page="desktop"] > .panelHead { margin-bottom: 12px; padding-bottom: 10px; }
 .serviceMountActions { margin-top: 10px; }
 .serviceMountActions .result:empty { display: none; }
+.rollbackPatchBox { border: 1px solid #5f4547; border-radius: 8px; margin-top: 12px; padding: 10px 12px; display: grid; gap: 8px; }
+.rollbackPatchBox[hidden] { display: none; }
+.rollbackPatchHead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rollbackPatchBox small { margin-top: 0; line-height: 1.5; }
 .serviceMountSettings[hidden] { display: none; }
 .serviceMountHead { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 .serviceMountHead > div { display: grid; gap: 5px; }
@@ -634,6 +638,17 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .updateActions > button { flex: 0 0 auto; white-space: nowrap; min-height: 36px; padding: 8px 10px; font-size: 13px; line-height: 1.4; }
 #updateResult { display: block; margin-top: 10px; }
 #updateResult:empty { display: none; }
+/* 更新通道（stable/beta）：选项旁边就是「当前通道」说明，窄窗口换行不挤压 */
+.updateChannelRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.updateChannelRow > div { display: grid; gap: 4px; min-width: 0; }
+.updateChannelRow select { min-width: 240px; max-width: 100%; }
+.updateChannelRow .result:empty { display: none; }
+/* 降级出路：连不上更新服务时给出明确提示 + 发布页链接，不能报错卡死也不能假装成功 */
+.updateFallback { border: 1px solid #5f4547; border-radius: 8px; margin-top: 12px; padding: 10px 12px; display: grid; gap: 8px; }
+.updateFallback[hidden] { display: none; }
+.updateFallback p { margin: 0; }
+.updateFallback .result:empty { display: none; }
+.updateFallbackUrl { user-select: text; overflow-wrap: anywhere; }
 #noticeMessage { white-space: pre-line; }
 #noticeDetails { min-width: 0; margin: 12px 0; }
 #noticeDetails summary { cursor: pointer; color: #b9bac1; }

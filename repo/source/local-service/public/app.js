@@ -35,6 +35,8 @@ let modelRuntimeRequest = 0;
 let midiLibraryPreviewId = null;
 let midiStatusSnapshot = null;
 let updateInformation = null;
+// 降级时（连不上更新服务）当前展示的发布页地址；打不开或没取到时退回静态页里那份兜底链接。
+let updateFallbackLink = "";
 const updateDownloadUI = createUpdateDownloadUI({ api,
   elements: { button: $('#downloadUpdate'), cancel: $('#cancelUpdateDownload'), pause: $('#pauseUpdateDownload'), progress: $('#updateDownloadProgress'),
     message: $('#updateTransferResult'), details: $('#updateDownloadDetails') },
@@ -248,7 +250,34 @@ function updateClientMountButtons() {
   const busy = clientMountAction !== null;
   $("#mountService").disabled = busy || !clientMountSnapshot?.clientSelected;
   $("#restoreClient").disabled = busy || !clientMountSnapshot?.clientSelected;
+  $("#rollbackPatch").disabled = busy || !clientMountSnapshot?.clientSelected;
   $("#selectClient").disabled = busy;
+}
+
+// —— 回退补丁（还原原版）——
+// 补丁后的救援入口：补丁把游戏搞坏（白屏 / 连不上）时一键回到干净原版。
+// **复用既有还原链路**：preload.cjs 的 restoreClient → ipc "client:restore" → main.js restoreClient()
+// → tools/restore-feapp-original.ps1 + tools/restore-webplayer-original.ps1。这里不新写任何还原逻辑。
+const ROLLBACK_PATCH_CONFIRM = "确认回退补丁（还原原版）？程序会还原游戏文件：把 feapp / webplayer 还原成本机备份里的原版（补丁前状态）。"
+  + "你不会丢存档 —— 存档在 UserData 里，回退只写游戏安装目录里的补丁文件；回退后可随时点「启用本地服务」重新打补丁。";
+
+// 桌面层已经给还原失败分好类（desktop/uninstall-restore.js 的 classifyRestoreError：
+// BACKUP_INVALID / GAME_RUNNING / PATH_INVALID / TARGET_CHANGED …）。有 code 就用它对应的中文说明，
+// 没有 code 才退回错误首行（已脱敏、已截断）——不新造一套分类。
+const ROLLBACK_FAILURE_HINTS = {
+  BACKUP_INVALID: "客户端原版备份缺失、损坏或身份不匹配，请保留 UserData 和备份后联系支持。",
+  GAME_RUNNING: "请先完全退出游戏后重试。",
+  STEAM_RUNNING: "请先完全退出 Steam 后重试。",
+  PATH_INVALID: "已登记客户端路径不可访问或不再唯一，请恢复原路径后重试。",
+  TARGET_CHANGED: "游戏目录里的补丁文件已被后来修改；为避免覆盖你的改动，回退已停止。",
+  RESTORE_FAILED: "还原未完成，请保留 UserData 和备份后重试。",
+  CLIENT_SERVICE_BUSY: "客户端启停操作仍在执行，请等它完成后重试。",
+};
+
+function clientRollbackErrorMessage(error) {
+  const code = String(error?.code ?? "").trim();
+  return ROLLBACK_FAILURE_HINTS[code]
+    ? `${ROLLBACK_FAILURE_HINTS[code]}（${code}）` : clientMountErrorMessage(error);
 }
 
 /**
@@ -310,6 +339,10 @@ function renderClientMountStatus(status) {
   $("#mountService").textContent = status.updateAvailable ? "更新客户端补丁"
     : portMismatch ? "重打补丁（同步端口）" : "启用本地服务";
   $("#restoreClient").hidden = !status.mounted && !partiallyMounted;
+  // 回退补丁入口只在「游戏目录里确实存在本机补丁」时出现：已经是干净原版还给一个「回退」按钮，
+  // 只会让人以为还能再退一次。部分挂载 / 待更新也必须能退 —— 那正是补丁出问题的典型现场。
+  const patchPresent = status.mounted === true || partiallyMounted || status.updateAvailable === true;
+  $("#rollbackPatchBox").hidden = !(status.clientSelected === true && patchPresent);
   updateClientMountButtons();
 }
 
@@ -347,22 +380,29 @@ function finishClientMountAction(action, status, error) {
   clientMountAction = null;
   clientMountGeneration++;
   stopLoading("#serviceMountResult");
-  const label = action.kind === "enable" ? "启用" : "停用";
+  const rollback = action.kind === "rollback";
+  const label = action.kind === "enable" ? "启用" : rollback ? "回退补丁" : "停用";
   if (error) {
-    $("#serviceMountResult").textContent = `${label}失败：${clientMountErrorMessage(error)}`;
+    $("#serviceMountResult").textContent = rollback
+      ? `回退补丁失败：${clientRollbackErrorMessage(error)}`
+      : `${label}失败：${clientMountErrorMessage(error)}`;
     updateClientMountButtons();
     void refreshClientMountStatus({ preserveResult: true });
     return;
   }
   if (status) renderClientMountStatus(status);
   else updateClientMountButtons();
+  // 回退完成后必须再看一次真实状态（复用 getClientStatus）：还原到底有没有生效，
+  // 不能只看这次返回的快照 —— 状态行/徽章要跟着变成「未挂载」。
+  if (rollback) void refreshClientMountStatus({ preserveResult: true });
   const expectedMounted = action.kind === "enable";
   // 端口要一并核对：端口退让后用户点的正是「重打补丁（同步端口）」。
   // 补丁没写进新端口却报「服务已启用」，用户就会带着连不上的补丁去启动游戏。
   const verified = status?.clientSelected === true && status.clientFound === true && status.webplayerFound === true
     && status.feappMounted === expectedMounted && status.webplayerMounted === expectedMounted
     && (!expectedMounted || (status.mounted === true && !status.updateAvailable && stalePatchPort(status) === null));
-  $("#serviceMountResult").textContent = verified ? `服务已${label}`
+  $("#serviceMountResult").textContent = verified
+    ? rollback ? "已回退补丁：游戏文件已还原成本机备份里的原版" : `服务已${label}`
     : `${label}未完成：客户端状态未确认或仍有部分挂载，请检查 FE/WP 状态后重试。`;
 }
 
@@ -372,9 +412,11 @@ async function runClientMountAction(kind) {
   clientMountAction = action;
   clientMountGeneration++;
   updateClientMountButtons();
-  if (kind === "disable") {
+  const confirmation = kind === "rollback" ? ROLLBACK_PATCH_CONFIRM
+    : kind === "disable" ? "确认停用客户端本机信件服务？注意：这一步会把游戏文件 feapp / webplayer 还原成本机备份里的原版" + "（与「回退补丁（还原原版）」是同一条还原链路）；你的存档在 UserData 里，不会丢。本机后台仍会继续运行。" : "";
+  if (confirmation) {
     try {
-      if (!await confirmNotice("确认停用客户端本机信件服务？本机后台仍会继续运行。")) {
+      if (!await confirmNotice(confirmation)) {
         clientMountAction = null;
         clientMountGeneration++;
         updateClientMountButtons();
@@ -382,12 +424,14 @@ async function runClientMountAction(kind) {
       }
     } catch (error) { finishClientMountAction(action, null, error); return; }
   }
-  startLoading("#serviceMountResult", kind === "enable" ? "正在检查备份并启用客户端……" : "正在检查备份并恢复客户端……");
+  startLoading("#serviceMountResult", kind === "enable" ? "正在检查备份并启用客户端……"
+    : kind === "rollback" ? "正在还原游戏文件（回退补丁）……" : "正在检查备份并恢复客户端……");
   // 输入框里的值就是本次要用的端口（它可编辑，用户想换端口、含改回原端口都走这里）。
   // 注意 getSettings() 返回的是内存中的当前端口，所以它总与服务端口一致 ——
   // 不存在「输入框停在旧端口」的情形，不要为那种假设加不可达的防护。
   const port = $("#servicePort").value;
   let timer;
+  // 回退补丁与「停用服务」走的是同一条还原链路：client:restore → main.js restoreClient()。
   const completion = Promise.resolve().then(() => kind === "enable"
     ? window.oliviaDesktop.mountClient(port) : window.oliviaDesktop.restoreClient())
     .then(status => finishClientMountAction(action, status, null), error => finishClientMountAction(action, null, error))
@@ -397,7 +441,7 @@ async function runClientMountAction(kind) {
     new Promise(resolve => { timer = setTimeout(() => {
       if (clientMountAction === action) {
         stopLoading("#serviceMountResult");
-        $("#serviceMountResult").textContent = `${kind === "enable" ? "启用" : "停用"}等待超时，操作结果尚未确认；请勿重复点击，等待原操作返回。`;
+        $("#serviceMountResult").textContent = `${kind === "enable" ? "启用" : kind === "rollback" ? "回退补丁" : "停用"}等待超时，操作结果尚未确认；请勿重复点击，等待原操作返回。`;
         // Do not release the lock: a UI timeout does not cancel the desktop write.
         updateClientMountButtons();
       }
@@ -1011,26 +1055,96 @@ async function loadDesktopSettings() {
   $("#servicePort").value = settings.port;
 }
 
+// —— 更新通道（stable / beta）——
+// 「不稳定功能只发测试版」：通道存进本机 settings，服务端每次检查现读，所以切换后立刻生效。
+// 通道名称与说明只有一份：就在 #updateChannel 的 option 文字里，这里只读不重复写死。
+function updateChannelLabel(channel) {
+  const value = channel === "beta" ? "beta" : "stable";
+  const option = $(`#updateChannel option[value="${value}"]`);
+  return (option?.textContent ?? (value === "beta" ? "测试版" : "稳定版")).trim();
+}
+
+function renderUpdateChannel(channel) {
+  const value = channel === "beta" ? "beta" : "stable";
+  const select = $("#updateChannel");
+  if (select && select.value !== value) select.value = value;
+  $("#updateChannelHint").textContent = `当前通道：${updateChannelLabel(value)}`;
+  return value;
+}
+
+function updateFallbackUrl() {
+  return String($("#updateFallbackUrl")?.textContent ?? "").trim();
+}
+
+/**
+ * 降级出路：连不上更新服务时（本机直连 github.com 的部分 IP 会被 SNI 阻断）
+ * 不报错卡死、也不假装成功 —— 说清原因，并把发布页链接摆出来让用户手动下载。
+ */
+function renderUpdateFallback(data) {
+  const degraded = data?.degraded === true;
+  $("#updateFallback").hidden = !degraded;
+  if (!degraded) {
+    $("#updateFallbackMessage").textContent = "";
+    $("#updateFallbackStatus").textContent = "";
+    return;
+  }
+  const url = String(data.releaseUrl ?? "").trim() || updateFallbackUrl();
+  updateFallbackLink = url;
+  $("#updateFallbackMessage").textContent = String(data.message ?? "无法连接更新服务，可手动到发布页下载");
+  $("#updateFallbackUrl").textContent = url;
+  $("#openReleasePage").hidden = !url;
+  $("#updateFallbackStatus").textContent = "";
+}
+
+async function openReleasePage() {
+  // 外链统一过后端白名单（https + github.com），面板里不自己 window.open。
+  const url = String(updateFallbackLink || updateFallbackUrl()).trim();
+  if (!url) throw new Error("没有可打开的发布页地址");
+  const host = window.OliviaSoulPanelHost;
+  if (host && typeof host.openExternal === "function") return host.openExternal(url);
+  const result = await api("/admin/api/open-external", { method: "POST", body: JSON.stringify({ url }) });
+  return result?.url ?? url;
+}
+
 function renderUpdateInformation(data) {
-  tabNotices.set('update', 'release', data.updateAvailable
+  const channel = renderUpdateChannel(data.channel);
+  // degraded：连不上更新服务。既不是「有新版本」，也绝不是「已经是最新版本」。
+  const degraded = data.degraded === true;
+  tabNotices.set('update', 'release', !degraded && data.updateAvailable
     ? { kind: 'info', id: String(data.latestTag), message: `有新版本 ${data.latestTag}` } : null);
-  tabNotices.set('update', 'check', null);
+  tabNotices.set('update', 'check', degraded
+    ? { kind: 'fault', id: 'check', message: '更新检查失败，可打开发布页手动下载' } : null);
   updateInformation = data;
-  $("#updateVersion").textContent = `当前 ${data.currentTag} · GitHub 最新 ${data.latestTag}`;
+  renderUpdateFallback(data);
+  $("#updateVersion").textContent = degraded
+    ? `当前 ${data.currentTag} · 未能检查更新（${updateChannelLabel(channel)}）`
+    : `当前 ${data.currentTag} · GitHub 最新 ${data.latestTag}（${updateChannelLabel(channel)}）`;
   $("#downloadUpdate").hidden = !data.updateAvailable;
-  $("#updateResult").textContent = data.updateAvailable ? "发现新版本，可以下载"
-    : data.currentTag !== data.latestTag ? "当前版本高于 GitHub 公开版，无需更新" : "当前已经是最新版本";
+  $("#updateResult").textContent = degraded ? String(data.message ?? "更新检查失败")
+    : data.updateAvailable ? "发现新版本，可以下载"
+      : data.currentTag !== data.latestTag ? "当前版本高于 GitHub 公开版，无需更新" : "当前已经是最新版本";
   updateDownloadUI.setRelease(data);
 }
 
 async function loadUpdate() {
   startLoading("#updateResult", "正在查询 GitHub Release……");
+  // 连不上 GitHub 时后端最多等 30 秒才降级；这段时间要让用户看见「在等什么」，而不是一个卡住的转圈。
+  const slowHint = setTimeout(() => {
+    startLoading("#updateResult", "仍在查询更新服务（最长约 30 秒）；连不上会提示你到发布页手动下载……");
+  }, 8000);
   try {
     renderUpdateInformation(await api("/admin/api/update"));
   } catch (error) {
-    tabNotices.set('update', 'check', { kind: 'fault', id: 'check', message: '更新检查失败，可进入页面重试' });
-    throw error;
+    // 连本机后端都问不到：同样不弹错误弹窗卡住用户，改成页面内的降级提示 + 发布页入口。
+    tabNotices.set('update', 'check', { kind: 'fault', id: 'check', message: '更新检查失败，可打开发布页手动下载' });
+    renderUpdateFallback({
+      degraded: true,
+      message: `无法连接更新服务，可手动到发布页下载（${clientMountErrorMessage(error)}）`,
+      releaseUrl: updateFallbackUrl(),
+    });
+    $("#updateResult").textContent = $("#updateFallbackMessage").textContent;
   } finally {
+    clearTimeout(slowHint);
     stopLoading("#updateResult");
     await updateDownloadUI.refresh();
   }
@@ -1422,6 +1536,28 @@ window.chrome?.webview?.addEventListener('message', event => {
 $("#checkUpdate").addEventListener("click", safely(async () => {
   await loadUpdate();
 }));
+// 切换通道：存进本机 settings，并立刻按新通道重查一次 —— 不让用户再手动点「检查更新」。
+$("#updateChannel").addEventListener("change", safely(async () => {
+  const requested = $("#updateChannel").value === "beta" ? "beta" : "stable";
+  startLoading("#updateChannelResult", "正在切换更新通道……");
+  try {
+    const result = await api("/admin/api/update/channel", {
+      method: "POST",
+      body: JSON.stringify({ channel: requested }),
+    });
+    const channel = renderUpdateChannel(result.channel);
+    $("#updateChannelResult").textContent = `已切换到${updateChannelLabel(channel)}`;
+    await loadUpdate();
+    // 「更新说明」面板的版本行也带着当前通道，顺手让它按新通道刷一次（面板没挂上时它自己会跳过）。
+    try { await window.OliviaSoulUpdateNotes?.refresh?.(); } catch { /* 面板未装配，忽略 */ }
+  } finally {
+    stopLoading("#updateChannelResult");
+  }
+}));
+$("#openReleasePage").addEventListener("click", safely(async () => {
+  const opened = await openReleasePage();
+  $("#updateFallbackStatus").textContent = opened ? "已用系统浏览器打开发布页" : "";
+}));
 $("#downloadUpdate").addEventListener("click", safely(async () => {
   await updateDownloadUI.start();
 }));
@@ -1477,6 +1613,7 @@ $("#selectClient").addEventListener("click", safely(async () => {
 }));
 $("#mountService").addEventListener("click", safely(() => runClientMountAction("enable")));
 $("#restoreClient").addEventListener("click", safely(() => runClientMountAction("disable")));
+$("#rollbackPatch").addEventListener("click", safely(() => runClientMountAction("rollback")));
 const saveIdentity = safely(async () => {
   const identity = await api("/admin/api/identity", {
     method: "POST",
