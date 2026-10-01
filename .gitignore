@@ -48,3 +48,6 @@ package-work/
 
 # Local crash-analysis scripts (contain machine paths) - never committed
 /tools/
+
+# AgentTeams 运行时状态（每轮都在变，不入库）
+.agent-teams/
