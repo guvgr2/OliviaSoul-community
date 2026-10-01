@@ -67,7 +67,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .test-twins\全面检查.ps1
    - **未发布的版本可以继续在同一个号上迭代** —— 不要因为"改了东西"就机械升号。
      反例（真实踩过）：1.0 还没发布，却因为修 bug 连升到 1.0.1、1.0.2，白占两个号。
    - 补丁版本（`vNN`）是**独立序列**：只要用户已经装过某个补丁版本，新补丁就必须升号。
-2. **每次都要给 GitHub 上传的文案**（Summary + Description，可直接粘贴）
+2. **每次都要给全两套文案**（都要可直接粘贴，缺一不可）：
+   - **git 提交文案**：Summary（标题）+ Description（正文）—— GitHub Desktop 的上下两个框都要填满
+   - **GitHub Release 文案**：标题 + 正文
+   真实踩过：只给了 Release 那套，用户提交时 Summary 空着、Description 也没内容，被指出「你有时只给了上面的那个」。
 3. **每次都要写发布步骤**（放 `.test-twins/g2x发布步骤.md`，含哈希、Release 正文、操作步骤）
 4. **不确定/不稳定的功能必须打「实验性」标签**，并说明失败隔离方式
 5. **必须做用户引导**（使用说明/发布说明里写清操作路径）
