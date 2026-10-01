@@ -444,7 +444,7 @@ function Assert-PackageModelDefaults {
         $remoteBase = [regex]::Match($remoteProfile.Groups['body'].Value, '(?im)\bbaseUrl\s*:\s*["'']([^"'']+)["'']')
         $remoteAuth = [regex]::Match($remoteProfile.Groups['body'].Value, '(?im)\bauthMode\s*:\s*["'']([^"'']+)["'']')
         $remoteKey = [regex]::Match($remoteProfile.Groups['body'].Value, '(?im)\bapiKey\s*:\s*["'']([^"'']*)["'']')
-        $allowedRemoteModels = @('deepseek-chat', 'deepseek-reasoner', 'deepseek-flash', 'deepseek-v4-pro', 'glm-5.3', 'glm-5.3-flash', 'glm-5.3-flashx', 'kimi-k2-0905-preview', 'kimi-latest', 'kimi-k2-thinking')
+        $allowedRemoteModels = @('deepseek-chat', 'deepseek-reasoner', 'deepseek-flash', 'deepseek-v4-pro', 'glm-5.3', 'glm-5.3-flash', 'glm-5.3-flashx', 'kimi-k3', 'kimi-k2.6', 'kimi-k2.7-code')
         if (-not $localModel.Success -or $localModel.Groups[1].Value -cne 'local-model' -or
             -not $localBase.Success -or $localBase.Groups[1].Value -notmatch '^http://(?:127\.0\.0\.1|localhost)(?::[0-9]+)?(?:/|$)' -or
             -not $localAuth.Success -or $localAuth.Groups[1].Value -cne 'none' -or

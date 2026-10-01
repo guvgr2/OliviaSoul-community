@@ -55,10 +55,10 @@
 | `deepseek-v4-pro` | `https://api.deepseek.com` | `deepseek-v4-pro` | DeepSeek 官方，能力更强，适合写回信 |
 | `glm-5.3-flash` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3-flash` | 智谱 GLM，原生多模态、便宜 |
 | `glm-5.3-flashx` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3-flashx` | 智谱 GLM，更快 |
-| `kimi-k2-0905-preview` | `https://api.moonshot.cn/v1` | `kimi-k2-0905-preview` | Kimi 月之暗面，256K 上下文，主力 |
-| `kimi-latest` | `https://api.moonshot.cn/v1` | `kimi-latest` | Kimi 月之暗面，自动跟随最新版 |
-| `kimi-k2-thinking` | `https://api.moonshot.cn/v1` | `kimi-k2-thinking` | Kimi 思考模型，适合写回信 |
 | `glm-5.3` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3` | 智谱 GLM 旗舰 |
+| `kimi-k3` | `https://api.moonshot.cn/v1` | `kimi-k3` | Kimi 月之暗面，旗舰，1M 上下文，始终推理 |
+| `kimi-k2.6` | `https://api.moonshot.cn/v1` | `kimi-k2.6` | Kimi 月之暗面，通用思考，可关闭 |
+| `kimi-k2.7-code` | `https://api.moonshot.cn/v1` | `kimi-k2.7-code` | Kimi 月之暗面，代码场景，始终思考 |
 | 自定义 | 你自己填 | 你自己填 | 自己的中转站或本地服务，见第四节 |
 
 程序不会替你自动换模型，也不会在失败时偷偷切到另一家。要换随时回来改，改完点「保存并测试远程模型」，再点「检测并设为当前模型」才真正启用。
@@ -69,6 +69,7 @@
 
 - DeepSeek **没有** `deepseek-v4.1-flash` 之类的 ID，名字写错会直接 404；
 - 智谱的模型 ID 是 `glm-5.3-flash` 这种形式，不是官网标题里的 `GLM-5.3-Flash`；同一系列还有 `glm-5.3-flashx`（更快）与 `glm-5.3`（旗舰），别混填。
+- Kimi 的模型 ID 是 `kimi-k3` / `kimi-k2.6` / `kimi-k2.7-code`（旧的 `kimi-k2-0905-preview`、`kimi-latest`、`kimi-k2-thinking` 已下线）。Kimi 的 `temperature` 不可修改，程序不会发送它；`kimi-k3` 只认顶层 `reasoning_effort`，`kimi-k2.7-code` 始终思考且不接受 `thinking` 参数 —— 这些差异由程序按模型名自动处理。
 
 程序只对**认得出家族**的模型附带厂商专用推理参数：DeepSeek 用 `thinking` + `reasoning_effort: high`；智谱 GLM 用 `thinking: enabled`（GLM 只接受 enabled） + `reasoning_effort: max`（智谱官方推荐值）。认不出家族的模型**一个厂商专用参数都不发**，避免被严格接口以 400 拒绝；「通用兼容 API（本地 / 中转）」档案则始终不发。
 

@@ -215,6 +215,31 @@ const REASONING_FAMILIES = Object.freeze([
     effort: "max",
     canDisable: false,
   }),
+  // Kimi（月之暗面）三家参数互不相同，按官方文档分别处理（2026-10 核实）：
+  //   kimi-k3      始终推理且保留式思考始终开启，**不支持 thinking**，只用顶层 reasoning_effort（low/high/max，默认 max）
+  //   kimi-k2.6    通用思考模型，用 thinking.type（默认 enabled，可传 disabled）控制
+  //   kimi-k2.7-*  代码场景，始终思考；**传 thinking 会报错**，所以什么都不发
+  // 三者的 temperature 都**不可修改**，官方明确写「请勿传入」——发了会被拒。
+  Object.freeze({
+    name: "kimi-k3",
+    pattern: /^kimi-k3(?:$|[-.])/iu,
+    topLevelEffort: true,
+    effort: "max",
+    noTemperature: true,
+  }),
+  Object.freeze({
+    name: "kimi-k2.6",
+    pattern: /^kimi-k2\.6(?:$|[-.])/iu,
+    thinkingOnly: true,
+    canDisable: true,
+    noTemperature: true,
+  }),
+  Object.freeze({
+    name: "kimi-k2.7",
+    pattern: /^kimi-k2\.7(?:$|[-.])/iu,
+    noThinkingParam: true,
+    noTemperature: true,
+  }),
 ]);
 
 /** 按模型名判断家族；认不出返回 null。 */
@@ -227,20 +252,28 @@ export function reasoningFamilyOf(model) {
 
 export function buildChatRequest(profile, payload = {}) {
   const selected = normalizeProfile(profile.provider, profile, { requireBearerKey: true });
+  // 家族要在构造 body 之前算出来：Kimi 的 temperature 不可修改，发不发取决于家族。
+  const family = selected.provider === "deepseek" ? reasoningFamilyOf(selected.model) : null;
   const body = {
     model: selected.model,
     messages: payload.messages ?? [],
     stream: false,
   };
-  if (payload.temperature !== undefined) body.temperature = payload.temperature;
+  // Kimi 三家都明确不接受 temperature（官方「请勿传入」）→ 家族标记了 noTemperature 就不发。
+  if (payload.temperature !== undefined && !family?.noTemperature) body.temperature = payload.temperature;
   if (payload.maxTokens !== undefined) body.max_tokens = payload.maxTokens;
   // 通用/本地档案（中转站、本地推理）不发送任何厂商专用参数；
-  // 远程档案再按模型家族决定，所以自定义远程档案里的非 DeepSeek / 非 GLM 模型也收不到这些字段。
-  const family = selected.provider === "deepseek" ? reasoningFamilyOf(selected.model) : null;
-  if (family) {
+  // 远程档案再按模型家族决定，所以自定义远程档案里的未知模型也收不到这些字段。
+  if (family?.topLevelEffort) {
+    // kimi-k3：始终推理，只认顶层 reasoning_effort；发 thinking 会被拒。
+    body.reasoning_effort = payload.reasoning_effort ?? family.effort;
+  } else if (family && !family.noThinkingParam) {
     const requested = payload.thinking ?? { type: "enabled" };
     body.thinking = family.canDisable ? requested : { type: "enabled" };
-    if (body.thinking.type !== "disabled") body.reasoning_effort = payload.reasoning_effort ?? family.effort;
+    // kimi-k2.6 只认 thinking，不认 reasoning_effort（thinkingOnly）。
+    if (!family.thinkingOnly && body.thinking.type !== "disabled") {
+      body.reasoning_effort = payload.reasoning_effort ?? family.effort;
+    }
   }
   const headers = { "Content-Type": "application/json" };
   if (selected.authMode === "bearer") headers.Authorization = `Bearer ${selected.apiKey}`;

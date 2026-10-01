@@ -422,9 +422,9 @@ const REMOTE_MODEL_PRESETS = [
   { id: "glm-5.3-flash", label: "glm-5.3-flash · 智谱 GLM（原生多模态，便宜）", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.3-flash" },
   { id: "glm-5.3-flashx", label: "glm-5.3-flashx · 智谱 GLM（更快，200 tokens/s）", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.3-flashx" },
   { id: "glm-5.3", label: "glm-5.3 · 智谱 GLM（旗舰）", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.3" },
-  { id: "kimi-k2-0905-preview", label: "kimi-k2-0905-preview · Kimi 月之暗面（256K 上下文，主力）", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k2-0905-preview" },
-  { id: "kimi-latest", label: "kimi-latest · Kimi 月之暗面（自动跟随最新版）", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-latest" },
-  { id: "kimi-k2-thinking", label: "kimi-k2-thinking · Kimi 月之暗面（思考模型，适合写回信）", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k2-thinking" },
+  { id: "kimi-k3", label: "kimi-k3 · Kimi 月之暗面（旗舰，1M 上下文，始终推理）", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k3" },
+  { id: "kimi-k2.6", label: "kimi-k2.6 · Kimi 月之暗面（通用思考，可关闭思考）", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k2.6" },
+  { id: "kimi-k2.7-code", label: "kimi-k2.7-code · Kimi 月之暗面（代码场景，始终思考）", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k2.7-code" },
 ];
 const CUSTOM_MODEL_PRESET = "__custom__";
 
