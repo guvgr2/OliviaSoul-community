@@ -11,7 +11,7 @@ import { endOfTrack, midiFile, noteOff, noteOn, track } from "./fixtures/midi-fi
 
 const execFileAsync = promisify(execFile);
 const enabled = process.env.OLIVIA_MIDI_E2E === "1";
-const runtimeRoot = "I:\\OliviaSoulData\\MidiRenderer";
+const runtimeRoot = "X:\\OliviaSoulData\\MidiRenderer";
 async function listen(service) {
   let address = await service.listen(0);
   while (blockedFetchPorts.has(address.port)) {
@@ -30,8 +30,8 @@ async function json(base, path, init = {}) {
 }
 
 test("real local MIDI pipeline survives restart and can become a video reply", { skip: !enabled }, async t => {
-  await mkdir("I:\\CodexTemp", { recursive: true });
-  const root = await mkdtemp("I:\\CodexTemp\\olivia-midi-e2e-");
+  await mkdir("X:\\OliviaMidiE2E", { recursive: true });
+  const root = await mkdtemp("X:\\OliviaMidiE2E\\olivia-midi-e2e-");
   const workspace = join(root, "workspace");
   const dataDir = join(root, "data");
   const midiDataRoot = join(root, "MidiRenderer");
@@ -94,7 +94,7 @@ test("real local MIDI pipeline survives restart and can become a video reply", {
   const job = service.midiStore.getJob(jobId);
   assert.equal(job.state, "completed", job.error || "render did not complete");
   const videoPath = service.midiStore.resolvePath(job.videoPath);
-  assert.ok(resolve(videoPath).startsWith("I:\\"));
+  assert.ok(resolve(videoPath).startsWith("X:\\"));
   assert.ok((await stat(videoPath)).size > 10_000);
 
   const listed = await json(base, "/toy/searchUserSongs?pageSize=20&cursor=0");

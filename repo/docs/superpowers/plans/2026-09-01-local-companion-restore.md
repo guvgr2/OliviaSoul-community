@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build an I-drive independent BSide client that keeps the Steam installation and backups unchanged, restores the 129-song offline catalog including all 13 light-music songs, and provides local mailbox, Gemma replies, unlimited letters, and MP4 video replies.
+**Goal:** Build an X-drive independent BSide client that keeps the Steam installation and backups unchanged, restores the 129-song offline catalog including all 13 light-music songs, and provides local mailbox, Gemma replies, unlimited letters, and MP4 video replies.
 
-**Architecture:** A verified PowerShell installer copies the owned game and clean front end into `I:\OliviaSoulLocal\BSide`. The existing Node service gains a read-only catalog adapter and generic OpenAI-compatible model configuration, while a hash-gated front-end patch uses the local catalog first and the native `getOfflineSongList` bridge as fallback. The native desktop host supports an explicit portable data root so new runtime data stays on I.
+**Architecture:** A verified PowerShell installer copies the owned game and clean front end into `X:\OliviaSoulLocal\BSide`. The existing Node service gains a read-only catalog adapter and generic OpenAI-compatible model configuration, while a hash-gated front-end patch uses the local catalog first and the native `getOfflineSongList` bridge as fallback. The native desktop host supports an explicit portable data root so new runtime data stays on X.
 
 **Tech Stack:** PowerShell 5.1, Node.js 22 ESM with `node:test` and `node:sqlite`, .NET 8 WinForms/WebView2, HTML/CSS/JavaScript, ZIP-based `feapp.dat` patching.
 
 ## Global Constraints
 
 - Treat `<游戏安装目录>`, Steam manifests, and `<用户备份目录>` as read-only inputs.
-- Write the independent runtime only under `I:\OliviaSoulLocal\BSide`; do not place new media, databases, build caches, or models on C.
+- Write the independent runtime only under `X:\OliviaSoulLocal\BSide`; do not place new media, databases, build caches, or models on C.
 - I is exFAT and reports `Warning / Full Repair Needed`: do not use hard links, do not assume transactional rename, and stop on any new read/write/hash error.
 - Do not delete or move the existing C-drive cache in this plan.
 - Do not bypass Steam/DRM. If the copied client cannot start through the user's valid Steam session, stop at the documented fallback boundary.
@@ -80,7 +80,7 @@ The script must resolve literal absolute paths, reject overlap, require the exac
 
 - [x] **Step 5: Run the installer against the real inputs in manifest-only mode**
 
-Run with `-WhatIfManifestOnly` against the Z client, clean front end `C:\Users\YOUR_NAME\AppData\Roaming\OliviaSoul\client-backups\daa132980f27b2fa84165d5f74f582eb.feapp.dat`, and the I backup catalog. Expect no writes outside a temporary I-drive test directory and record the two known front-end hashes in the test fixture.
+Run with `-WhatIfManifestOnly` against the X client, clean front end `C:\Users\YOUR_NAME\AppData\Roaming\OliviaSoul\client-backups\daa132980f27b2fa84165d5f74f582eb.feapp.dat`, and the X backup catalog. Expect no writes outside a temporary X-drive test directory and record the two known front-end hashes in the test fixture.
 
 - [x] **Step 6: Commit**
 
@@ -103,11 +103,11 @@ git commit -m "feat: add verified independent client installer"
 
 - [ ] **Step 1: Write a failing portable-root test**
 
-Compile a small test invocation of the native host path resolver with `OLIVIA_SOUL_HOME=I:\OliviaSoulLocal\BSide\runtime` and assert that no returned writable path begins with `%APPDATA%`.
+Compile a small test invocation of the native host path resolver with `OLIVIA_SOUL_HOME=X:\OliviaSoulLocal\BSide\runtime` and assert that no returned writable path begins with `%APPDATA%`.
 
 ```csharp
-Assert.Equal(@"I:\OliviaSoulLocal\BSide\runtime", paths.UserData);
-Assert.Equal(@"I:\OliviaSoulLocal\BSide\runtime\data", paths.Data);
+Assert.Equal(@"X:\OliviaSoulLocal\BSide\runtime", paths.UserData);
+Assert.Equal(@"X:\OliviaSoulLocal\BSide\runtime\data", paths.Data);
 ```
 
 - [ ] **Step 2: Run and confirm failure**
@@ -128,7 +128,7 @@ Run the focused native test, `dotnet build source/local-service/native-host/Oliv
 
 ```powershell
 git add source/local-service/native-host/AppPaths.cs source/local-service/native-host/NodeBackend.cs source/local-service/desktop/node-host.js source/local-service/test/api.test.js
-git commit -m "feat: support I-drive portable runtime data"
+git commit -m "feat: support X-drive portable runtime data"
 ```
 
 ### Task 3: Load and verify the archived catalog
@@ -346,11 +346,11 @@ Run: `node --test --test-name-pattern="独立版本启动" test/api.test.js`
 
 - [ ] **Step 3: Implement bridge and UI**
 
-Show source, destination, clean front-end hash, catalog counts, last verification, and a single “验证并启动独立版” action. Failure dialogs must distinguish copy/hash error, catalog error, service error, Steam launch rejection, and I-drive I/O error.
+Show source, destination, clean front-end hash, catalog counts, last verification, and a single “验证并启动独立版” action. Failure dialogs must distinguish copy/hash error, catalog error, service error, Steam launch rejection, and X-drive I/O error.
 
 - [ ] **Step 4: Implement recovery**
 
-Recovery replaces only the independent copy's `feapp.dat` from `recovery/feapp-original.dat` after hash verification. It must not touch the Z installation or the I backup catalog.
+Recovery replaces only the independent copy's `feapp.dat` from `recovery/feapp-original.dat` after hash verification. It must not touch the X installation or the X backup catalog.
 
 - [ ] **Step 5: Verify and commit**
 

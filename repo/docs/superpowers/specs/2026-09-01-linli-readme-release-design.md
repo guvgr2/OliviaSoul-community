@@ -38,7 +38,7 @@ README 全文重新编写，不复用现有个人叙事、旧项目统计、旧�
 
 ## 构建产物
 
-在 I 盘工作树中运行现有 Windows 发布脚本，输出目录明确指定到 I 盘。发布资产为：
+在 X 盘工作树中运行现有 Windows 发布脚本，输出目录明确指定到 X 盘。发布资产为：
 
 - `OliviaSoul-2008.2.7-Setup.exe`
 - `OliviaSoul-2008.2.7-Portable.zip`
@@ -49,8 +49,8 @@ Release 标题使用“林离离线增强版 2008.2.7-linli.1”。Release 正�
 
 ## 数据与安全边界
 
-- 构建、缓存和正式产物只写入 I 盘；不得把大型产物放到 C 盘。
-- `Z:\SteamLibrary\steamapps\common\BSide Olivia Lin Test` 与 `I:\Backups\BSide-Olivia-Lin-2026-08-31` 保持只读。
+- 构建、缓存和正式产物只写入 X 盘；不得把大型产物放到 C 盘。
+- `X:\SteamLibrary\steamapps\common\BSide Olivia Lin Test` 与 `X:\Backups\BSide-Olivia-Lin-2026-08-31` 保持只读。
 - 发布包不得包含 `.cursor/secrets`、`.env`、SQLite 数据库、日志、缓存、个人信件、记忆文件、游戏资源或 API Key。
 - GitHub Release 只上传通过验证的四项发布资产。
 
@@ -69,7 +69,7 @@ Release 标题使用“林离离线增强版 2008.2.7-linli.1”。Release 正�
 
 ## 失败处理
 
-- 缺少构建依赖时只在 I 盘安装或缓存；不能因此改用 C 盘存放产物。
+- 缺少构建依赖时只在 X 盘安装或缓存；不能因此改用 C 盘存放产物。
 - 任一测试、构建、哈希或敏感文件检查失败时停止发布，保留诊断信息并修复后重新验证。
 - 不覆盖已经存在且指向不同提交的同名标签或 Release；发现冲突时停止并报告。
 - 不使用强制推送。

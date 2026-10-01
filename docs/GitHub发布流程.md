@@ -36,7 +36,7 @@
     # 2) 纭娌℃湁涓汉闅愮 / 濯掍綋鏂囦欢娣疯繘鏉ワ紙搴旇緭鍑?0锛?    node -e "const{execSync}=require('child_process');" 
     # 鎵嬪伐妫€鏌ユ洿鐩磋锛氫笅闈袱鏉℃槸閲嶇偣
     dir /s /b | findstr /i "璁板綍 澶囦唤 .sqlite .mp4 .mp3"
-    findstr /s /i /m "C:\\Users\\ E:\\linlimusic E:\\olivia_tool" *.js *.md *.json
+    findstr /s /i /r /m "[A-Za-z]:\\" *.js *.md *.json
 
     # 3) 鐪?git 浼氭彁浜や粈涔堬紙鍏抽敭涓€姝ワ級
     git status --short

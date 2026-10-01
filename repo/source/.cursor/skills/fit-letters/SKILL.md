@@ -63,7 +63,7 @@ powershell -NoProfile -File .cursor/skills/fit-letters/scripts/truncate-exchange
 单封或逐封，都走 batch（PowerShell 5.x，不要用 `&&`，不要用 `Start-Job`，中文路径会乱码）。默认全并发，一次全部拉起。接口扛不住再设 `-BatchSize N`（瀑布流）。
 
 ```powershell
-powershell -NoProfile -File .cursor/skills/fit-letters/scripts/blind-batch.ps1 -Person "{person}" -From 1 -To 12 -Root "d:\OliviaSoul"
+powershell -NoProfile -File .cursor/skills/fit-letters/scripts/blind-batch.ps1 -Person "{person}" -From 1 -To 12 -Root "X:\OliviaSoul"
 ```
 
 Shell 用 `block_until_ms: 0`，`notify_on_output` 盯 `BATCH DONE`。日志 `_probe/blind_log.txt`，生成件 `_probe/gen_{stem}_{NN}.txt`。只拿生成件正文打分。
@@ -79,7 +79,7 @@ powershell -NoProfile -File .cursor/skills/fit-letters/scripts/deepseek-reply.ps
 改「温度」里的分数或区间后，先跑单测，再盲测：
 
 ```powershell
-powershell -NoProfile -File .cursor/skills/fit-letters/scripts/test-temp.ps1 -Root "d:\OliviaSoul"
+powershell -NoProfile -File .cursor/skills/fit-letters/scripts/test-temp.ps1 -Root "X:\OliviaSoul"
 ```
 
 必须 PASS。评价系统只看林离回信打关系区间；来信只判断他有没有求亲密。黑塔全程不得给亲密，应如是 15 隔空接住、25/30/32 第一句抱。求吻在亲近及以下不给身体、不用抱顶；可抱或深才给到抱。亲密上限是抱。
@@ -94,7 +94,7 @@ powershell -NoProfile -File .cursor/skills/fit-letters/scripts/test-temp.ps1 -Ro
 - 更早事实由 `history-retrieval.ps1` 从本轮不可变快照按需读取，摘要不能作为事实证据
 
 ```powershell
-powershell -NoProfile -File .cursor/skills/fit-letters/scripts/build-memory.ps1 -Person "{person}" -N 33 -Root "d:\OliviaSoul"
+powershell -NoProfile -File .cursor/skills/fit-letters/scripts/build-memory.ps1 -Person "{person}" -N 33 -Root "X:\OliviaSoul"
 ```
 
 摘要由当前启用模型生成，缓存在 `_probe/mem_cache/`；文件名同时绑定正文 MD5 与 Prompt 版本，改摘要规则会自动使用新缓存。摘要必须区分“他声称”和“她明确承认”，只负责为 STEP2 导航。逐封摘要要预生成时并发拉起，别串行等。

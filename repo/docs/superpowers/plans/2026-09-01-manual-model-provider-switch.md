@@ -10,8 +10,8 @@
 
 ## Global Constraints
 
-- Work only in `I:\Tools\OliviaSoul-reference-2b56a78e\.worktrees\native-renderer-recovery` on `feature/native-renderer-recovery`.
-- Keep `Z:\SteamLibrary\steamapps\common\BSide Olivia Lin Test` and `I:\Backups\BSide-Olivia-Lin-2026-08-31` read-only.
+- Work only in `X:\Tools\OliviaSoul-reference\.worktrees\native-renderer-recovery` on `feature/native-renderer-recovery`.
+- Keep `X:\SteamLibrary\steamapps\common\BSide Olivia Lin Test` and `X:\Backups\BSide-Olivia-Lin-2026-08-31` read-only.
 - Persist `activeProvider=deepseek|local`; only an explicit user action may change it.
 - Never call the unselected provider after a failure.
 - Preserve existing `deepseek.env` unchanged and import its values only as a compatibility source.

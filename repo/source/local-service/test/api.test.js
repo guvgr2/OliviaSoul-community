@@ -1200,7 +1200,7 @@ test("本地服务提供加播单、查播单和删播单接口", async () => {
 });
 
 test("发布构建路径解析到项目目录", async () => {
-  // 上游原断言写死 I 盘（作者机器的构建盘）并把临时目录也放在 I:\Temp；
+  // 上游原断言写死固定盘符（作者机器的构建盘）并把临时目录也放在该盘的 \Temp；
   // 本支改为只校验“盘符 + 路径”形式，临时目录用系统临时目录，不依赖具体盘符。
   const scratch = join(tmpdir(), "olivia-build-paths");
   await mkdir(scratch, { recursive: true });
@@ -3137,7 +3137,7 @@ test("R10.7 默认更新标识不会把旧公开包误报为待更新", async t 
   assert.equal(calls.length, 1);
 });
 
-test("检查更新从公开 GitHub Release 查询并校验下载 Setup 到 I 盘式数据目录", async t => {
+test("检查更新从公开 GitHub Release 查询并校验下载 Setup 到自定义数据目录", async t => {
   const installer = Buffer.from("setup-binary", "utf8");
   const digest = createHash("sha256").update(installer).digest("hex");
   const calls = [];

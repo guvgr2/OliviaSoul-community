@@ -4,12 +4,12 @@
 
 状态：已进入实施规划（本地曲库恢复已纳入）
 
-代码仓库：`I:\Tools\OliviaSoul-reference-2b56a78e`
-独立运行目录：`I:\OliviaSoulLocal\BSide`
+代码仓库：`X:\Tools\OliviaSoul-reference`
+独立运行目录：`X:\OliviaSoulLocal\BSide`
 
 ## 1. 目标
 
-在不覆盖 Steam 原版、不依赖已关闭官方服务器的前提下，建立一个 I 盘独立版本，使本地客户端能够：
+在不覆盖 Steam 原版、不依赖已关闭官方服务器的前提下，建立一个 X 盘独立版本，使本地客户端能够：
 
 1. 显示信箱和写信入口；
 2. 把来信保存到本地，由 Gemma 阅读并生成文字回信；
@@ -19,7 +19,7 @@
 6. 恢复已备份的本地曲库，至少完整显示轻音乐、古典和 ACG，并从本地播放已保存资源；
 7. 在存在合法原生渲染器时生成林离同步演奏视频；不存在时明确显示渲染器不可用，不伪造完成状态。
 
-当前 Steam 离线版和 I 盘备份属于同一 Build，覆盖恢复不会恢复在线服务。功能代码壳仍在前端中，但被 `offlineMode`、`N3=false`、`Ss=false` 和离线网络拦截器隐藏或阻断。
+当前 Steam 离线版和 X 盘备份属于同一 Build，覆盖恢复不会恢复在线服务。功能代码壳仍在前端中，但被 `offlineMode`、`N3=false`、`Ss=false` 和离线网络拦截器隐藏或阻断。
 
 ## 2. 已确认事实
 
@@ -30,17 +30,17 @@
 - OliviaSoul 已实现本地登录、信件保存、文字回信、信件列表、MP4 附加、Range 播放和 `.soul` 备份。
 - 当前 worker 只自动生成文字回信，固定写入 `reply_type=1`；MP4 附加后才变为 `reply_type=2`。
 - 当前 local-service 没有本地 MIDI 上传、任务、进度、结果或渲染接口。
-- I 盘备份已保存 3 个分类、129 首曲目和 1,218/1,218 个目录资源，共 59,365,972,637 字节；其中轻音乐 13 首的元数据、WAV、封面和各时段视频均已保存。
+- X 盘备份已保存 3 个分类、129 首曲目和 1,218/1,218 个目录资源，共 59,365,972,637 字节；其中轻音乐 13 首的元数据、WAV、封面和各时段视频均已保存。
 - 当前 `%APPDATA%\miHoYo\Olivia-steam` 仍有覆盖全部 13 首轻音乐的 69 个视频，约 4.12 GB；离线日志也证明 `getOfflineSongList` 曾正常返回曲库，并成功播放《梦中的婚礼》和《送别》。
 - 当前工程发布边界没有包含曲库索引或媒体资源；现有前端补丁只接管登录和信箱接口，因此“项目里没有轻音乐”是尚未接入归档，而不是下载内容丢失。
 - 当前游戏和完整备份中均没有 `wallpaper\TPRender\Binaries\Win64\Olivia.exe`、配套 PAK、配置和原生场景资产。
-- I 盘为 exFAT，系统报告 `Warning / Full Repair Needed`。用户仍选择在 I 盘建立独立版本。
+- X 盘为 exFAT，系统报告 `Warning / Full Repair Needed`。用户仍选择在 X 盘建立独立版本。
 
 ## 3. 方案比较
 
-### 方案 A：完整 I 盘独立副本（采用）
+### 方案 A：完整 X 盘独立副本（采用）
 
-把 3.44 GiB 客户端复制到 `I:\OliviaSoulLocal\BSide\game`，只修改该副本。Steam 的 Z 盘版本保持原样。
+把 3.44 GiB 客户端复制到 `X:\OliviaSoulLocal\BSide\game`，只修改该副本。Steam 的 X 盘版本保持原样。
 
 优点：边界清楚、容易回退、不会被 Steam 更新直接覆盖。
 
@@ -48,7 +48,7 @@
 
 ### 方案 B：只给 Steam 安装目录挂载补丁（不采用）
 
-继续修改 Z 盘 `feapp.dat`，启动前挂载、退出后恢复。
+继续修改 X 盘 `feapp.dat`，启动前挂载、退出后恢复。
 
 优点：空间占用小。
 
@@ -65,7 +65,7 @@
 ## 4. 目录与隔离
 
 ```text
-I:\OliviaSoulLocal\BSide\
+X:\OliviaSoulLocal\BSide\
 ├─ game\                 独立游戏副本，只由本项目修改
 ├─ service\              可双击启动的本地服务发布包
 ├─ runtime\
@@ -75,15 +75,15 @@ I:\OliviaSoulLocal\BSide\
 │  ├─ catalog\           本地曲库索引、资源映射和完整性状态
 │  └─ logs\              已脱敏、可轮转日志
 ├─ recovery\
-│  ├─ source-hashes.json  Z 盘源文件复制前哈希
-│  ├─ copy-hashes.json    I 盘副本复制后哈希
+│  ├─ source-hashes.json  X 盘源文件复制前哈希
+│  ├─ copy-hashes.json    X 盘副本复制后哈希
 │  └─ feapp-original.dat  独立副本修改前前端
 └─ Start-Olivia-Local.cmd 双击入口
 ```
 
-源码继续保留在 `I:\Tools\OliviaSoul-reference-2b56a78e`。Z 盘 Steam 游戏、Steam manifest 和 I 盘既有备份均视为只读输入。
+源码继续保留在 `X:\Tools\OliviaSoul-reference`。X 盘 Steam 游戏、Steam manifest 和 X 盘既有备份均视为只读输入。
 
-由于 I 盘是 exFAT：
+由于 X 盘是 exFAT：
 
 - 不使用 hard link；
 - 不假设多文件 rename 事务具备 NTFS 语义；
@@ -100,12 +100,12 @@ I:\OliviaSoulLocal\BSide\
 
 #### 5.1 独立副本
 
-1. 对 Z 盘 185 个源文件生成 SHA-256 清单；
-2. 普通复制到 `I:\OliviaSoulLocal\BSide\game`；
+1. 对 X 盘 185 个源文件生成 SHA-256 清单；
+2. 普通复制到 `X:\OliviaSoulLocal\BSide\game`；
 3. 对副本重新计算 SHA-256，要求全部匹配；
 4. 保存未修改的 `feapp.dat`；
 5. 先验证原样副本是否能够由用户合法拥有的 Steam 会话启动；
-6. 如果 Steam 强制跳回 Z 盘安装，停止，不做 DRM 绕过，并重新设计启动挂载方式。
+6. 如果 Steam 强制跳回 X 盘安装，停止，不做 DRM 绕过，并重新设计启动挂载方式。
 
 #### 5.2 离线前端补丁
 
@@ -175,7 +175,7 @@ I:\OliviaSoulLocal\BSide\
 曲库恢复使用两个已经确认的数据源：
 
 - `0.0.9.627\assets\songlist.dat`：离线客户端原生曲库索引；
-- `I:\Backups\BSide-Olivia-Lin-2026-08-31\remote-content`：完整 API 元数据、资源清单和 1,218 个本地资源。
+- `X:\Backups\BSide-Olivia-Lin-2026-08-31\remote-content`：完整 API 元数据、资源清单和 1,218 个本地资源。
 
 第一版不重复复制约 59.4 GB 归档，而是在独立版中保存只读数据源路径、清单哈希和本地资源映射。服务不得修改备份目录；路径失效或哈希不符时只报告曲库不可用，不回退访问官方服务器。
 
@@ -188,7 +188,7 @@ I:\OliviaSoulLocal\BSide\
 - 显示资源完整性，缺单个时段时只降级该时段，不隐藏整首歌；
 - 优先复用当前已下载缓存，但不自动移动或删除 C 盘现有文件。
 
-若用户后续要求释放 C 盘空间，另做一次“复制到 I 盘、逐文件哈希验证、切换存储路径、用户确认后再清理旧缓存”的独立迁移；本阶段不删除 C 盘缓存。
+若用户后续要求释放 C 盘空间，另做一次“复制到 X 盘、逐文件哈希验证、切换存储路径、用户确认后再清理旧缓存”的独立迁移；本阶段不删除 C 盘缓存。
 
 ### 阶段 2：本地 MIDI 上传和任务系统
 
@@ -271,7 +271,7 @@ MIDI 通常只有音符和控制信息，不包含人声、歌词、合法角色
 
 双击入口负责：
 
-1. 检查 I 盘目录和关键文件哈希；
+1. 检查 X 盘目录和关键文件哈希；
 2. 启动只监听 `127.0.0.1` 的 local-service；
 3. 检查当前手动选择的 DeepSeek 或本地 Gemma provider；
 4. 启动独立游戏副本；
@@ -284,13 +284,13 @@ MIDI 通常只有音符和控制信息，不包含人声、歌词、合法角色
 - Gemma 不可用：信件保留待处理，可稍后重试；
 - 视频缺失：回退显示文字，不删除文字回信；
 - TPRender 缺失：MIDI 状态为 `renderer_unavailable`；
-- I 盘出现新的读写错误：停止写入并提示先处理磁盘健康；
+- X 盘出现新的读写错误：停止写入并提示先处理磁盘健康；
 - 复制版不能合法启动：停止，不绕过 Steam/DRM。
 
 ## 8. 安全与数据边界
 
-- Steam Z 盘安装和 appmanifest 永不由独立版修改；
-- 既有 I 盘备份只读；
+- Steam X 盘安装和 appmanifest 永不由独立版修改；
+- 既有 X 盘备份只读；
 - 不连接已关闭的官方业务接口；
 - 本地服务只监听 loopback；
 - 所有文件名由服务生成，用户输入不能成为路径；
@@ -304,9 +304,9 @@ MIDI 通常只有音符和控制信息，不包含人声、歌词、合法角色
 
 ### 阶段 1 验收
 
-- Z 盘 185 个源文件扫描前后 SHA-256 不变；
-- I 盘副本与源清单逐文件一致；
-- 独立副本能够合法启动，Z 盘原版仍能启动；
+- X 盘 185 个源文件扫描前后 SHA-256 不变；
+- X 盘副本与源清单逐文件一致；
+- 独立副本能够合法启动，X 盘原版仍能启动；
 - 游戏内可见信箱、写信入口和历史回信；
 - 连续发送超过 3 封本地信件不被官方日限额阻断；
 - DeepSeek 与本地 Gemma 均可独立保存和测试，手动切换后配置互不覆盖；
@@ -336,7 +336,7 @@ MIDI 通常只有音符和控制信息，不包含人声、歌词、合法角色
 
 本设计不作为一个巨型实现任务执行，而拆成三个独立 spec/plan：
 
-1. **Local Companion Restore**：I 盘副本、启动验证、离线前端、DeepSeek/本地 Gemma 手动切换、信件、现有视频回信和 129 首本地曲库；
+1. **Local Companion Restore**：X 盘副本、启动验证、离线前端、DeepSeek/本地 Gemma 手动切换、信件、现有视频回信和 129 首本地曲库；
 2. **Local MIDI Jobs**：MIDI 上传、解析、任务协议、存储和旧 UI 兼容；
 3. **Renderer Integration**：TPRender 合法恢复与协议，或通用钢琴适配器。
 

@@ -11,7 +11,7 @@ import { scanPerformanceLibrary } from "../midi/library-importer.js";
 
 const hash = value => createHash("sha256").update(value).digest("hex");
 async function fixture(t, { legacy = true, resolverOptions = {} } = {}) {
-  // 原来写死上游作者机器上的 I:\OliviaSoulData\Tools\temp，任何没有该盘的机器都会 ENOENT 全红
+  // 原来写死某个固定盘符的临时目录，任何没有该盘的机器都会 ENOENT 全红
   const testRoot = join(tmpdir(), "olivia-preview-source");
   await mkdir(testRoot, { recursive: true });
   const root = await mkdtemp(join(testRoot, "olivia-preview-source-"));

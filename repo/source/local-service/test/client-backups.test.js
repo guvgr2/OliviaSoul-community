@@ -138,7 +138,7 @@ test('registered staged pair rejects partial cache without filling from external
 
 test('registered staged pair never bypasses a linked staging directory', async () => {
   const f = await stagedFixture(), originalLstat = fsPromises.lstat;
-  // I-drive fixtures are exFAT; simulate only the unavailable reparse attribute,
+  // X-drive fixtures are exFAT; simulate only the unavailable reparse attribute,
   // retaining real archive reads, identity checks, and all other filesystem I/O.
   fsPromises.lstat = async (path, ...args) => {
     const info = await originalLstat(path, ...args);

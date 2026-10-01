@@ -14,7 +14,7 @@ const [html, css, app, updateUI] = await Promise.all([
   readFile(new URL("../public/update-download-ui.js", import.meta.url), "utf8"),
 ]);
 
-const longPath = "I:\\OliviaSoulData\\我的上传\\" + "非常非常长的曲目分类目录\\".repeat(18) + "最终上传曲目.mp4";
+const longPath = "X:\\OliviaSoulData\\我的上传\\" + "非常非常长的曲目分类目录\\".repeat(18) + "最终上传曲目.mp4";
 const longLetter = "这是用于压力测试的来信内容，没有任何空格，确保记忆卡会测量真实的长正文。".repeat(38);
 const fixtureMemory = [{
   letterId: "fixture-letter-1",

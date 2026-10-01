@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a tested, read-only-first I-drive tool that inventories all legally available Olivia renderer evidence, validates a `TPRender` candidate, and emits a deterministic Stage 1A decision report without modifying Steam or backup files.
+**Goal:** Build a tested, read-only-first X-drive tool that inventories all legally available Olivia renderer evidence, validates a `TPRender` candidate, and emits a deterministic Stage 1A decision report without modifying Steam or backup files.
 
-**Architecture:** Add a dependency-free Node.js ESM package under `source/renderer-probe`. Pure modules resolve the I-drive layout, parse Steam VDF metadata, scan bounded roots, extract sanitized binary strings, validate candidate renderer structure, and write JSON/Markdown evidence. A CLI composes those modules and returns exit code `0` for `candidate_ready`, `2` for an evidence-complete `blocked_missing_renderer`, and `1` for an unexpected error.
+**Architecture:** Add a dependency-free Node.js ESM package under `source/renderer-probe`. Pure modules resolve the X-drive layout, parse Steam VDF metadata, scan bounded roots, extract sanitized binary strings, validate candidate renderer structure, and write JSON/Markdown evidence. A CLI composes those modules and returns exit code `0` for `candidate_ready`, `2` for an evidence-complete `blocked_missing_renderer`, and `1` for an unexpected error.
 
 **Tech Stack:** Node.js 24 built-ins (`node:test`, `fs/promises`, `crypto`, `path`, `process`), PowerShell 7 for verification commands, Git.
 
@@ -26,7 +26,7 @@
 ## File Structure
 
 - Create `source/renderer-probe/package.json` — isolated dependency-free Node package and test/scan scripts.
-- Create `source/renderer-probe/src/layout.js` — validate the I-drive output root and derive evidence/report paths.
+- Create `source/renderer-probe/src/layout.js` — validate the X-drive output root and derive evidence/report paths.
 - Create `source/renderer-probe/src/redaction.js` — recursively redact secrets before any evidence is serialized.
 - Create `source/renderer-probe/src/steam-vdf.js` — parse the bounded subset of Valve KeyValues used by `appmanifest_4532590.acf`.
 - Create `source/renderer-probe/src/inventory.js` — bounded, symlink-skipping scan and candidate classification.
@@ -44,7 +44,7 @@ Runtime-only output, never committed:
 - `<用户指定的探测数据目录>\evidence\stage1a-report.md`
 - `<用户指定的探测数据目录>\evidence\binary-protocol-evidence.json`
 
-## Task 1: I-drive layout and secret redaction
+## Task 1: X-drive layout and secret redaction
 
 **Files:**
 - Create: `source/renderer-probe/package.json`
@@ -84,19 +84,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { assertContained, resolveProbeLayout } from "../src/layout.js";
 
-test("default runtime layout stays on I drive", () => {
-  const layout = resolveProbeLayout("I:\\OliviaSoulData\\MidiRenderer");
-  assert.equal(layout.root, "I:\\OliviaSoulData\\MidiRenderer");
-  assert.equal(layout.reportJson, "I:\\OliviaSoulData\\MidiRenderer\\evidence\\stage1a-report.json");
+test("default runtime layout stays on X drive", () => {
+  const layout = resolveProbeLayout("X:\\OliviaSoulData\\MidiRenderer");
+  assert.equal(layout.root, "X:\\OliviaSoulData\\MidiRenderer");
+  assert.equal(layout.reportJson, "X:\\OliviaSoulData\\MidiRenderer\\evidence\\stage1a-report.json");
 });
 
 test("production layout rejects a C drive root", () => {
-  assert.throws(() => resolveProbeLayout("C:\\temp\\MidiRenderer"), /必须位于 I 盘/u);
+  assert.throws(() => resolveProbeLayout("C:\\temp\\MidiRenderer"), /必须位于 X 盘/u);
 });
 
 test("containment rejects path traversal", () => {
   assert.throws(
-    () => assertContained("I:\\OliviaSoulData\\MidiRenderer", "I:\\OliviaSoulData\\outside.json"),
+    () => assertContained("X:\\OliviaSoulData\\MidiRenderer", "X:\\OliviaSoulData\\outside.json"),
     /越过根目录/u,
   );
 });
@@ -478,7 +478,7 @@ const steam = {
 
 test("blocks honestly when no complete renderer exists", () => {
   const report = buildStage1AReport({
-    inventory: { roots: ["Z:\\game"], steam, candidates: [], markerHits: ["Z:\\game\\version.json"], warnings: [] },
+    inventory: { roots: ["X:\\game"], steam, candidates: [], markerHits: ["X:\\game\\version.json"], warnings: [] },
     protocolEvidence: { files: [], markers: ["LivePlayerStartNotify"], messages: [], paths: [] },
     validations: [],
     generatedAt: "2026-08-31T10:00:00.000Z",
@@ -489,9 +489,9 @@ test("blocks honestly when no complete renderer exists", () => {
 
 test("marks ready only for a complete validated candidate", () => {
   const report = buildStage1AReport({
-    inventory: { roots: ["I:\\candidate"], steam, candidates: ["I:\\candidate\\wallpaper\\TPRender\\Binaries\\Win64\\Olivia.exe"], markerHits: [], warnings: [] },
+    inventory: { roots: ["X:\\candidate"], steam, candidates: ["X:\\candidate\\wallpaper\\TPRender\\Binaries\\Win64\\Olivia.exe"], markerHits: [], warnings: [] },
     protocolEvidence: { files: [], markers: ["LivePlayerStartNotify"], messages: [], paths: [] },
-    validations: [{ status: "complete", executable: "I:\\candidate\\wallpaper\\TPRender\\Binaries\\Win64\\Olivia.exe" }],
+    validations: [{ status: "complete", executable: "X:\\candidate\\wallpaper\\TPRender\\Binaries\\Win64\\Olivia.exe" }],
     generatedAt: "2026-08-31T10:00:00.000Z",
   });
   assert.equal(report.status, "candidate_ready");
@@ -564,7 +564,7 @@ git commit -m "feat: report renderer recovery readiness"
 
 - [ ] **Step 1: Write the operator README**
 
-Document prerequisites (`node >=22.5`, PowerShell), the exact scan command from Task 5, exit codes `0/1/2`, all read-only input roots, all I-drive output paths, credential-redaction guarantees, and the rule that Stage 1B is forbidden unless status is `candidate_ready`.
+Document prerequisites (`node >=22.5`, PowerShell), the exact scan command from Task 5, exit codes `0/1/2`, all read-only input roots, all X-drive output paths, credential-redaction guarantees, and the rule that Stage 1B is forbidden unless status is `candidate_ready`.
 
 Include this recovery statement verbatim:
 
@@ -594,7 +594,7 @@ Get-FileHash -Algorithm SHA256 -LiteralPath `
 
 Save the console output in the implementation turn notes; do not write it into either input root.
 
-- [ ] **Step 4: Run the real scan from the I-drive project**
+- [ ] **Step 4: Run the real scan from the X-drive project**
 
 ```powershell
 Set-Location '<源码目录>\source\renderer-probe'
@@ -608,7 +608,7 @@ node src/cli.js scan `
 
 Expected: exit `0` with `candidate_ready` if a structurally complete `TPRender` is found; otherwise exit `2` with `blocked_missing_renderer`. Exit `2` is the expected result for the currently observed machine state and is not converted into a success claim.
 
-- [ ] **Step 5: Verify report redaction and I-drive containment**
+- [ ] **Step 5: Verify report redaction and X-drive containment**
 
 ```powershell
 $evidence = '<用户指定的探测数据目录>\evidence'
@@ -622,7 +622,7 @@ Get-ChildItem -LiteralPath $evidence -File |
   Format-Table -AutoSize
 ```
 
-Expected: `rg` finds no credential pattern; all three report files resolve beneath the I-drive evidence directory.
+Expected: `rg` finds no credential pattern; all three report files resolve beneath the X-drive evidence directory.
 
 - [ ] **Step 6: Re-run pre-scan hashes and compare**
 
@@ -655,6 +655,6 @@ If status is `blocked_missing_renderer`, report the exact scanned roots, Steam a
 
 ## Self-Review Record
 
-- Spec coverage: This plan covers only the approved design's Stage 1A asset recovery, validation, I-drive storage, immutability, redaction, evidence, and decision gate. IPC launch and short-scale playback are intentionally split into Stage 1B because their exact implementation depends on the recovered renderer binary and configuration.
+- Spec coverage: This plan covers only the approved design's Stage 1A asset recovery, validation, X-drive storage, immutability, redaction, evidence, and decision gate. IPC launch and short-scale playback are intentionally split into Stage 1B because their exact implementation depends on the recovered renderer binary and configuration.
 - Placeholder scan: No deferred implementation markers or undefined generic error-handling instructions remain. The two Stage 1A outcomes and their next actions are explicit.
 - Type consistency: `ProbeLayout`, `SteamAppIdentity`, `InventoryResult`, `ProtocolEvidence`, `CandidateValidation`, and `Stage1AReport` producers/consumers use the same names throughout.

@@ -1,6 +1,9 @@
 import { isAbsolute, relative, resolve, win32 } from "node:path";
 
-const PRODUCTION_ROOT = win32.resolve("I:\\OliviaSoulData\\MidiRenderer");
+// 探针只允许在固定的规范数据目录下运行；换盘或换机器时可用 OLIVIA_PROBE_ROOT 覆盖。
+const PRODUCTION_ROOT = win32.resolve(
+  process.env.OLIVIA_PROBE_ROOT || "X:\\OliviaSoulData\\MidiRenderer",
+);
 
 export function assertContained(parent, child) {
   const root = resolve(parent);
@@ -17,7 +20,7 @@ export function resolveProbeLayout(dataRoot) {
   try {
     assertContained(PRODUCTION_ROOT, root);
   } catch {
-    throw new Error(`运行数据根目录必须位于 I 盘规范目录: ${root}`);
+    throw new Error(`运行数据根目录必须位于 X 盘规范目录: ${root}`);
   }
   const evidenceDir = assertContained(root, win32.join(root, "evidence"));
   return Object.freeze({

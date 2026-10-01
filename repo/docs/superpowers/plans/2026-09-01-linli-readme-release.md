@@ -4,7 +4,7 @@
 
 **Goal:** Replace the inherited README with an independent user guide and publish verified Windows installer and portable assets for `coderscsy/linli` release `2008.2.7-linli.1`.
 
-**Architecture:** README and packaged usage text become the user-facing source of truth for this fork. The existing release script remains the single build entry point, but moves all writable build caches to repository-local I-drive paths and emits SHA-256 checksums automatically. GitHub receives the tested source commit first, then a release tag and four verified assets from the I-drive release directory.
+**Architecture:** README and packaged usage text become the user-facing source of truth for this fork. The existing release script remains the single build entry point, but moves all writable build caches to repository-local X-drive paths and emits SHA-256 checksums automatically. GitHub receives the tested source commit first, then a release tag and four verified assets from the X-drive release directory.
 
 **Tech Stack:** Markdown, Node.js 22 `node:test`, PowerShell 5.1, .NET Framework 4.6.2, Inno Setup 6, GitHub CLI.
 
@@ -13,7 +13,7 @@
 - Repository: `https://github.com/coderscsy/linli`; default branch `main`.
 - Release tag: `2008.2.7-linli.1`; application version stays `2008.2.7`.
 - All build caches and artifacts must be written on I:; do not place large outputs on C:.
-- Keep `Z:\SteamLibrary\steamapps\common\BSide Olivia Lin Test` and `I:\Backups\BSide-Olivia-Lin-2026-08-31` read-only.
+- Keep `X:\SteamLibrary\steamapps\common\BSide Olivia Lin Test` and `X:\Backups\BSide-Olivia-Lin-2026-08-31` read-only.
 - Do not publish secrets, `.env`, SQLite databases, logs, caches, personal letters, memories, or game assets.
 - Video attachment replies remain supported; automatic Lin Li character voice-video generation must be described as unavailable.
 - Do not force-push or overwrite an existing conflicting release tag.
@@ -65,14 +65,14 @@ git commit -m "docs: publish linli user guide"
 - Modify: `source/local-service/test/api.test.js`
 
 **Interfaces:**
-- Build command: `build-release.ps1 -OutputDirectory <I-drive path>`.
-- Diagnostic command: `build-release.ps1 -OutputDirectory <I-drive path> -ResolvePathsOnly` outputs one JSON object without compiling or downloading.
-- Checksum command: `build-release.ps1 -OutputDirectory <I-drive path> -ChecksumOnly` hashes existing setup and portable assets.
+- Build command: `build-release.ps1 -OutputDirectory <X-drive path>`.
+- Diagnostic command: `build-release.ps1 -OutputDirectory <X-drive path> -ResolvePathsOnly` outputs one JSON object without compiling or downloading.
+- Checksum command: `build-release.ps1 -OutputDirectory <X-drive path> -ChecksumOnly` hashes existing setup and portable assets.
 - Produces: installer, portable ZIP, `使用说明.txt`, and `SHA256SUMS.txt` in the chosen output directory.
 
 - [ ] **Step 1: Add failing executable build-contract tests**
 
-Create I-drive temporary directories. Execute the real PowerShell script in both diagnostic modes and assert observable output:
+Create X-drive temporary directories. Execute the real PowerShell script in both diagnostic modes and assert observable output:
 
 ```js
 const resolved = JSON.parse(paths.stdout);
@@ -165,7 +165,7 @@ Verify `node_modules`, `dotnet.exe`, and Inno Setup 6 are available. If a depend
 
 ```powershell
 Set-Location source\local-service
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File packaging\build-release.ps1 -OutputDirectory "I:\Tools\OliviaSoul-reference-2b56a78e\.worktrees\native-renderer-recovery\release"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File packaging\build-release.ps1 -OutputDirectory "X:\Tools\OliviaSoul-reference\.worktrees\native-renderer-recovery\release"
 ```
 
 Expected: exit code 0 and `Olivia Soul release: ...\release`.

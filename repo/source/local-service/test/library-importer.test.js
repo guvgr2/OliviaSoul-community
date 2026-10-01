@@ -12,7 +12,7 @@ import { MidiStore } from "../midi/store.js";
 import { endOfTrack, midiFile, track } from "./fixtures/midi-fixtures.js";
 
 async function libraryFixture() {
-  // 原来写死上游作者机器上的 I:\CodexData\test-temp，任何没有该盘的机器都会 ENOENT 全红
+  // 原来写死某个固定盘符的临时目录，任何没有该盘的机器都会 ENOENT 全红
   const testRoot = join(tmpdir(), "olivia-library-importer");
   await mkdir(testRoot, { recursive: true });
   const root = await mkdtemp(join(testRoot, "olivia-library-import-"));
