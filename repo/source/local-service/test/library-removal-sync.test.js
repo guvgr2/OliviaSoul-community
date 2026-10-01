@@ -1,12 +1,57 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
 import vm from 'node:vm';
-const patch=readFileSync(new URL('../../tools/patch-feapp-local.ps1',import.meta.url),'utf8');
-const source=patch.match(/\$songTitleSync = @'\r?\n([\s\S]*?)\r?\n'@/)[1];
+
+// ── 结构容忍的补丁脚本定位 ──────────────────────────────────────────────────
+// 历史教训：原实现要求 "$key = '...'" 独占一行且以行尾引号收尾。补丁脚本把一个赋值拆成两行
+// （PowerShell 单引号字符串允许换行）后正则匹配不到 → match(...) 返回 null → 读 [1] 直接抛
+// "Cannot read properties of null"，看起来像测试坏了，实际只是定位方式太脆。
+// 现在按赋值语句的收尾引号定位（允许跨行、允许前后插入无关行），定位失败抛明确错误、不静默取空。
+// 反向验证入口：OLIVIA_TOOLS_SOURCE_DIR 指向 tools/ 的副本目录（缺省=仓库里的真实脚本）。
+const toolsDir=process.env.OLIVIA_TOOLS_SOURCE_DIR;
+const patch=readFileSync(toolsDir?join(toolsDir,'patch-feapp-local.ps1'):new URL('../../tools/patch-feapp-local.ps1',import.meta.url),'utf8');
+const songTitleSync=patch.match(/\$songTitleSync = @'\r?\n([\s\S]*?)\r?\n'@/);
+assert.ok(songTitleSync,'定位失败：patch-feapp-local.ps1 里找不到 $songTitleSync 的 here-string（@\'...\'@）');
+const source=songTitleSync[1];
+
+// 取出 $key = '<单引号字符串>' 的字符串内容（跨行时取到收尾引号那行为止）。
+function patchAssignment(source,key,label){
+ const head=new RegExp('\\$'+key+"\\s*=\\s*'").exec(source);
+ assert.ok(head,`定位失败：${label} 里找不到赋值 $${key} = '...'`);
+ const from=head.index+head[0].length;
+ for(let cursor=from;cursor<source.length;){
+  const nl=source.indexOf('\n',cursor);
+  if(nl<0)break;
+  const lineEnd=source[nl-1]==='\r'?nl-1:nl;
+  const raw=source.slice(cursor,lineEnd),trimmed=raw.replace(/\s+$/,'');
+  const next=source.slice(nl+1).split('\n',1)[0];
+  if(trimmed.endsWith("'")&&!/^\s*\+/.test(next))return source.slice(from,cursor+trimmed.length-1);
+  cursor=nl+1;
+ }
+ throw new Error(`定位失败：${label} 里 $${key} 的赋值没有以行尾单引号收尾（可能被改写成了多行拼接）`);
+}
+
+// 解析 $key = $key.Replace('原文','替换后') 链路（允许多余空格）。
+// 第二个参数写成 PowerShell 变量的链路（如 $playerStateUrl）测试不做变量求值，保留占位符原文（与历史行为一致）；
+// 但若有链路被改写成跨行、本函数解析不到，直接抛错而不是静默跳过替换。
+function replaceChains(source,key,label){
+ const chainRe=new RegExp('\\$'+key+'\\s*=\\s*\\$'+key+'\\.Replace\\(([^\\r\\n]*)\\)\\s*$','gm');
+ const chains=[...source.matchAll(chainRe)];
+ const opened=(source.match(new RegExp('\\$'+key+'\\s*=\\s*\\$'+key+'\\.Replace\\(','g'))||[]).length;
+ if(chains.length<opened)throw new Error(`定位失败：${label} 里 $${key} 有 ${opened-chains.length} 条 Replace 链路不是单行写法，无法安全解析`);
+ const pairs=[];
+ for(const chain of chains){
+  const args=/^'(.*)',\s*'(.*)'$/.exec(chain[1].trim());
+  if(args)pairs.push([args[1],args[2]]);
+ }
+ return pairs;
+}
+
 function replacement(key){
- let text=patch.match(new RegExp('^\\$'+key+" = '([^\\r\\n]*)'\\r?$",'m'))[1];
- for(const match of patch.matchAll(new RegExp('^\\$'+key+' = \\$'+key+"\\.Replace\\('([^']*)', '([^']*)'\\)",'gm')))text=text.split(match[1]).join(match[2]);
+ let text=patchAssignment(patch,key,'patch-feapp-local.ps1');
+ for(const [from,to] of replaceChains(patch,key,'patch-feapp-local.ps1'))text=text.split(from).join(to);
  return text.replaceAll("' + $playerCommandUrl + '",'http://test/command').replaceAll("' + $playerStateUrl + '",'http://test/state');
 }
 function fixture(){

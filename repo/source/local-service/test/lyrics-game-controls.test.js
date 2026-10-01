@@ -1,11 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
 import vm from 'node:vm';
 import {setImmediate as turn} from 'node:timers/promises';
+
+// ── 结构容忍的补丁脚本定位 ──────────────────────────────────────────────────
+// 历史教训：原实现取「脚本里第一行以 $key = 开头的行」，再把该行首尾引号切掉。
+// PowerShell 单引号字符串允许换行，补丁脚本把一个赋值拆成两行后，这里只拿到第一行，
+// window.OliviaSoulLyricsPlayback 随之消失（测试报「is not a function」，看着像功能坏了）。
+// 现在按赋值语句的收尾引号定位（允许跨行、允许前后插入无关行），定位失败抛明确错误、不静默取空。
+// 反向验证入口：OLIVIA_TOOLS_SOURCE_DIR 指向 tools/ 的副本目录（缺省=仓库里的真实脚本）。
+const toolsDir=process.env.OLIVIA_TOOLS_SOURCE_DIR;
+function readToolsFile(file){
+  return readFileSync(toolsDir?join(toolsDir,file):new URL('../../tools/'+file,import.meta.url),'utf8');
+}
+// 取出 $key = '<单引号字符串>' 的字符串内容（跨行时取到收尾引号那行为止）。
+function patchAssignment(source,key,label) {
+  const head=new RegExp('\\$'+key+"\\s*=\\s*'").exec(source);
+  assert.ok(head,`定位失败：${label} 里找不到赋值 $${key} = '...'`);
+  const from=head.index+head[0].length;
+  for(let cursor=from;cursor<source.length;){
+    const nl=source.indexOf('\n',cursor);
+    if(nl<0)break;
+    const lineEnd=source[nl-1]==='\r'?nl-1:nl;
+    const raw=source.slice(cursor,lineEnd),trimmed=raw.replace(/\s+$/,'');
+    const next=source.slice(nl+1).split('\n',1)[0];
+    if(trimmed.endsWith("'")&&!/^\s*\+/.test(next))return source.slice(from,cursor+trimmed.length-1);
+    cursor=nl+1;
+  }
+  throw new Error(`定位失败：${label} 里 $${key} 的赋值没有以行尾单引号收尾（可能被改写成了多行拼接）`);
+}
+function sliceBetween(source,startMarker,endMarker,label) {
+  const start=source.indexOf(startMarker);
+  assert.notEqual(start,-1,`定位失败：${label} —— 找不到起始标记 ${JSON.stringify(startMarker)}`);
+  const end=source.indexOf(endMarker,start+startMarker.length);
+  assert.notEqual(end,-1,`定位失败：${label} —— 从 ${JSON.stringify(startMarker)} 之后找不到结束标记 ${JSON.stringify(endMarker)}`);
+  return source.slice(start,end);
+}
 function fragment(file,key) {
-  const line=readFileSync(new URL('../../tools/'+file,import.meta.url),'utf8').split(/\r?\n/).find(l=>l.startsWith('$'+key+' = '));
-  return line.slice(line.indexOf("'")+1,-1).replace(/' \+ \$player(?:Command|State)Url \+ '/g,'http://127.0.0.1:1234/toy/player-command');
+  return patchAssignment(readToolsFile(file),key,file).replace(/' \+ \$player(?:Command|State)Url \+ '/g,'http://127.0.0.1:1234/toy/player-command');
 }
 
 test('WebPlayer notification fetches immediately without waiting for the one-second fallback',async()=>{
@@ -21,7 +55,7 @@ test('WebPlayer notification fetches immediately without waiting for the one-sec
 });
 test('game adapter invokes existing previous/next and preserves session in pause/resume requests',async()=>{
   const store=fragment('patch-feapp-local.ps1','playerStateStoreTo');
-  const source=store.slice(store.indexOf('window.OliviaSoulLyricsPlayback='),store.indexOf(';return{isSongAvailable:a'));
+  const source=sliceBetween(store,'window.OliviaSoulLyricsPlayback=',';return{isSongAvailable:a','lyrics-game-controls 的歌词播放适配器片段');
   let prev=0,next=0;const requests=[];
   const window={__OliviaSoulSongId:'a',__OliviaSoulSessionId:'s'};
   vm.runInNewContext(source,{window,S:()=>prev++,U:()=>next++,fetch:async(url,options)=>{
@@ -40,7 +74,7 @@ test('WebPlayer pause retains media identity and stop retains wallpaper restorat
     __OliviaSoulAbortPlayerRequests:()=>aborts++,__OliviaSoulRestoreDefaultPlayback:()=>restores++};
   const context={window,i:{value:{pause:()=>pauses++,currentSrc:'song.mp4',currentTime:42.5,duration:120}}};
   vm.createContext(context);
-  vm.runInContext(readFileSync(new URL('../../tools/webplayer-pause.js',import.meta.url),'utf8'),context);
+  vm.runInContext(readToolsFile('webplayer-pause.js'),context);
   const run=command=>{context.e=command;vm.runInNewContext('switch(e.cmd){'+source+'}',context)};
   run({cmd:'pause',preserveSession:true,songId:'a',sessionId:'s'});
   assert.equal(pauses,1);assert.equal(restores,1);assert.equal(aborts,0);
@@ -64,7 +98,7 @@ test('resume restores saved media and offset, not the wallpaper position; old se
   const context={window,i:{value:{currentSrc:'wallpaper.mp4',currentTime:5,pause(){},removeAttribute(){},load(){}}},
     le:(url,options)=>loads.push({url,offset:options.offset}),ce:()=>assert.fail('must reload the performance, not play wallpaper')};
   vm.createContext(context);
-  vm.runInContext(readFileSync(new URL('../../tools/webplayer-pause.js',import.meta.url),'utf8')+
+  vm.runInContext(readToolsFile('webplayer-pause.js')+
     'function pe(e){switch(e.cmd){'+fragment('patch-webplayer-local.ps1','playTo')+'}}',context);
   // Media loading is exercised separately by webplayer-swap.test.js.
   context.OliviaSoulSwapPlayback=(url,options)=>loads.push({url,offset:options.offset});

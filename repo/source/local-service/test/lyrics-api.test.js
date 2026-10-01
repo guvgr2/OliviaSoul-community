@@ -7,6 +7,28 @@ import { createOliviaService } from '../server.js';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
+// ── 结构容忍的补丁脚本定位 ──────────────────────────────────────────────────
+// 历史教训（真实踩过）：原实现按「脚本里第一行以 $playerStateStoreTo = 开头的行」取行，再按列切片。
+// 补丁脚本把这个赋值拆成两行后，find 仍返回第一行，而 window.OliviaSoulLyricsPlayback= 已落到第二行
+// → indexOf 返回 -1、切片为空 → 注入片段里没有该函数，测试报「is not a function」，
+// 看起来像功能坏了，实际只是定位方式太脆（不是产品缺陷）。
+// 现在改为按符号名在整个文件内定位（允许跨行、允许前后插入无关行），定位失败直接抛错、不静默取空。
+// 反向验证入口：OLIVIA_TOOLS_SOURCE_DIR 指向 tools/ 的副本目录（缺省=仓库里的真实脚本）；
+// 与 song-editor-ui.test.js 的 OLIVIA_EDITOR_SOURCE 是同一套做法。
+const toolsDir=process.env.OLIVIA_TOOLS_SOURCE_DIR;
+function readToolsFile(name){
+  return readFileSync(toolsDir?join(toolsDir,name):new URL('../../tools/'+name,import.meta.url),'utf8');
+}
+function sliceBetween(source,startMarker,endMarker,label){
+  const start=source.indexOf(startMarker);
+  assert.notEqual(start,-1,`定位失败：${label} —— 在补丁脚本里找不到起始标记 ${JSON.stringify(startMarker)}`);
+  const end=source.indexOf(endMarker,start+startMarker.length);
+  assert.notEqual(end,-1,`定位失败：${label} —— 从 ${JSON.stringify(startMarker)} 之后找不到结束标记 ${JSON.stringify(endMarker)}`);
+  const slice=source.slice(start,end);
+  assert.notEqual(slice.trim(),'',`定位失败：${label} —— 定位到的片段为空`);
+  return slice;
+}
+
 test('lyrics HTTP routes consume only accepted actual playback and never control music', async t => {
   const root = await mkdtemp(join(tmpdir(), 'lyrics-api-'));
   const frames = [];
@@ -89,8 +111,7 @@ test('lyrics HTTP routes consume only accepted actual playback and never control
   // Exercise the same HTTP handoff and real FE adapter used by stress/toolbar.
   const fresh=(await json('/toy/player-command',{cmd:'play',songId:'stable-work',url:play.command.url})).data;
   const window={__OliviaSoulSongId:'stable-work',__OliviaSoulSessionId:fresh.command.sessionId,__OliviaSoulCommandRevision:fresh.revision};
-  const line=readFileSync(new URL('../../tools/patch-feapp-local.ps1',import.meta.url),'utf8').split(/\r?\n/).find(l=>l.startsWith('$playerStateStoreTo = '));
-  const fragment=line.slice(line.indexOf('window.OliviaSoulLyricsPlayback='),line.indexOf(';return{isSongAvailable:a')).replace(/' \+ \$playerCommandUrl \+ '/g,base+'/toy/player-command');
+  const fragment=sliceBetween(readToolsFile('patch-feapp-local.ps1'),'window.OliviaSoulLyricsPlayback=',';return{isSongAvailable:a','lyrics-api.test.js 的歌词播放适配器片段').replace(/' \+ \$playerCommandUrl \+ '/g,base+'/toy/player-command');
   vm.runInNewContext(fragment,{window,fetch});
   await json('/toy/lyrics/playback');
   for(const action of ['pause','resume']) {

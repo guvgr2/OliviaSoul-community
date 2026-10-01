@@ -1,5 +1,6 @@
 import { createUpdateDownloadUI } from './update-download-ui.js';
 import { createTabNotices } from './tab-notices.js';
+import { createPatchLossNotice } from './patch-loss-notice.js';
 const $ = selector => document.querySelector(selector);
 let noticeStorage;
 try { noticeStorage = window.localStorage; } catch { /* Storage may be disabled. */ }
@@ -18,6 +19,29 @@ const tabNotices = createTabNotices({ storage: noticeStorage, render(tab, notice
   // g11：同步到大标题上的提醒点（组收起时也看得见）
   if (typeof updateSideGroupNotices === 'function') updateSideGroupNotices();
 } });
+// 补丁失效即时提醒（1.0.5）：Steam / 官方更新游戏会把 feapp.dat、webplayer.dat 覆盖回原版，
+// 补丁就没了 —— 而界面上唯一的提示只是「客户端与桌面」页签上的角标，用户没有理由去点它。
+// 这里在每次状态刷新后对比上次已知挂载状态，只在「上次确实挂载、这次没了」时提醒一次。
+// 存储复用上面同一个本地存储对象（必须跨重启记住：更新通常发生在程序没开的时候）。
+const patchLossNotice = createPatchLossNotice({
+  storage: noticeStorage,
+  log: error => console.error("[补丁失效提醒]", error),
+  notify({ lost }) {
+    const names = lost.map(kind => kind === "webplayer" ? "播放器补丁（webplayer.dat）" : "界面补丁（feapp.dat）");
+    // 复用既有通知（与「确认停用」同一套 openNotice），确认后切到既有「重打补丁」入口所在的页签。
+    // 故意不 await：提醒不得阻塞启动与服务就绪。
+    void openNotice({
+      title: "游戏补丁已失效",
+      message: `检测到游戏文件被更新覆盖：${names.join("、")}已不在游戏里，游戏现在连不上本机服务`
+        + "（界面补丁不显示、歌词与续播不生效）。点下面的「去重打补丁」打开「客户端与桌面」，"
+        + "再点那里的「启用本地服务」（若显示为「重打补丁（同步端口）」也是一样的）把补丁写回游戏即可。",
+      confirmText: "去重打补丁",
+      cancelText: "稍后再说",
+    }).then(accepted => {
+      if (accepted) document.querySelector('.sideTab[data-tab="desktop"]')?.click();
+    });
+  },
+});
 let previewId = null;
 let aiExchanges = [];
 let aiImportMetadata = null;
@@ -289,7 +313,7 @@ function stalePatchPort(status) {
     .find(value => value != null && value !== status.servicePort) ?? null;
 }
 
-function renderClientMountStatus(status) {
+function renderClientMountStatus(status, { expectedChange = false } = {}) {
   // A status snapshot is not proof that an unresolved desktop write has stopped.
   if (clientMountAction) { updateClientMountButtons(); return; }
   clientMountSnapshot = status;
@@ -344,6 +368,9 @@ function renderClientMountStatus(status) {
   const patchPresent = status.mounted === true || partiallyMounted || status.updateAvailable === true;
   $("#rollbackPatchBox").hidden = !(status.clientSelected === true && patchPresent);
   updateClientMountButtons();
+  // 补丁失效即时提醒：状态一变就主动告知一次（用户不会主动打开这一页看角标）。
+  // expectedChange=true 表示这次变化是我们自己造成的（用户点了停用 / 回退补丁），只记录不提醒。
+  patchLossNotice.observe(status, { expectedChange });
 }
 
 function clientMountErrorMessage(error) {
@@ -354,7 +381,7 @@ function clientMountErrorMessage(error) {
     .replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 240) || "未知错误";
 }
 
-async function refreshClientMountStatus({ preserveResult = false } = {}) {
+async function refreshClientMountStatus({ preserveResult = false, expectedChange = false } = {}) {
   if (!window.oliviaDesktop || clientMountAction) return null;
   const generation = clientMountGeneration;
   const request = ++clientMountStatusRequest;
@@ -366,7 +393,7 @@ async function refreshClientMountStatus({ preserveResult = false } = {}) {
       new Promise(resolve => { timer = setTimeout(() => resolve({ timedOut: true }), 35_000); }),
     ]);
     if (generation !== clientMountGeneration || request !== clientMountStatusRequest || clientMountAction) return null;
-    if (outcome.status) { renderClientMountStatus(outcome.status); return outcome.status; }
+    if (outcome.status) { renderClientMountStatus(outcome.status, { expectedChange }); return outcome.status; }
     tabNotices.set('desktop', 'query', { kind: 'fault', id: 'query', message: '客户端状态检查失败，请查看详情' });
     if (!preserveResult) $("#serviceMountResult").textContent = outcome.timedOut
       ? "状态查询超时，当前客户端状态尚未确认。"
@@ -387,14 +414,16 @@ function finishClientMountAction(action, status, error) {
       ? `回退补丁失败：${clientRollbackErrorMessage(error)}`
       : `${label}失败：${clientMountErrorMessage(error)}`;
     updateClientMountButtons();
-    void refreshClientMountStatus({ preserveResult: true });
+    void refreshClientMountStatus({ preserveResult: true, expectedChange: true });
     return;
   }
-  if (status) renderClientMountStatus(status);
+  // 这次状态变化是用户自己点出来的（启用 / 停用 / 回退补丁），不算「被游戏更新覆盖」：只记录不提醒，
+  // 否则用户主动「回退补丁（还原原版）」之后反而会收到「补丁失效」的惊吓。
+  if (status) renderClientMountStatus(status, { expectedChange: true });
   else updateClientMountButtons();
   // 回退完成后必须再看一次真实状态（复用 getClientStatus）：还原到底有没有生效，
   // 不能只看这次返回的快照 —— 状态行/徽章要跟着变成「未挂载」。
-  if (rollback) void refreshClientMountStatus({ preserveResult: true });
+  if (rollback) void refreshClientMountStatus({ preserveResult: true, expectedChange: true });
   const expectedMounted = action.kind === "enable";
   // 端口要一并核对：端口退让后用户点的正是「重打补丁（同步端口）」。
   // 补丁没写进新端口却报「服务已启用」，用户就会带着连不上的补丁去启动游戏。
@@ -1608,7 +1637,8 @@ $("#selectClient").addEventListener("click", safely(async () => {
   const status = await window.oliviaDesktop.selectClient();
   if (clientMountAction || generation !== clientMountGeneration) return;
   clientMountGeneration++;
-  renderClientMountStatus(status);
+  // 换了游戏客户端：新客户端可能本来就没打过补丁，这不是「补丁失效」。
+  renderClientMountStatus(status, { expectedChange: true });
   if (status.selectionChanged) $("#serviceMountResult").textContent = "已选择客户端";
 }));
 $("#mountService").addEventListener("click", safely(() => runClientMountAction("enable")));

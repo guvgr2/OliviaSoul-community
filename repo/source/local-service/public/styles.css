@@ -681,3 +681,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ln-diagTable td:last-child button { margin-right: 6px; }
 .ln-diagPending { border-color: #6b5620; background: #241f14; }
 .ln-diagPending strong { display: block; margin-bottom: 6px; }
+/* 1.0.5 周期自动备份设置行（照设置页里其它「一行设置」的样式） */
+.ln-diagPeriodic { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid #292a2f; }
+.ln-diagPeriodic > div { flex: 1 1 320px; }
+.ln-diagPeriodic strong { display: block; margin-bottom: 4px; }
+.ln-diagPeriodic small { color: #9a9ba3; line-height: 1.5; }
+.ln-diagPeriodic select { min-width: 200px; }

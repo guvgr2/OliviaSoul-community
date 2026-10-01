@@ -1,0 +1,6 @@
+# .githooks/ 下的脚本必须保持 LF 行尾。
+#
+# 原因（真实坑）：仓库根 .gitattributes 是 `* text=auto`，而本机 core.autocrlf=true，
+# 于是 checkout 会把文本文件转成 CRLF。pre-commit 一旦变成 CRLF，shebang 就成了
+# `/bin/sh^M` —— git 执行 hook 直接失败（`bad interpreter`），门禁静默失效。
+* text eol=lf

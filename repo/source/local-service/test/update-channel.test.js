@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { createOliviaService } from "../server.js";
 import { createTabNotices } from "../public/tab-notices.js";
+import { createPatchLossNotice } from "../public/patch-loss-notice.js";
 import { blockedFetchPorts } from "./fixtures/fetch-ports.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -335,7 +336,7 @@ function uiFixture({ payload, channelReply } = {}) {
     document: { querySelector: node, querySelectorAll: () => [], addEventListener() {} },
     location: { hash: "" },
     console, URL, AbortController,
-    createUpdateDownloadUI: downloadUIPlaceholder, createTabNotices,
+    createUpdateDownloadUI: downloadUIPlaceholder, createTabNotices, createPatchLossNotice,
     fetch: fetchStub,
     requestAnimationFrame: callback => callback(),
     setTimeout: (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, at: now + delay }); return id; },

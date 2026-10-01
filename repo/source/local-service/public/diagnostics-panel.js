@@ -392,6 +392,62 @@
       box.append(node("p", `另有 ${items.length - 12} 份更早的备份，「打开备份目录」能看到全部`, "fieldHint"));
   }
 
+  // 1.0.5：周期自动备份（默认每天一份，最多留 7 份周期备份）
+  // 它复用同一个备份目录与同一套设置存储，所以只在这一页加一个设置行，不另开页面。
+  const PERIODIC_BACKUP_CHOICES = [
+    ["off", "关闭（不建议）"],
+    ["1", "每天（默认）"],
+    ["7", "每 7 天"],
+  ];
+
+  function periodicBackupChoice(data) {
+    if (data?.enabled !== true) return "off";
+    return Number(data?.intervalDays) === 7 ? "7" : "1";
+  }
+
+  function renderPeriodicBackup(data) {
+    if (!ui) return;
+    const select = ui.periodicSelect;
+    select.value = periodicBackupChoice(data);
+    const label = select.options[select.selectedIndex]?.textContent ?? "";
+    const items = Array.isArray(data?.backups) ? data.backups : [];
+    const state = data?.status ?? null;
+    const parts = [`当前：${label}`];
+    if (items.length)
+      parts.push(`已有 ${items.length} 份周期备份，最新一份 ${timeText(items[0].at)}（${bytes(items[0].bytes)}，${items[0].file}）`);
+    else
+      parts.push("还没有周期备份 —— 程序启动时检查一次，到了间隔就会自动留第一份");
+    parts.push(`只保留最近 ${Number(data?.keep) || 7} 份周期备份（手动备份与升级前备份不会被清理）`);
+    if (state?.lastError) parts.push(`上次没能备份：${timeText(state.lastErrorAt)} · ${state.lastError}`);
+    ui.periodicHint.textContent = parts.join(" · ");
+  }
+
+  async function loadPeriodicBackup() {
+    if (!ui) return;
+    try {
+      renderPeriodicBackup(await api("/data/periodic-backup"));
+    } catch (error) {
+      ui.periodicStatus.textContent = `读取周期备份设置失败：${error.message}`;
+    }
+  }
+
+  async function savePeriodicBackup(value) {
+    if (!ui) return;
+    const body = value === "off" ? { enabled: false } : { enabled: true, intervalDays: Number(value) };
+    ui.periodicStatus.textContent = "正在保存…";
+    try {
+      renderPeriodicBackup(await api("/data/periodic-backup", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }));
+      ui.periodicStatus.textContent = "✓ 已保存（立刻生效，不用重启）";
+    } catch (error) {
+      ui.periodicStatus.textContent = `保存失败：${error.message}`;
+      // 保存失败就拉回服务器上的真实值，别让下拉框停在没生效的选择上
+      await loadPeriodicBackup();
+    }
+  }
+
   async function loadDataSafety() {
     if (!ui) return;
     ui.dataStatus.textContent = "正在读取备份列表…";
@@ -445,8 +501,7 @@
     }
   }
 
-  async function cancelRestoreNow() {
-    if (!ui) return;
+  async function cancelRestoreNow() {    if (!ui) return;
     try {
       await api("/data/cancel-restore", { method: "POST", body: "{}" });
       ui.dataStatus.textContent = "已取消这次恢复，数据库不会被替换。";
@@ -626,7 +681,7 @@
     const dataHead = node("div", null, "settingsBlockHead ln-diagSpacer ln-diagData");
     dataHead.append(
       node("strong", "数据备份与恢复"),
-      node("small", "你的整理成果（曲名 / 时段 / 歌词关联 / 信件）全在数据库里。平时改时段、写曲名都会自动留一份备份 —— 这里可以手动再存一份、随时看某份备份里有什么、出错时回滚，或者把全部数据打包换电脑"),
+      node("small", "你的整理成果（曲名 / 时段 / 歌词关联 / 信件）全在数据库里。平时改时段、写曲名都会自动留一份备份，现在还会按天自动留（见下面「周期自动备份」，可关）—— 这里可以手动再存一份、随时看某份备份里有什么、出错时回滚，或者把全部数据打包换电脑"),
     );
     const dataActions = node("div", null, "actions");
     const backupNowButton = node("button", "立即备份", "secondary");
@@ -636,6 +691,24 @@
     dataActions.append(backupNowButton, revealBackupsButton, refreshBackupsButton);
     const dataStatus = node("p", "", "fieldHint");
     const dataOut = node("div", null, "ln-diagOut ln-diagDataOut");
+
+    // 1.0.5：周期自动备份设置行（默认开启、每 1 天、最多留 7 份）
+    const periodicRow = node("div", null, "ln-diagPeriodic");
+    const periodicText = node("div");
+    periodicText.append(
+      node("strong", "周期自动备份"),
+      node("small", "程序启动时会检查距上次备份的时间：超过间隔就自动留一份 —— 就算你从不点「立即备份」，也不会一直没有退路。备份失败只记日志，不影响使用。"),
+    );
+    const periodicSelect = node("select");
+    for (const [value, label] of PERIODIC_BACKUP_CHOICES) {
+      const option = node("option", label);
+      option.value = value;
+      periodicSelect.append(option);
+    }
+    periodicSelect.setAttribute("aria-label", "周期自动备份间隔");
+    periodicRow.append(periodicText, periodicSelect);
+    const periodicHint = node("p", "", "fieldHint");
+    const periodicStatus = node("p", "", "fieldHint");
 
     const transferHead = node("div", null, "settingsBlockHead ln-diagSpacer ln-diagTransfer");
     transferHead.append(
@@ -657,6 +730,7 @@
       crashHead, crashActions, crashOut,
       packHead, packActions, packOut,
       dataHead, dataActions, dataStatus, dataOut,
+      periodicRow, periodicHint, periodicStatus,
       transferHead, transferActions, transferStatus,
       status);
 
@@ -665,6 +739,7 @@
       box, startupButton, copyButton, healthButton, startupOut, healthOut, crashButton, crashOut,
       packButton, packOut, status,
       dataOut, dataStatus, transferStatus,
+      periodicSelect, periodicHint, periodicStatus,
     };
     startupButton.addEventListener("click", () => { void loadStartup(); });
     healthButton.addEventListener("click", () => { void loadHealth(); });
@@ -676,6 +751,7 @@
     backupNowButton.addEventListener("click", () => { void backupNow(); });
     revealBackupsButton.addEventListener("click", () => { void revealBackups(); });
     refreshBackupsButton.addEventListener("click", () => { void loadDataSafety(); });
+    periodicSelect.addEventListener("change", () => { void savePeriodicBackup(periodicSelect.value); });
     exportDataButton.addEventListener("click", () => { void exportAllData(); });
     importDataButton.addEventListener("click", () => importDataInput.click());
     importDataInput.addEventListener("change", () => {
@@ -696,6 +772,8 @@
     navStability.addEventListener("click", () => jumpTo(".ln-gameStability"));
     // g14：进页就把备份列表读出来（只读本地目录，很快）
     void loadDataSafety();
+    // 1.0.5：周期备份的设置与现状（只读设置 + 本地目录，很快）
+    void loadPeriodicBackup();
     // 进页签就把启动记录读出来（只读本地日志，很快）
     void loadStartup();
     return box;

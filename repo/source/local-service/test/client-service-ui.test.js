@@ -4,6 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 import { createUpdateDownloadUI } from "../public/update-download-ui.js";
 import { createTabNotices } from "../public/tab-notices.js";
+import { createPatchLossNotice } from "../public/patch-loss-notice.js";
 
 const app = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
 const mounted = { clientSelected: true, clientFound: true, clientExe: "fixture.exe", mounted: true,
@@ -38,7 +39,7 @@ function fixture(bridge = {}) {
       mountClient: async () => mounted, restoreClient: async () => stopped, ...bridge,
     } },
     document: { querySelector: node, querySelectorAll: () => [], addEventListener() {} },
-    console, URL, AbortController, createUpdateDownloadUI, createTabNotices,
+    console, URL, AbortController, createUpdateDownloadUI, createTabNotices, createPatchLossNotice,
     fetch: () => { throw new Error("No real HTTP requests in client UI tests"); },
     requestAnimationFrame: callback => callback(),
     setTimeout: (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, at: now + delay }); return id; },

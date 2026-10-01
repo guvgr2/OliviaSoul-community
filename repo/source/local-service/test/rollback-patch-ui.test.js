@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { createUpdateDownloadUI } from "../public/update-download-ui.js";
 import { createTabNotices } from "../public/tab-notices.js";
+import { createPatchLossNotice } from "../public/patch-loss-notice.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = relative => readFileSync(join(here, "..", relative), "utf8");
@@ -66,7 +67,7 @@ function fixture(bridge = {}) {
     window: { addEventListener() {}, oliviaDesktop },
     document: { querySelector: node, querySelectorAll: () => [], addEventListener() {} },
     location: { hash: "" },
-    console, URL, AbortController, createUpdateDownloadUI, createTabNotices,
+    console, URL, AbortController, createUpdateDownloadUI, createTabNotices, createPatchLossNotice,
     fetch: () => { throw new Error("No real HTTP requests in client UI tests"); },
     requestAnimationFrame: callback => callback(),
     setTimeout: (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, at: now + delay }); return id; },

@@ -7,7 +7,7 @@ import { createDependencyCheckRoutes } from "./midi/dependency-check.js";
 import { createDiagnosticRoutes } from "./midi/diagnostic-package.js";
 import { createCrashRoutes } from "./midi/crash-report.js";
 import { createGameLogRoutes } from "./midi/game-log.js";
-import { createDataSafetyRoutes, prepareDatabaseBeforeOpen } from "./midi/data-safety.js";
+import { createDataSafetyRoutes, prepareDatabaseBeforeOpen, startPeriodicBackup } from "./midi/data-safety.js";
 import { createGameStabilityRoutes } from "./midi/game-stability.js";
 import { createLogRoutes, logError } from "./midi/logs.js";
 import { createCommunityRoutes } from "./midi/community-catalog.js";
@@ -1086,6 +1086,7 @@ export async function createOliviaService(options = {}) {
   let midiLibraryWatcher = null;
   let midiLibraryWatchedRoot = "";
   let storagePollTimer;
+  let periodicBackup;
   let closing = false;
   let lastClientAt = null;
   const memoryBusy = new Set();
@@ -2943,7 +2944,16 @@ export async function createOliviaService(options = {}) {
 
   async function serveStatic(req, res, pathname) {
     const relative = pathname === "/admin" || pathname === "/admin/" ? "index.html" : pathname.slice("/admin/".length);
-    if (!["index.html", "app.js", "game-lyrics.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "update-download-ui.js", "tab-notices.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "diagnostics-panel.js", "twin-groups-panel.js", "game-log-panel.js", "getting-started.js", "game-stability-panel.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
+    // TODO(技术债 · 静态文件白名单硬编码)：下面是**手工维护**的文件名列表 —— public/ 里新增一个前端文件
+    // 就必须同步登记进来，否则 serveStatic 一律 404；而 app.js 用 ESM import 引这些文件，
+    // 只要有一个 import 404 被浏览器拒绝，整个管理界面白屏（不是局部功能失效，用户没有可用界面）。
+    // 1.0.5 新增 patch-loss-notice.js 时就靠人手把它补进这份名单；漏掉不会有任何启动期或测试期报错。
+    // 为什么现在不能做对：public/ 的产物清单与这份白名单是两处真相，改成目录扫描会同时牵动
+    //   静态服务与打包两条链路，超出 1.0.5 收尾的范围，故先记账、不改本版行为。
+    // 正确做法：serveStatic 启动时扫描 publicRoot（只留必要的排除项），或把清单抽成单一常量
+    //   并补一条「与 public/ 实际文件比对」的测试，让漏登记在测试期就暴露。
+    // 何时回来收拾：下一次新增/删除 public/ 前端文件时，或静态服务改为目录扫描的那一版。
+    if (!["index.html", "app.js", "game-lyrics.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "update-download-ui.js", "tab-notices.js", "patch-loss-notice.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "diagnostics-panel.js", "twin-groups-panel.js", "game-log-panel.js", "getting-started.js", "game-stability-panel.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
       throw httpError(404, "文件不存在");
     const file = join(publicRoot, relative);
     const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".png": "image/png" };
@@ -3080,7 +3090,7 @@ export async function createOliviaService(options = {}) {
     }
 
     // 「数据安全（备份 / 恢复 / 导出迁移）」：独立模块，路由前缀 /toy/listen-naming/data/*
-    dataSafetyRoutesPromise ??= createDataSafetyRoutes({ databasePath });
+    dataSafetyRoutesPromise ??= createDataSafetyRoutes({ databasePath, getSetting, setSetting });
     {
       const routes = await dataSafetyRoutesPromise;
       const result = await routes(req, new URL(req.url ?? "/", "http://127.0.0.1"));
@@ -4659,6 +4669,14 @@ export async function createOliviaService(options = {}) {
         }, interval);
         storagePollTimer.unref?.();
       }
+      // 1.0.5：周期自动备份（默认每 1 天，可在「高级设置 → 数据备份与恢复」里改成 7 天或关闭）。
+      // 这里只是"启动时检查一次 + 30 分钟低频兜底"，检查和备份都不阻塞 listen 返回；
+      // 内部失败只记日志（data-safety.js 已兜住），绝不能让备份问题影响服务可用性。
+      periodicBackup ??= startPeriodicBackup({
+        databasePath,
+        readSetting: getSetting,
+        log: message => console.log(String(message)),
+      });
       return server.address();
     },
     async close() {
@@ -4676,6 +4694,10 @@ export async function createOliviaService(options = {}) {
       clearTimeout(midiLibrarySyncTimer);
       clearTimeout(durationRepairTimer);
       clearInterval(storagePollTimer);
+      // 必须 await：stop() 会等正在写的那份备份收尾，保证 close() 返回后
+      // 周期备份不会再往数据目录里写东西（否则调用方紧接着清理/搬动目录会撞上 .tmp）。
+      if (periodicBackup) await periodicBackup.stop();
+      periodicBackup = null;
       midiLibraryWatcher?.close();
       midiLibraryWatcher = null;
       for (const job of memoryJobs.values()) {

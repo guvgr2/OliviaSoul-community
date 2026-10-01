@@ -52,5 +52,8 @@ package-work/
 # AgentTeams 运行时状态（每轮都在变，不入库）
 .agent-teams/
 
+# 专家团运行目录（编排工件与角色产出，每轮都在变，不入库）
+team/
+
 # 仓库级协作规范含本机路径与内部信息，只留本地，绝不入库
 AGENTS.md

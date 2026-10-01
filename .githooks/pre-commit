@@ -1,0 +1,132 @@
+#!/bin/sh
+# ─────────────────────────────────────────────────────────────────────────────
+# OliviaSoul 提交前门禁（git pre-commit hook）
+#
+# 在 `git commit` 真正落库前跑两个既有套件，任一失败就拦下提交：
+#   1) repo/source/local-service/test/repo-privacy.test.js
+#      会被提交的文件里不得出现作者本机私有路径 / 用户名 / token 片段。
+#      （1.0.4 之后公开仓库漏出过本机路径，缺的就是这道门禁。）
+#   2) repo/source/local-service/test/version-sync.test.js
+#      6 处版本号一致 + 两个 JSON 合法，防止版本漂移被提交。
+#
+# 启用（一次性，写进 .git/config，不随版本库分发）：
+#     git config core.hooksPath .githooks
+# 关闭：  git config --unset core.hooksPath
+# 紧急绕过：git commit --no-verify   ← 只应在确认门禁误报时用，并在提交说明里写原因
+#
+# 实现约束（都踩过坑，别改回去）：
+#   1) 子进程输出一律走**文件重定向**；本脚本内不用管道、不用命令替换
+#      （`|` 和 `$()` 都会建 pipe）。受限沙箱下 pipe 会 EPERM，文件 fd 不会 ——
+#      repo-privacy.test.js 取 git 输出用的是同一招。
+#   2) 本文件必须保持 **LF** 行尾（见同目录 .gitattributes）：CRLF 会让 shebang
+#      变成 `/bin/sh^M`，hook 直接失效，而 git 只报一句难懂的错。
+#   3) 没装 node 时**明确报错并阻止提交**，不静默放过：跑不了门禁就等于没有门禁。
+#   4) 两个测试文件缺失（被删/改名）同样算失败 —— 不许靠删测试绕过门禁。
+# ─────────────────────────────────────────────────────────────────────────────
+
+set -u
+
+TESTS="repo/source/local-service/test/repo-privacy.test.js repo/source/local-service/test/version-sync.test.js"
+
+# ── 临时目录（日志放这里，避免往仓库里写文件）──────────────────────────────
+tmp="${TMPDIR:-}"
+[ -n "$tmp" ] || tmp="${TEMP:-}"
+[ -n "$tmp" ] || tmp="${TMP:-}"
+[ -n "$tmp" ] || tmp="/tmp"
+[ -d "$tmp" ] || tmp="."
+
+work="$tmp/olivia-pre-commit-$$"
+mkdir -p "$work" || { echo "[提交前门禁] ✗ 无法创建临时目录：$work" >&2; exit 1; }
+keep=0
+cleanup() { [ "$keep" -eq 1 ] || rm -rf "$work"; }
+trap cleanup EXIT HUP INT TERM
+
+fail() {
+  echo "[提交前门禁] ✗ $1" >&2
+  exit 1
+}
+
+# ── 仓库根（git 把 hook 的 cwd 设成工作树根，这里再确认一次，避免相对路径踩空）
+git rev-parse --show-toplevel > "$work/root" 2>/dev/null
+[ $? -eq 0 ] || fail "不在 git 工作树里（git rev-parse --show-toplevel 失败），门禁无法运行。"
+root=""
+IFS= read -r root < "$work/root" || true
+[ -n "$root" ] || fail "拿不到仓库根目录。"
+cd "$root" || fail "无法进入仓库根目录：$root"
+
+# ── 依赖：node 必须在（缺了要说清楚，而不是静默提交）──────────────────────
+node_bin=""
+for name in node node.exe; do
+  if command -v "$name" > /dev/null 2>&1; then node_bin="$name"; break; fi
+done
+if [ -z "$node_bin" ]; then
+  echo "[提交前门禁] ✗ 找不到 node，跑不了隐私/版本门禁，所以这次提交不予放行。" >&2
+  echo "  装 Node.js（本仓库要求 node ≥ 20，推荐 22 或 24）：" >&2
+  echo "    winget install OpenJS.NodeJS.LTS        或 https://nodejs.org" >&2
+  echo "  装完确认：node -v" >&2
+  echo "  确实要跳过：git commit --no-verify（请同时说明原因）" >&2
+  exit 1
+fi
+
+# ── 依赖：两个测试文件必须在（不许靠删测试绕过）────────────────────────────
+missing=""
+for f in $TESTS; do
+  [ -f "$f" ] || missing="$missing $f"
+done
+if [ -n "$missing" ]; then
+  fail "门禁测试文件缺失，拒绝提交：$missing（删测试不能成为绕过门禁的办法）"
+fi
+
+# ── 旗标：--experimental-test-isolation=none 是受限沙箱下能跑测试的前提
+#    （node ≥ 22 支持）。老版本 node 不认识它会直接 bad option 报错，
+#     所以按主版本号降级，别让老 node 上的门禁永远红。
+node -v > "$work/nodev" 2>/dev/null || true
+sed -n 's/^v\([0-9][0-9]*\).*/\1/p' "$work/nodev" > "$work/nodemajor" 2>/dev/null || true
+major=""
+IFS= read -r major < "$work/nodemajor" || true
+isolation=""
+case "$major" in
+  '' | *[!0-9]*) isolation="--experimental-test-isolation=none" ;;
+  *) [ "$major" -ge 22 ] && isolation="--experimental-test-isolation=none" ;;
+esac
+
+# ── 跑门禁（一次 node 调用跑两个套件，省一半启动开销）──────────────────────
+log="$work/tests.log"
+# shellcheck disable=SC2086  # $isolation 为空时应当整词消失，故意不加引号
+"$node_bin" --test $isolation $TESTS > "$log" 2>&1
+status=$?
+
+if [ "$status" -eq 0 ]; then
+  echo "[提交前门禁] ✓ 隐私与版本检查通过（repo-privacy + version-sync）"
+  exit 0
+fi
+
+keep=1
+echo "" >&2
+echo "[提交前门禁] ✗ 提交被拦下（node 退出码 $status）。" >&2
+
+# 命中行：repo-privacy 的失败信息形如 `path:line 命中「…」:: 原文`
+grep -F "命中「" "$log" > "$work/hits" 2>/dev/null || true
+if [ -s "$work/hits" ]; then
+  echo "" >&2
+  echo "── 被拦下的命中行（最多 40 行）──" >&2
+  sed -n '1,40p' "$work/hits" >&2
+fi
+
+tail -n 25 "$log" > "$work/tail" 2>/dev/null || true
+if [ -s "$work/tail" ]; then
+  echo "" >&2
+  echo "── 测试输出末 25 行 ──" >&2
+  sed -n '1,25p' "$work/tail" >&2
+fi
+
+echo "" >&2
+echo "怎么修：" >&2
+echo "  · 隐私命中 → 按提示脱敏：盘符统一写 X:\\ 或 C:\\、临时目录用 os.tmpdir()、" >&2
+echo "    用户名与 token 片段用字符串拼接（写法见 test/repo-privacy.test.js 顶部注释）。" >&2
+echo "  · 版本漂移 → 用一键工具同步，别手改：repo/source/tools/bump-version.ps1 -Version <新版本>" >&2
+echo "    （先 -Check 只看不改）。" >&2
+echo "  · 确认是误报 → git commit --no-verify（并在提交说明里写原因）。" >&2
+echo "" >&2
+echo "完整日志：$log" >&2
+exit 1

@@ -66,6 +66,7 @@ const BACKUP_KINDS = [
   ["backup-community-", "社区名单比对前的自动备份"],
   ["backup-before-migrate-", "数据搬家前的自动备份"],
   ["backup-manual-", "你手动备份的"],
+  ["backup-periodic-", "周期自动备份"],
   ["upgrade-backup-", "程序升级前的自动备份"],
   ["before-restore-", "恢复前留的当前库"],
   ["import-", "从导出包导入时的副本"],
@@ -155,6 +156,278 @@ export async function manualBackup(databasePath) {
   await backupSqlite(databasePath, target);
   const info = await stat(target).catch(() => null);
   return { file: basename(target), bytes: info?.size ?? 0, dir: backupDirOf(databasePath) };
+}
+
+// ---------------------------------------------------------------- 周期自动备份（1.0.5）
+//
+// 背景：程序原来只在**事件触发**时留备份（改时段前、写曲名前、升级前、导入前……），
+// 于是一个"整理完就只是每天开着听"的用户可能一份备份都没有 —— 数据库一旦被外部原因弄坏
+// （断电、强杀进程、杀毒软件删文件、磁盘写满），没有任何可回退的时间点。
+//
+// 三条设计约束：
+//   1. 设置项复用主库的 settings 表（与「更新通道」等既有开关同一处），所以读写由 server.js
+//      把 getSetting/setSetting 传进来：data-safety **从不以读写方式打开正在使用的库**
+//      （那是 server.js 的连接在管），避免两个连接互等锁。
+//   2. 「先确认新备份真的落盘，才允许清理旧的」—— 否则一次失败的备份会顺手把退路删光，
+//      这比不清理严重得多。
+//   3. 失败一律只记日志、只留状态：周期备份是锦上添花，它不能影响启动，也不能弹错误给用户。
+
+export const PERIODIC_BACKUP_ENABLED_SETTING = "periodic_backup_enabled";
+export const PERIODIC_BACKUP_DAYS_SETTING = "periodic_backup_interval_days";
+export const PERIODIC_BACKUP_PREFIX = "backup-periodic-";
+export const DEFAULT_PERIODIC_BACKUP_DAYS = 1;
+export const DEFAULT_PERIODIC_BACKUP_KEEP = 7;
+/** 常驻兜底检查的间隔：30 分钟（取舍见 startPeriodicBackup 的注释）。 */
+export const PERIODIC_BACKUP_TICK_MS = 30 * 60 * 1000;
+const MAX_PERIODIC_BACKUP_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 读设置 → 配置。读不到（或值是垃圾）就按默认：**开启、每 1 天**。
+ * 注意这里的默认方向：只有明确写成 0/false/off/no 才算关闭 —— 设置行被写坏时宁可多备份一次，
+ * 也不要静默地什么都不做（用户装这个功能就是为了"没人管也能留退路"）。
+ */
+export function readPeriodicBackupConfig(readSetting = () => undefined) {
+  const read = (key) => { try { return readSetting(key); } catch { return undefined; } };
+  const rawEnabled = read(PERIODIC_BACKUP_ENABLED_SETTING);
+  const text = rawEnabled === undefined || rawEnabled === null ? "" : String(rawEnabled).trim();
+  const enabled = text === "" ? true : !/^(?:0|false|off|no)$/iu.test(text);
+  const days = Number.parseInt(String(read(PERIODIC_BACKUP_DAYS_SETTING) ?? "").trim(), 10);
+  const intervalDays = Number.isInteger(days) && days >= 1 && days <= MAX_PERIODIC_BACKUP_DAYS
+    ? days
+    : DEFAULT_PERIODIC_BACKUP_DAYS;
+  return { enabled, intervalDays, keep: DEFAULT_PERIODIC_BACKUP_KEEP };
+}
+
+/** 校验界面传来的设置（POST /listen-naming/data/periodic-backup）；缺省字段 = 不改这一项。 */
+export function parsePeriodicBackupInput(body = {}) {
+  const patch = {};
+  if (body && body.enabled !== undefined) {
+    if (typeof body.enabled !== "boolean")
+      throw httpError(400, "「周期自动备份」的开关只能是开或关", "PERIODIC_BACKUP_BODY_INVALID");
+    patch.enabled = body.enabled;
+  }
+  if (body && body.intervalDays !== undefined) {
+    const days = Number(body.intervalDays);
+    if (!Number.isInteger(days) || days < 1 || days > MAX_PERIODIC_BACKUP_DAYS)
+      throw httpError(400, `间隔天数只能是 1~${MAX_PERIODIC_BACKUP_DAYS} 之间的整数（1 表示每天）`, "PERIODIC_BACKUP_BODY_INVALID");
+    patch.intervalDays = days;
+  }
+  if (patch.enabled === undefined && patch.intervalDays === undefined)
+    throw httpError(400, "没有要修改的设置项", "PERIODIC_BACKUP_BODY_INVALID");
+  return patch;
+}
+
+/** 周期备份列表（新→旧）。只认 backup-periodic-*.sqlite，不碰别人的备份。 */
+export async function listPeriodicBackups(databasePath) {
+  const dir = backupDirOf(databasePath);
+  let names = [];
+  try { names = await readdir(dir); } catch { return []; }
+  const items = [];
+  for (const name of names) {
+    if (!name.startsWith(PERIODIC_BACKUP_PREFIX) || !name.endsWith(".sqlite")) continue;
+    const info = await stat(join(dir, name)).catch(() => null);
+    if (!info) continue;
+    items.push({ file: name, bytes: info.size, at: info.mtime.toISOString() });
+  }
+  items.sort((a, b) => b.at.localeCompare(a.at));
+  return items;
+}
+
+/** 备份目录里最新一份 .sqlite（不含正在使用的库）的时间；一份都没有返回 ""。 */
+async function newestBackupAt(databasePath) {
+  const dir = backupDirOf(databasePath);
+  let names = [];
+  try { names = await readdir(dir); } catch { return ""; }
+  let newest = 0;
+  for (const name of names) {
+    if (!name.endsWith(".sqlite")) continue;
+    if (name === basename(databasePath)) continue;
+    const info = await stat(join(dir, name)).catch(() => null);
+    if (info && info.mtimeMs > newest) newest = info.mtimeMs;
+  }
+  return newest ? new Date(newest).toISOString() : "";
+}
+
+/** 文件名精确到秒，同一秒内重复触发也不能覆盖已有备份（覆盖 = 少一个退路）。 */
+async function uniqueBackupPath(databasePath, prefix, now) {
+  const dir = backupDirOf(databasePath);
+  await mkdir(dir, { recursive: true });
+  const base = `${prefix}${stamp(now)}`;
+  let target = join(dir, `${base}.sqlite`);
+  for (let index = 2; (await exists(target)) && index < 100; index += 1)
+    target = join(dir, `${base}-${index}.sqlite`);
+  return target;
+}
+
+/**
+ * 保留策略：周期备份最多留 keep 份，按时间清理最早的。
+ * 只删 backup-periodic-*：手动备份、升级前备份、恢复前留档都不在清理范围内。
+ */
+export async function prunePeriodicBackups(databasePath, { keep = DEFAULT_PERIODIC_BACKUP_KEEP, protect = "", log = () => {} } = {}) {
+  const items = await listPeriodicBackups(databasePath);
+  // 至少留 1 份：keep 传 0/负数/垃圾时不能把退路全删了（这里也只有下限保护，没有"全删"这种档位）
+  const requested = Number(keep);
+  const keepCount = Number.isFinite(requested)
+    ? Math.max(1, Math.floor(requested))
+    : DEFAULT_PERIODIC_BACKUP_KEEP;
+  const survivors = new Set(items.slice(0, keepCount).map(item => item.file));
+  if (protect) survivors.add(protect);
+  const removed = [];
+  for (const item of items) {
+    if (survivors.has(item.file)) continue;
+    try {
+      await unlink(join(backupDirOf(databasePath), item.file));
+      removed.push(item.file);
+    } catch (error) {
+      log(`[data-safety] 清理旧周期备份失败：${item.file}（${error.message}）`);
+    }
+  }
+  return removed;
+}
+
+// 本进程内最后一次周期备份检查的结果（诊断/界面用）。重启后清空 —— 更早的历史在运行日志里。
+const periodicStatus = new Map();
+
+function recordPeriodicStatus(databasePath, { at, result, source }) {
+  const key = String(databasePath ?? "");
+  const previous = periodicStatus.get(key) ?? {};
+  const next = { ...previous, lastCheckAt: at, lastCheckSource: String(source ?? ""), lastCheck: result };
+  if (result?.ran === true) {
+    next.lastSuccessAt = at;
+    next.lastSuccessFile = String(result.file ?? "");
+    next.lastSuccessBytes = Number(result.bytes ?? 0);
+    next.lastRemoved = Array.isArray(result.removed) ? result.removed.length : 0;
+  }
+  if (result?.reason === "failed") {
+    next.lastErrorAt = at;
+    next.lastError = String(result.error ?? "未知错误");
+  }
+  periodicStatus.set(key, next);
+  return next;
+}
+
+/** 诊断用：本进程内最后一次周期备份检查的结果。 */
+export function periodicBackupStatus(databasePath) {
+  return periodicStatus.get(String(databasePath ?? "")) ?? null;
+}
+
+/**
+ * 到点就备份一次，并顺手清理超份数的旧周期备份。
+ * 任何异常都被吞成 `{ ran: false, reason: "failed", error }` —— 调用方（启动流程）永远不用 try。
+ */
+export async function runPeriodicBackupIfDue(options = {}) {
+  const {
+    databasePath,
+    now = new Date(),
+    enabled = true,
+    intervalDays = DEFAULT_PERIODIC_BACKUP_DAYS,
+    keep = DEFAULT_PERIODIC_BACKUP_KEEP,
+    log = () => {},
+    backup = backupSqlite,
+    source = "",
+  } = options;
+  const finish = result => {
+    recordPeriodicStatus(databasePath, { at: now.toISOString(), result, source });
+    return result;
+  };
+  try {
+    if (!String(databasePath ?? "").trim()) return finish({ ran: false, reason: "no-database-path", removed: [] });
+    if (enabled !== true) return finish({ ran: false, reason: "disabled", removed: [] });
+    if (!(await exists(databasePath))) return finish({ ran: false, reason: "no-database", removed: [] });
+
+    // 「距上次」按备份目录里最新一份备份算（不分种类）：改时段/命名产生的备份同样证明数据被保过，
+    // 没必要在它们之后马上再存一份。
+    const lastAt = await newestBackupAt(databasePath);
+    const waitMs = Math.max(1, Number(intervalDays) || DEFAULT_PERIODIC_BACKUP_DAYS) * DAY_MS;
+    const lastMs = lastAt ? Date.parse(lastAt) : 0;
+    if (lastMs > 0 && now.getTime() - lastMs < waitMs)
+      return finish({
+        ran: false, reason: "too-soon", removed: [],
+        lastAt, dueAt: new Date(lastMs + waitMs).toISOString(),
+      });
+
+    const first = !lastAt;
+    const target = await uniqueBackupPath(databasePath, PERIODIC_BACKUP_PREFIX, now);
+    await backup(databasePath, target);
+    const info = await stat(target).catch(() => null);
+    if (!info || info.size <= 0)
+      throw new Error(`新备份没有落盘（${basename(target)}），为安全起见不动旧备份`);
+    const removed = await prunePeriodicBackups(databasePath, { keep, protect: basename(target), log });
+    log(first
+      ? `[data-safety] 之前没有任何备份，已先留一份周期备份：${basename(target)}（${info.size} 字节）`
+      : `[data-safety] 距上次备份已超过 ${Math.round(waitMs / DAY_MS)} 天，已留一份周期备份：`
+        + `${basename(target)}（${info.size} 字节；清理旧周期备份 ${removed.length} 份）`);
+    return finish({
+      ran: true, reason: "done", first, removed,
+      file: basename(target), bytes: info.size, lastAt,
+    });
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    log(`[data-safety] 周期自动备份失败（不影响使用，下次检查再试）：${message}`);
+    return finish({ ran: false, reason: "failed", error: message, removed: [] });
+  }
+}
+
+/**
+ * 启动周期备份：立刻检查一次（不等定时器），之后低频兜底。
+ *
+ * 取舍（为什么不写「精确定时到某天某点」）：
+ *   ① 用户可能整天开着程序，也可能一天开五次 —— 精确定时要额外持久化"下次触发时刻"，
+ *      多一个状态文件就多一处可能与真实文件不一致的地方；
+ *   ② 每次检查只是一次 readdir + stat（备份目录里几十个文件），30 分钟一次的开销可以忽略；
+ *   ③ 定时器 unref()：绝不能因为"还在等备份"而让进程退不掉。
+ * 返回的 runOnce 是诊断与测试用的手动检查入口（正常路径不需要它）。
+ */
+export function startPeriodicBackup({
+  databasePath, readSetting = () => undefined, log = () => {},
+  tickMs = PERIODIC_BACKUP_TICK_MS, backup,
+} = {}) {
+  let stopped = false;
+  let inflight = null;
+  // 同一时刻只允许一次检查：既避免两次备份重叠（同一秒内互写同名文件），
+  // 也让 stop() 有一个确定的"还在写盘的东西"可以等。
+  const runOnce = async (source = "startup") => {
+    if (stopped) return null;
+    if (inflight) return await inflight;
+    inflight = (async () => {
+      try {
+        const config = readPeriodicBackupConfig(readSetting);
+        return await runPeriodicBackupIfDue({
+          databasePath, ...config, log, source,
+          ...(typeof backup === "function" ? { backup } : {}),
+        });
+      } catch (error) {
+        // readSetting 抛错 / 任何意外：只记日志。周期备份绝不能把服务带下去。
+        const message = String(error?.message ?? error);
+        log(`[data-safety] 周期备份检查异常（不影响使用）：${message}`);
+        return { ran: false, reason: "error", error: message, removed: [] };
+      }
+    })();
+    try { return await inflight; } finally { inflight = null; }
+  };
+  const intervalMs = Math.max(100, Number(tickMs) || PERIODIC_BACKUP_TICK_MS);
+  const timer = setInterval(() => { void runOnce("timer"); }, intervalMs);
+  timer.unref?.();
+  void runOnce("startup");
+  return {
+    intervalMs,
+    runOnce,
+    /**
+     * 停止，并**等待正在进行的检查收尾**。
+     * 为什么必须等：备份是后台异步写的（先写 <目标>.tmp 再改名）。如果 close() 不等它，
+     * 调用方在我们的复制写到一半时清理/搬动数据目录，Windows 上就会表现为
+     * EBUSY（.tmp 正被占用）或 ENOTEMPTY（目录删完又被写回来）。
+     * 契约：stop() 返回之后，周期备份不会再碰任何文件。
+     */
+    async stop() {
+      stopped = true;
+      clearInterval(timer);
+      try { await inflight; } catch { /* runOnce 内部已兜住；这里只保证不抛出 */ }
+      inflight = null;
+    },
+    status: () => periodicBackupStatus(databasePath),
+  };
 }
 
 // ---------------------------------------------------------------- 恢复（写标记，下次启动生效）
@@ -486,13 +759,22 @@ export async function importUserData({ databasePath, file, name } = {}) {
 
 // ---------------------------------------------------------------- 路由
 
-export async function createDataSafetyRoutes({ databasePath } = {}) {
+export async function createDataSafetyRoutes({ databasePath, getSetting, setSetting } = {}) {
   const log = (message) => { try { console.log(String(message)); } catch { /* 忽略 */ } };
+  // settings 表的读写由 server.js 注入（见本文件顶部「周期自动备份」的约束 ①）
+  const readSetting = typeof getSetting === "function" ? getSetting : () => undefined;
+  const writeSetting = typeof setSetting === "function" ? setSetting : null;
   const dbPath = () => {
     const value = String(databasePath ?? "").trim();
     if (!value) throw httpError(500, "服务没有配置数据库路径", "DATABASE_PATH_MISSING");
     return value;
   };
+  /** 周期备份设置 + 现状（界面一次请求就能把开关和"上次什么时候备的"都画出来）。 */
+  const periodicReport = async () => ({
+    ...readPeriodicBackupConfig(readSetting),
+    backups: await listPeriodicBackups(dbPath()),
+    status: periodicBackupStatus(dbPath()),
+  });
   /** 只接受备份目录里的 .sqlite，避免被拿来读任意文件。 */
   const backupPath = (name) => {
     const clean = basename(String(name ?? "").trim());
@@ -509,6 +791,19 @@ export async function createDataSafetyRoutes({ databasePath } = {}) {
 
     if (req.method === "POST" && path === "/listen-naming/data/backup")
       return await manualBackup(dbPath());
+
+    // 周期自动备份：读设置 + 上次结果；写设置（开关 / 间隔天数）
+    if (req.method === "GET" && path === "/listen-naming/data/periodic-backup")
+      return await periodicReport();
+
+    if (req.method === "POST" && path === "/listen-naming/data/periodic-backup") {
+      if (!writeSetting)
+        throw httpError(500, "服务没有配置设置存储，无法保存周期备份设置", "SETTINGS_UNAVAILABLE");
+      const patch = parsePeriodicBackupInput(await readJsonBody(req));
+      if (patch.enabled !== undefined) writeSetting(PERIODIC_BACKUP_ENABLED_SETTING, patch.enabled ? "1" : "0");
+      if (patch.intervalDays !== undefined) writeSetting(PERIODIC_BACKUP_DAYS_SETTING, String(patch.intervalDays));
+      return await periodicReport();
+    }
 
     if (req.method === "GET" && path === "/listen-naming/data/inspect")
       return await inspectBackup(backupPath(url.searchParams.get("file")));
