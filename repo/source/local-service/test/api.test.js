@@ -872,9 +872,9 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
     readFile(new URL("../../tools/upgrade-webplayer-v6-v7.ps1", import.meta.url), "utf8"),
     readFile(new URL("../desktop/controller.js", import.meta.url), "utf8"),
   ]);
-  // 当前补丁标记是 v44（与《使用说明》里写的「FE v44 / WebPlayer v18」一致）；
+  // 当前补丁标记是 v59（与《使用说明》里写的「FE v59 / WebPlayer v19」一致）；
   // 这里钉住它，改补丁版本时测试会提醒你同步文档
-  assert.match(patchScript, /OliviaSoulPatch:mail-music-v50/u);
+  assert.match(patchScript, /OliviaSoulPatch:mail-music-v59/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v32/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v30/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v29/u);
@@ -941,8 +941,16 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
   assert.match(v23UpgradeScript, /String\(B&&B\.videoUrl\|\|""\)\.includes\("\/toy\/midi\/songs\/"\)/u);
   assert.match(patchScript, /h\.beginLocalPlayback\(q\)/u,
     "我的上传必须复用播放器存储中的唯一会话入口");
-  assert.ok(patchScript.includes('beginLocalPlayback:B=>{const OliviaSoulR=OliviaSoulBeginLocalPlayback(B);try{h.value="songlist"}catch{}return OliviaSoulR}'),
-    "本地播放必须把 playSource 设为 songlist，否则游戏原生不会让背景音让位");
+  // 背景音让位的实现换过一次，断言跟着换：
+  //   旧方案（已撤销）：本地播放时把 playSource 改成 songlist 骗游戏原生让位 —— 曾导致游戏黑屏。
+  //   现方案（v57 起）：调用游戏自己的 ambientSound store（acquireExclusive / releaseExclusive），
+  //   完全不碰播放路径；v58/v59 又补了延迟恢复兜底，避免切歌时背景音闪一下。
+  assert.ok(patchScript.includes('OliviaSoulBeginLocalPlayback=B=>{window.__OliviaSoulDuckIdleSince=0;OliviaSoulDuckAmbience(!0);'),
+    "本地播放开始必须挂起氛围音（让位）");
+  assert.ok(patchScript.includes('OliviaSoulFinishLocalPlayback=async B=>{window.__OliviaSoulDuckIdleSince=0;OliviaSoulDuckAmbience(!1);'),
+    "播放结束必须恢复氛围音");
+  assert.ok(patchScript.includes('if(!dd||dd.playbackState!=="playing")'),
+    "暂停/停止也要能恢复氛围音（延迟兜底，避免切歌闪烁）");
   assert.match(patchScript, /e&&e\.cmd==="pause"\?\{\.\.\.e,cmd:"stop"\}:e/u,
     "所有暂停命令必须归一为终止播放");
   assert.match(patchScript, /restoreDefault:!1/u,
@@ -950,7 +958,7 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
   assert.match(patchScript, /o=String\(window\.__OliviaSoulSessionId\|\|""\)[\s\S]{0,900}sessionId:o/u,
     "控制命令必须绑定当前播放会话，旧 stop 不能误停同曲重播的新会话");
   assert.match(patchScript, /OliviaSoulFinishLocalPlayback=async/u);
-  assert.match(patchScript, /OliviaSoulFinishLocalPlayback=async B=>[\s\S]{0,700}await fetch[\s\S]{0,500}restoreDefault:re/u,
+  assert.match(patchScript, /OliviaSoulFinishLocalPlayback=async B=>[\s\S]{0,900}await fetch[\s\S]{0,600}restoreDefault:re/u,
     "自然结束必须先终止后台旧会话");
   assert.match(patchScript, /w\("stop_button"\),Ct\(\{cmd:"stop"\}\),m\.value=!1,u\.value=null,f\.value=null,d\.value=0/u);
   assert.match(patchScript, /window\.__OliviaSoulSongId=null,window\.__OliviaSoulCommandRevision=null/u);
@@ -4229,7 +4237,7 @@ test("管理前端包含视频维护、上方插入和本地服务状态", async
   assert.doesNotMatch(patch, /\$listWaitingCondition|\$listWaitingReply|\$waitingCondition/u);
   assert.match(patch, /\$pollingStateTo/u);
   assert.match(patch, /\$processingIconTo/u);
-  assert.match(patch, /OliviaSoulPatch:mail-music-v50/u);
+  assert.match(patch, /OliviaSoulPatch:mail-music-v59/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v32/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v30/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v29/u);

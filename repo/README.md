@@ -1,3 +1,5 @@
+> ⚠️ **本目录是上游 R10.x 的源码说明**（它写的 `FE v44` 等是当时的状态，不是本分支现状）。
+> 本分支（OliviaSoul-community）当前版本与客户端补丁版本，请看仓库根目录的 [README.md](../README.md)。
 > **注意：本文件是上游 linli 分支 README 的原文**，随源码一并保留，便于对照上游改动。
 > 本仓库是 **OliviaSoul-community**（自上游 `coderscsy/linli` 分叉而来），**本支的说明在仓库根目录的 [README.md](../README.md)**。
 > 本文件里的下载链接、Release 页与 Issues 入口**全部指向上游 `coderscsy/linli`**，不要用它们下载本支版本。

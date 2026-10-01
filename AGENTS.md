@@ -17,7 +17,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .test-twins\全面检查.ps1
 | 3 | **数据库自愈**：制造陈旧 `-shm`/`-wal` → 启动 → 验证移开留档且服务可用 |
 | 4 | **补丁注入**：真实打补丁到测试游戏目录 → 验证 marker、注入符号、JS 语法 |
 | 5 | **数据搬家**：真实触发 → 验证服务主动重启（exit 86）、备份、无 malformed |
-| 6 | **打包门禁**：10 个关键套件 |
+| 6 | **打包门禁**：关键套件（清单在脚本里，数量会自动打印）+ 打包脚本自检 |
 
 **不通过就不要打包。** 详见 `.test-twins/全面检查说明.md`。
 
@@ -40,8 +40,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .test-twins\全面检查.ps1
 
 ### 新增运行期自愈/重启类机制时必须同步
 
-- 打包冒烟的检查项（`.test-twins/g2x-final-check.ps1`）
+- 打包冒烟的检查项（`.test-twins/*-final-check.ps1`，阶段 6 自动取最新的那一个）
 - 端到端脚本（`.test-twins/g2x-e2e-*.mjs`）
+
+### 新增用户可见功能时必须同步 3 处
+
+1. `.test-twins/全面检查.ps1` 阶段 6 的 `$suites` —— 把该功能的测试套件加进去
+2. 打包冒烟（最新的 `*-final-check.ps1`）：`$suites` 同样加进去；若功能体现在界面上，
+   **必须再加一条产物检查**（直接检查解压后的 `app/**`）——
+   单元测试读的是**源码**，产物漏文件时测试仍会全绿（真实踩过）
+3. 端到端脚本（`.test-twins/g2x-e2e-*.mjs`），若该功能有运行期行为
+
+> 已实践：端口退让后的用户引导 —— `port-fallback-guidance` 套件（13 项，含真实占用端口、
+> 真实补丁 ZIP 的实测）+ 两处 `$suites` + 打包冒烟新增的「产物引导检查」。
 
 ### 版本号升级必须同步 6 处
 
@@ -82,6 +93,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .test-twins\全面检查.ps1
 - **`[IO.File]::*` 必须用绝对路径**（`.NET` 不看 PowerShell 的当前位置）
 - **`packaging/` 目录不得留临时文件**（曾误写 `_tmp_patch_notes.md`，打包前必须确认目录干净）
 - **读源码做断言时不要假设「相邻」**：注入函数可能被后续版本插在中间
-- **测试 fixture 造 ZIP 不要用 `Compress-Archive`**（PS 5.1 生成反斜杠 entry，会被审计正确拒绝）；
-  用 `[IO.Compression.ZipFile]::CreateFromDirectory`
+- **测试 fixture 造 ZIP 时，PS 5.1 下 `Compress-Archive` 与 `ZipFile::CreateFromDirectory`
+  都会写成反斜杠条目**（`assets\main.js`），会被审计与状态脚本（要求 `assets/main-*.js`）正确拒绝。
+  必须**显式指定条目名**：`$zip = [IO.Compression.ZipFile]::Open($p,'Create'); $zip.CreateEntry('assets/main.js')`
+  —— 真实补丁包用的是正斜杠（这条规范原先推荐 `CreateFromDirectory`，实测同样产生反斜杠，已改正）
 - **显示文件内容时不要加前缀后误判缩进**：用 `JSON.stringify(line)` 看清真实空白
+- **搭测试程序时，补丁脚本必须同步到 `UserData\tools\`**，不是只改 `app\tools\`：
+  程序启动 node 时 `--root` 指向 **`UserData`**（可用 `Get-CimInstance Win32_Process` 看 node 的命令行核对，
+  或在 `UserData\runtime.log` 里看），工作区文件是从 `resources\workspace-template` 初始化复制来的。
+  只改 `app\tools\` 会出现「程序按旧脚本判定」的假象 —— 真实踩过：界面一直显示「服务已挂载」、不提示补丁可更新，
+  排查了好几轮才发现改错了地方。同步顺序：`UserData\tools` **+** `resources\workspace-template\tools` **+** `app\tools`。
+- **不要用 `| Select-Object -First N` 截断「有副作用」的脚本输出**（写文件、改产物、跑测试都算）：
+  管道拿到 N 行后会提前关闭，PowerShell 随即终止上游进程（PipelineStoppedException），
+  于是 `Dispose()` / 落盘 / 收尾清理都不会执行 —— 探针脚本曾因此**报告「已写入成功」而文件其实没动**，
+  差点让真机验证白跑一轮。要截断输出就改成先落盘到变量、再截取显示。

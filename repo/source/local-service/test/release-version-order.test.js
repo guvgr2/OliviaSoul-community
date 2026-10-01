@@ -32,6 +32,15 @@ test("本支语义化版本严格大于任何 gXX", () => {
   assert.equal(newer(T("1.0"), T("g30")), false, "1.0 不应被判为旧于 g30");
 });
 
+test("跨版本升级路径：g 系列 → 1.0 → 1.0.1 逐级都能检测到", () => {
+  // 真实场景：老用户停在 g29，我们先后发了 1.0 和 1.0.1
+  assert.equal(newer(T("g29"), T("1.0")), true, "g29 应看到 1.0");
+  assert.equal(newer(T("g29"), T("1.0.1")), true, "g29 应看到 1.0.1（跨两级）");
+  assert.equal(newer(T("1.0"), T("1.0.1")), true, "1.0 应看到 1.0.1");
+  assert.equal(newer(T("1.0.1"), T("1.0.1")), false, "同版本不提示");
+  assert.equal(newer(T("1.0.1"), T("1.0")), false, "不能提示回退");
+});
+
 test("语义化版本之间能正确排序", () => {
   assert.equal(newer(T("1.0"), T("1.1")), true);
   assert.equal(newer(T("1.1"), T("1.0")), false);

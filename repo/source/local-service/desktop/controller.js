@@ -110,6 +110,9 @@ export class DesktopController {
     this.onLyricsFrame = onLyricsFrame;
     this.settingsPath = join(appData, "desktop-settings.json");
     this.currentPort = DEFAULT_PORT;
+    // 启动阶段因端口被占用而退让时的原端口。只用来向用户解释「端口为什么变了」，
+    // 不参与任何端口决策；重新启动且未再退让时保持上一次的值或 null。
+    this.portFallbackFrom = null;
     this.clientExePath = "";
     this.service = null;
     this.clientOperation = null;
@@ -123,6 +126,7 @@ export class DesktopController {
     // 换端口不会影响游戏端（补丁里写死了服务地址，挂载之后不能再悄悄换）。
     this.currentPort = await pickAvailablePort(settings.port);
     if (this.currentPort !== settings.port) {
+      this.portFallbackFrom = settings.port;
       console.log(`[port] ${settings.port} 已被占用，改用 ${this.currentPort}`);
       void this.writeRuntimeSettings().catch(() => {});
     }
@@ -290,7 +294,9 @@ export class DesktopController {
       feappMounted: false,
       webplayerMounted: false,
       port: null,
+      webplayerPort: null,
       servicePort: this.currentPort,
+      portFallbackFrom: this.portFallbackFrom,
     };
     const [feapp, webplayer, widgets] = await Promise.all([
       this.readFeappStatus(layout.feappPath),
@@ -309,7 +315,10 @@ export class DesktopController {
       feappMounted: Boolean(feapp.mounted || feapp.managed || feapp.updateAvailable),
       webplayerFound: webplayer.clientFound,
       webplayerMounted: Boolean(webplayer.mounted || webplayer.managed || webplayer.updateAvailable),
+      // 播放器补丁也有自己的端口。以前只回报 feapp 的，界面无从发现「只同步了一半」。
+      webplayerPort: webplayer.port ?? null,
       servicePort: this.currentPort,
+      portFallbackFrom: this.portFallbackFrom,
       backupReuseSources: Array.isArray(this.backupReuseSources) ? this.backupReuseSources : [],
     };
   }

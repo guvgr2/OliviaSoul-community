@@ -55,6 +55,9 @@
 | `deepseek-v4-pro` | `https://api.deepseek.com` | `deepseek-v4-pro` | DeepSeek 官方，能力更强，适合写回信 |
 | `glm-5.3-flash` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3-flash` | 智谱 GLM，原生多模态、便宜 |
 | `glm-5.3-flashx` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3-flashx` | 智谱 GLM，更快 |
+| `kimi-k2-0905-preview` | `https://api.moonshot.cn/v1` | `kimi-k2-0905-preview` | Kimi 月之暗面，256K 上下文，主力 |
+| `kimi-latest` | `https://api.moonshot.cn/v1` | `kimi-latest` | Kimi 月之暗面，自动跟随最新版 |
+| `kimi-k2-thinking` | `https://api.moonshot.cn/v1` | `kimi-k2-thinking` | Kimi 思考模型，适合写回信 |
 | `glm-5.3` | `https://open.bigmodel.cn/api/paas/v4` | `glm-5.3` | 智谱 GLM 旗舰 |
 | 自定义 | 你自己填 | 你自己填 | 自己的中转站或本地服务，见第四节 |
 

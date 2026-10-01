@@ -11,7 +11,7 @@
 - 正式写法：`harness/写法.md`。
 - 正式人设：仓库根目录 `林离人设.md`。
 - 运行环境：Windows PowerShell 5.1、Node.js 22.5 以上。
-- 回信模型：由用户在「AI 模型」里自己选（DeepSeek 的 `deepseek-flash` / `deepseek-v4-pro`，智谱的 `glm-5.3-flash` / `glm-5.3-flashx` / `glm-5.3`，或自定义地址与模型名）。默认档案为 `deepseek-flash`；模型与地址由本机设置写入 `.cursor/secrets/model.env`（旧版 `deepseek.env` 仍可被读取迁移）。程序不自动切换模型、不跨家回退。
+- 回信模型：由用户在「AI 模型」里自己选（DeepSeek 的 `deepseek-flash` / `deepseek-v4-pro`，智谱的 `glm-5.3-flash` / `glm-5.3-flashx` / `glm-5.3`，Kimi 月之暗面的 `kimi-k2-0905-preview` / `kimi-latest` / `kimi-k2-thinking`，或自定义地址与模型名）。默认档案为 `deepseek-flash`；模型与地址由本机设置写入 `.cursor/secrets/model.env`（旧版 `deepseek.env` 仍可被读取迁移）。程序不自动切换模型、不跨家回退。
 
 v18 不再使用：
 

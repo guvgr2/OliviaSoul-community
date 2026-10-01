@@ -5,7 +5,7 @@
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.IO.Compression
 if (-not (Test-Path -LiteralPath $WebplayerPath -PathType Leaf)) {
-    [ordered]@{ clientFound = $false; mounted = $false } | ConvertTo-Json -Compress
+    [ordered]@{ clientFound = $false; mounted = $false; port = $null } | ConvertTo-Json -Compress
     exit 0
 }
 
@@ -52,4 +52,13 @@ $managed = $activeMarker.Count -eq 1 -and
     $text.Contains('__OliviaSoulPlayerPoll')
 $mounted = $managed -and $text.StartsWith($patchMarker)
 $revision = if ($managed) { [regex]::Match($activeMarker[0], 'v\d+').Value } else { $null }
-[ordered]@{ clientFound = $true; mounted = $mounted; managed = $managed; updateAvailable = ($managed -and -not $mounted); revision = $revision } | ConvertTo-Json -Compress
+# 补丁里写死的服务端口，供调用方比较「补丁端口 vs 本机端口」。
+# 提取不到就是 $null —— 它绝不参与 managed/mounted 判定：一旦让已打补丁的文件被误判成
+# 「干净原版」，它就会被当成原版备份存起来，之后再也恢复不回去（这是不能用错的地方）。
+$port = $null
+if ($managed) {
+    $portMatches = @([regex]::Matches($text, 'http://127\.0\.0\.1:(\d+)/toy/player-command'))
+    $uniquePorts = @($portMatches | ForEach-Object { [int]$_.Groups[1].Value } | Select-Object -Unique)
+    if ($uniquePorts.Count -eq 1) { $port = $uniquePorts[0] }
+}
+[ordered]@{ clientFound = $true; mounted = $mounted; managed = $managed; updateAvailable = ($managed -and -not $mounted); revision = $revision; port = $port } | ConvertTo-Json -Compress

@@ -103,7 +103,7 @@
               <li><b>游戏自己写了什么</b> → 「高级设置 → <b>游戏日志</b>」（页面最底部，点「读取游戏日志」）</li>
               <li><b>挂界面补丁 / 改曲库目录 / 备份</b> → 「客户端与歌词 → <em>客户端挂载与存储</em>」</li>
               <li><b>桌面歌词外观</b> → 「客户端与歌词 → <em>歌词设置</em>」</li>
-              <li><b>换模型 / 想用别的模型</b> → 「基础与设置 → <em>AI 模型</em>」：在「<b>选择模型</b>」里挑一个（DeepSeek 的 <b>deepseek-flash</b> / <b>deepseek-v4-pro</b>，智谱 GLM 的 <b>glm-5.3-flash</b> / <b>glm-5.3-flashx</b> / <b>glm-5.3</b>），或选「<b>自定义</b>」自己填接口地址与模型名。<b>选哪个就用哪个，程序不会自动切换</b>；换完要填 Key 并点「保存并测试远程模型」</li>
+              <li><b>换模型 / 想用别的模型</b> → 「基础与设置 → <em>AI 模型</em>」：在「<b>选择模型</b>」里挑一个（DeepSeek 的 <b>deepseek-flash</b> / <b>deepseek-v4-pro</b>，智谱 GLM 的 <b>glm-5.3-flash</b> / <b>glm-5.3-flashx</b> / <b>glm-5.3</b>，Kimi 的 <b>kimi-k2-0905-preview</b> / <b>kimi-latest</b> / <b>kimi-k2-thinking</b>），或选「<b>自定义</b>」自己填接口地址与模型名。<b>选哪个就用哪个，程序不会自动切换</b>；换完要填 Key 并点「保存并测试远程模型」</li>
               <li><b>记忆与信件</b> → 「信件与记忆 → <em>记忆</em>」</li>
               <li><b>使用声明 / 隐私 / 开源许可</b> → 「基础与设置 → <em>声明与合规</em>」</li>
             </ul>
@@ -172,7 +172,7 @@
                     <!-- 选项由 app.js 按 REMOTE_MODEL_PRESETS 填充，避免常量两处维护 -->
                   </select>
                   <small class="providerHint">这里列出的模型各自独立：选哪个就用哪个，程序不会替你自动换模型，也不会在失败时偷偷切换到另一家。<br>
-                    可用性说明：DeepSeek 的 deepseek-flash / deepseek-v4-pro 已实测可连通；<b>智谱 GLM 三个只验证过接口地址可达，能否使用要看你的账号有没有该模型的权限 —— 请自己填 Key 后点「保存并测试」确认</b>。没把握就用「自定义」填你熟悉的接口。</small>
+                    可用性说明：DeepSeek 的 deepseek-flash / deepseek-v4-pro 已实测可连通；<b>智谱 GLM 三个只验证过接口地址可达，能否使用要看你的账号有没有该模型的权限 —— 请自己填 Key 后点「保存并测试」确认</b>。Kimi 我们尚未用真实密钥实测，同样请自己填 Key 后点「保存并测试」确认。没把握就用「自定义」填你熟悉的接口。</small>
                 </div>
                 <div>
                   <label for="apiKey">远程 API Key</label>

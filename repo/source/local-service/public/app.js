@@ -251,29 +251,50 @@ function updateClientMountButtons() {
   $("#selectClient").disabled = busy;
 }
 
+/**
+ * 补丁里与本机服务端口对不上的那个端口（都对得上则返回 null）。
+ * feapp 与 webplayer 是两个独立文件，可能只同步了其中一个 —— 两个都要看。
+ */
+function stalePatchPort(status) {
+  return [status?.port, status?.webplayerPort]
+    .find(value => value != null && value !== status.servicePort) ?? null;
+}
+
 function renderClientMountStatus(status) {
   // A status snapshot is not proof that an unresolved desktop write has stopped.
   if (clientMountAction) { updateClientMountButtons(); return; }
   clientMountSnapshot = status;
-  tabNotices.set('desktop', 'health', status.clientSelected && (status.updateAvailable || (!status.mounted && (status.feappMounted || status.webplayerMounted)) || (status.mounted && status.port !== status.servicePort))
-    ? { kind: 'fault', id: 'client', message: status.updateAvailable ? '客户端补丁待更新' : '客户端挂载或端口状态异常' } : null);
+  // 端口退让后（启动时原端口被别的程序占用，自动改用别的端口），游戏端补丁里写死的
+  // 服务地址仍停在旧端口，游戏会连不上本机服务。这必须是一个「能直接操作」的状态：
+  // 说清谁和谁对不上，并让重打补丁的按钮可见 —— 以前这种情况按钮是隐藏的，用户无路可走。
+  const stalePort = stalePatchPort(status);
+  const portMismatch = status.mounted === true && stalePort !== null;
+  const partiallyMounted = !status.mounted && (status.feappMounted === true || status.webplayerMounted === true);
+  tabNotices.set('desktop', 'health', status.clientSelected && (status.updateAvailable || portMismatch || partiallyMounted)
+    ? { kind: 'fault', id: 'client', message: status.updateAvailable ? '客户端补丁待更新'
+      : portMismatch ? '服务端口已变更，游戏端补丁需要重打' : '客户端挂载或端口状态异常' } : null);
   tabNotices.set('desktop', 'query', null);
   const badge = $("#serviceMountStatus");
-  const partiallyMounted = !status.mounted && (status.feappMounted === true || status.webplayerMounted === true);
   $("#clientExe").value = status.clientExe ?? "";
   badge.className = `mountStatus ${status.mounted || partiallyMounted ? "mounted" : "unmounted"}`;
-  badge.textContent = status.updateAvailable ? "客户端补丁待更新" : partiallyMounted ? "服务部分挂载" : status.mounted ? "服务已挂载" : "服务未挂载";
+  badge.textContent = status.updateAvailable ? "客户端补丁待更新"
+    : portMismatch ? "端口已变更，需重打补丁"
+    : partiallyMounted ? "服务部分挂载" : status.mounted ? "服务已挂载" : "服务未挂载";
   if (!status.clientSelected) {
     $("#serviceMountDetail").textContent = "请先选择游戏 exe";
   } else if (status.updateAvailable) {
     $("#serviceMountDetail").textContent = `界面补丁 FE ${status.feappRevision ?? status.revision ?? "未确认"}，播放器 WP ${status.webplayerRevision ?? "未确认"}；请更新客户端补丁后再启动游戏`;
   } else if (partiallyMounted) {
     $("#serviceMountDetail").textContent = `客户端状态不一致：FE ${status.feappMounted ? "已挂载" : "未挂载"}，WP ${status.webplayerMounted ? "已挂载" : "未挂载"}`;
+  } else if (portMismatch) {
+    // 用户视角只需要三件事：哪里对不上、会有什么后果、点哪个按钮。
+    // 只在「补丁里的旧端口正好是退让前的那个端口」时才这样解释：
+    // 用户自己改过端口的话，再说「程序已自动改用 X」就是在说假话。
+    const fallback = Number.isInteger(status.portFallbackFrom) && status.portFallbackFrom === stalePort
+      ? `（启动时原端口 ${status.portFallbackFrom} 被别的程序占用，程序已自动改用 ${status.servicePort}）` : "";
+    $("#serviceMountDetail").textContent = `游戏端补丁还指向端口 ${stalePort}，本机服务现在在端口 ${status.servicePort}${fallback} —— 两边对不上，游戏会连不上本机服务。请点上方「重打补丁（同步端口）」，完成后再启动游戏。`;
   } else if (status.mounted) {
-    const synchronized = status.port === status.servicePort;
-    $("#serviceMountDetail").textContent = synchronized
-      ? ""
-      : `客户端端口 ${status.port}，本机服务端口 ${status.servicePort}`;
+    $("#serviceMountDetail").textContent = "";
   } else {
     $("#serviceMountDetail").textContent = `客户端使用原服务，本机服务端口 ${status.servicePort}`;
   }
@@ -285,8 +306,9 @@ function renderClientMountStatus(status) {
     const note = `已从同机其它 OliviaSoul 安装复用游戏原版备份：${backupReuse.join("、")}`;
     detail.textContent = detail.textContent ? `${detail.textContent}；${note}` : note;
   }
-  $("#mountService").hidden = status.mounted && !status.updateAvailable;
-  $("#mountService").textContent = status.updateAvailable ? "更新客户端补丁" : "启用本地服务";
+  $("#mountService").hidden = status.mounted && !status.updateAvailable && !portMismatch;
+  $("#mountService").textContent = status.updateAvailable ? "更新客户端补丁"
+    : portMismatch ? "重打补丁（同步端口）" : "启用本地服务";
   $("#restoreClient").hidden = !status.mounted && !partiallyMounted;
   updateClientMountButtons();
 }
@@ -335,9 +357,11 @@ function finishClientMountAction(action, status, error) {
   if (status) renderClientMountStatus(status);
   else updateClientMountButtons();
   const expectedMounted = action.kind === "enable";
+  // 端口要一并核对：端口退让后用户点的正是「重打补丁（同步端口）」。
+  // 补丁没写进新端口却报「服务已启用」，用户就会带着连不上的补丁去启动游戏。
   const verified = status?.clientSelected === true && status.clientFound === true && status.webplayerFound === true
     && status.feappMounted === expectedMounted && status.webplayerMounted === expectedMounted
-    && (!expectedMounted || (status.mounted === true && !status.updateAvailable));
+    && (!expectedMounted || (status.mounted === true && !status.updateAvailable && stalePatchPort(status) === null));
   $("#serviceMountResult").textContent = verified ? `服务已${label}`
     : `${label}未完成：客户端状态未确认或仍有部分挂载，请检查 FE/WP 状态后重试。`;
 }
@@ -359,6 +383,9 @@ async function runClientMountAction(kind) {
     } catch (error) { finishClientMountAction(action, null, error); return; }
   }
   startLoading("#serviceMountResult", kind === "enable" ? "正在检查备份并启用客户端……" : "正在检查备份并恢复客户端……");
+  // 输入框里的值就是本次要用的端口（它可编辑，用户想换端口、含改回原端口都走这里）。
+  // 注意 getSettings() 返回的是内存中的当前端口，所以它总与服务端口一致 ——
+  // 不存在「输入框停在旧端口」的情形，不要为那种假设加不可达的防护。
   const port = $("#servicePort").value;
   let timer;
   const completion = Promise.resolve().then(() => kind === "enable"
@@ -395,6 +422,9 @@ const REMOTE_MODEL_PRESETS = [
   { id: "glm-5.3-flash", label: "glm-5.3-flash · 智谱 GLM（原生多模态，便宜）", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.3-flash" },
   { id: "glm-5.3-flashx", label: "glm-5.3-flashx · 智谱 GLM（更快，200 tokens/s）", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.3-flashx" },
   { id: "glm-5.3", label: "glm-5.3 · 智谱 GLM（旗舰）", baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-5.3" },
+  { id: "kimi-k2-0905-preview", label: "kimi-k2-0905-preview · Kimi 月之暗面（256K 上下文，主力）", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k2-0905-preview" },
+  { id: "kimi-latest", label: "kimi-latest · Kimi 月之暗面（自动跟随最新版）", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-latest" },
+  { id: "kimi-k2-thinking", label: "kimi-k2-thinking · Kimi 月之暗面（思考模型，适合写回信）", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k2-thinking" },
 ];
 const CUSTOM_MODEL_PRESET = "__custom__";
 

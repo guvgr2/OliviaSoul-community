@@ -26,9 +26,30 @@ test("不得调用游戏内部工厂 ns(...)（真实踩过：游戏黑屏）", 
   assert.equal(calls.length, 0, `不得调用游戏内部工厂 ns()，实际 ${calls.length} 处`);
 });
 
-test("不得引用播放协调相关的内部机制", () => {
-  for (const token of ["playbackCoordinator", "acquireExclusive", "releaseExclusive", "startForeground", "stopForeground"]) {
-    assert.ok(!patch.includes(token), `不得引用「${token}」：属于游戏播放协调内部机制`);
+test("碰播放协调机制必须满足硬性条件（背景音让位，v57 起有条件放开）", () => {
+  // 1.0.1 曾一刀切禁止引用这些名字 —— 因为当时不了解机制，两次尝试都黑屏。
+  // v57 起有条件放开，依据是真机只读探针的实测结论：
+  //   · 官方播放时 ambientSound 的 playState 变 stopped（即「让位=停氛围音」）
+  //   · 本地作品播放时氛围音照常 playing（所以不让位）
+  //   · ambientSound store 在运行时可按名字取到，且暴露 acquireExclusive / releaseExclusive
+  // 但「条件」必须由测试守住，不是靠注释：
+  //   ① 仍然禁止 startForeground / stopForeground / playbackCoordinator —— 那会动播放会话
+  //   ② 只允许出现在 OliviaSoulDuckAmbience 这一个函数里
+  //   ③ 必须整段 try/catch（取不到 store 就静默跳过，绝不影响播放）
+  //   ④ 必须有幂等标志（acquire/release 是计数式的，失衡会让背景音一直不恢复）
+  for (const token of ["startForeground", "stopForeground", "playbackCoordinator"]) {
+    assert.ok(!patch.includes(token), `不得引用「${token}」：会动到播放会话，黑屏风险仍在`);
+  }
+  const duck = /OliviaSoulDuckAmbience=B=>\{([\s\S]*?)\},OliviaSoulSongIdFromItem=/u.exec(patch);
+  assert.ok(duck, "应存在 OliviaSoulDuckAmbience（背景音让位）");
+  const body = duck[1];
+  assert.match(body, /try\s*\{/u, "必须包在 try 里：取不到 store 时静默跳过");
+  assert.match(body, /catch/u, "必须有 catch 兜底，绝不能让异常冒到播放路径");
+  assert.match(body, /__OliviaSoulAmbienceDucked/u, "必须有幂等标志，避免 acquire/release 计数失衡");
+  for (const token of ["acquireExclusive", "releaseExclusive"]) {
+    const total = (patch.match(new RegExp(token, "gu")) ?? []).length;
+    const inside = (body.match(new RegExp(token, "gu")) ?? []).length;
+    assert.equal(total, inside, `「${token}」只能出现在 OliviaSoulDuckAmbience 内（共 ${total} 处，区内 ${inside} 处）`);
   }
 });
 
