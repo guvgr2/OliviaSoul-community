@@ -722,8 +722,19 @@ function Invoke-OliviaPublishGhRaw {
         )
     }
     Write-Host ('    $ ' + (Format-OliviaPublishCommandLine $Context.GhExe $Arguments)) -ForegroundColor DarkGray
-    $out = & $Context.GhExe @Arguments 2>&1 | Out-String
-    $code = $LASTEXITCODE
+    # gh 把失败信息写到 stderr（例如「该 Tag 还没有 Release」这种**预期内**的 404）。
+    # 本脚本开头设了 $ErrorActionPreference = 'Stop'，而 Windows PowerShell 5.1 在 Stop 下
+    # 会把原生命令的 stderr 变成**终止性**异常 —— 于是 `gh api <不存在的 tag>` 会直接打断
+    # 整个发布（1.0.6 发布时踩到：[7/11] 预检 404 直接 exit 1，根本没走到「可以建」）。
+    # 这里只关心退出码，stderr 一律并入 $out 交给调用方判断，所以局部放开 Stop。
+    $prevErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $Context.GhExe @Arguments 2>&1 | Out-String
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevErrorAction
+    }
     if ($null -eq $code) { $code = 0 }
     [pscustomobject]@{
         ExitCode = [int]$code
