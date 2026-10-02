@@ -1151,7 +1151,10 @@ function renderUpdateInformation(data) {
   $("#downloadUpdate").hidden = !data.updateAvailable;
   $("#updateResult").textContent = degraded ? String(data.message ?? "更新检查失败")
     : data.updateAvailable ? "发现新版本，可以下载"
-      : data.currentTag !== data.latestTag ? "当前版本高于 GitHub 公开版，无需更新" : "当前已经是最新版本";
+      // 用后端算好的 currentIsNewer，不自己比 currentTag / latestTag 文本：
+      // GitHub 的 tag 带 v 前缀（v2008.2.7-linli9-1.0.5），本机版本号不带，
+      // 字符串直接比会把「已是最新」显示成「当前版本高于 GitHub 公开版」。
+      : data.currentIsNewer === true ? "当前版本高于 GitHub 公开版，无需更新" : "当前已经是最新版本";
   updateDownloadUI.setRelease(data);
 }
 

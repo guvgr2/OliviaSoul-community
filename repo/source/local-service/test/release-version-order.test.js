@@ -20,7 +20,7 @@ function pick(name) {
 
 const context = {};
 vm.runInNewContext(
-  `${pick("releaseVersion")}\n${pick("isNewerRelease")}\nthis.newer = isNewerRelease; this.version = releaseVersion;`,
+  `${pick("stripTagPrefix")}\n${pick("releaseVersion")}\n${pick("isNewerRelease")}\nthis.newer = isNewerRelease; this.version = releaseVersion;`,
   context,
 );
 const newer = (current, latest) => context.newer(current, latest);
@@ -82,4 +82,36 @@ test("与历史小数字版本（如 g7）不会比较错", () => {
   assert.equal(newer(T("g7"), T("g8")), true, "旧格式之间仍然正确");
   assert.equal(newer(T("g99"), T("1.0")), true, "即使 g99 也小于 1.0");
   assert.equal(newer(T("g999"), T("1.0")), true, "g999 仍小于 1.0（新格式从 1000 起）");
+});
+
+// —— 真实事故回归（1.0.6）：GitHub tag 带 v 前缀 ——
+//
+// 事故现场：已装 2008.2.7-linli9-1.0.5，GitHub 上的 Release tag 是 v2008.2.7-linli9-1.0.5，
+// 「软件更新」页却显示「发现新版本，可以下载」，进度 0.0%。
+// 原因：releaseVersion 的正则要求字符串以数字开头，遇到 v 前缀直接返回 null；
+// isNewerRelease 于是退回「字符串不同就当新版本」的兜底分支，
+// "2008.2.7-linli9-1.0.5" !== "v2008.2.7-linli9-1.0.5" 恒为真 —— 装了最新版也永远提示可更新。
+// 本支从 1.0 起的 tag 一直带 v（v2008.2.7-linli9-1.0.4、v…-1.0.5），也就是这个 bug 一直在。
+test("GitHub tag 的 v 前缀不影响版本比较（1.0.5 真实事故）", () => {
+  assert.deepEqual(
+    Array.from(context.version(`v${T("1.0.5")}`)),
+    Array.from(context.version(T("1.0.5"))),
+    "带 v 与不带 v 必须解析成同一个版本号",
+  );
+  assert.equal(newer(T("1.0.5"), `v${T("1.0.5")}`), false, "带 v 的同版本必须判为「已是最新」");
+  assert.equal(newer(`v${T("1.0.5")}`, T("1.0.5")), false, "反向同样不能提示更新");
+  assert.equal(newer(T("1.0.5"), `v${T("1.0.6")}`), true, "带 v 的更高版本仍要正常提示");
+  assert.equal(newer(`v${T("1.0.5")}`, `v${T("1.0.6")}`), true, "两边都带 v 时也要正确排序");
+  assert.equal(newer(T("g28"), `v${T("1.0")}`), true, "带 v 的语义化版本仍大于 gXX");
+  assert.equal(newer(T("1.0"), `v${T("g30")}`), false, "带 v 的旧格式仍小于 1.0");
+});
+
+test("v 前缀只剥版本位那一个 v，不误伤版本号正文", () => {
+  // 只有「v 紧跟数字」才算前缀；别把正常文本里的 v 当版本前缀吃掉。
+  assert.equal(context.version("verify-2008.2.7-linli9-1.0.5"), null, "前缀不是 v+数字 时不应被剥成合法版本");
+  assert.deepEqual(
+    Array.from(context.version(`V${T("1.0.5")}`)),
+    Array.from(context.version(T("1.0.5"))),
+    "大写 V 前缀同样要认（GitHub 上大小写都可能出现）",
+  );
 });

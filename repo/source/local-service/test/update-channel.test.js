@@ -344,7 +344,16 @@ function uiFixture({ payload, channelReply } = {}) {
   });
   const bootstrap = appSource.lastIndexOf("Promise.all([refresh(), loadDesktopSettings()])");
   assert.ok(bootstrap > 0, "fixture must isolate admin startup from real services");
-  vm.runInContext(appSource.slice(0, bootstrap).replace(/^import .*\r?\n/gmu, ""), context);
+  vm.runInContext(
+    appSource.slice(0, bootstrap)
+      // app.js 末尾那句 void import('./lyrics-settings.js') 落在 bootstrap 之前，
+      // 而 vm 里没有 ESM 解析基准：留着会抛 ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING,
+      // 表现为「13 项全过、进程却 exit 1」——发布前门禁按退出码判就会变成假失败。
+      // 夹具只跑界面逻辑，这句与更新通道无关，按启动项剥掉。
+      .replace(/void import\([^\n]*\)\.catch\([^\n]*\);\r?\n/u, "")
+      .replace(/^import .*\r?\n/gmu, ""),
+    context,
+  );
   const flush = async () => { for (let index = 0; index < 60; index++) await Promise.resolve(); };
   return {
     node, requests, flush, context,
@@ -408,7 +417,61 @@ test("界面：切换通道会存进本机 settings 并立刻按新通道重查�
   assert.equal(f.node("#updateResult").textContent, "发现新版本，可以下载");
 });
 
-// —— 6. 源码钉死（防漂移）——
+// —— 6. v 前缀回归（1.0.6 真实事故）——
+//
+// 事故：装了 2008.2.7-linli9-1.0.5，GitHub 上的 tag 是 v2008.2.7-linli9-1.0.5，
+// 「软件更新」页却显示「发现新版本，可以下载」，进度停在 0.0%。
+// 原因：releaseVersion 以数字开头的正则被 v 前缀顶掉、返回 null，
+// 比较于是退回「字符串不同就当新版本」，而 "2008.…-1.0.5" !== "v2008.…-1.0.5" 恒为真。
+// 本支从 1.0 起的 tag 一直带 v（v…-1.0.4、v…-1.0.5），所以这个 bug 一直在，
+// 只是以前没人正好停在「已是最新版」上去点检查更新。
+// 注意下面几条都刻意避开 "2008.2.7-linli.NNN" 老格式，改用真实发布用的 linli9-1.0.x。
+
+test("回归：GitHub tag 带 v 前缀时，装的已是最新版不得报「可更新」", async t => {
+  const { root, open } = await makeRoot(t, "v-prefix-same");
+  const current = "2008.2.7-linli9-1.0.5";
+  const latest = "v2008.2.7-linli9-1.0.5";
+  const { request } = await boot(root, open, {
+    updateCurrentTag: current,
+    updateFetch: githubStub({ stable: release(latest) }),
+  });
+
+  const checked = await request("/admin/api/update");
+
+  assert.equal(checked.status, 200);
+  assert.equal(checked.body.data.currentTag, current);
+  assert.equal(checked.body.data.latestTag, latest, "latestTag 保留 GitHub 原样，界面要显示原 tag");
+  assert.equal(checked.body.data.updateAvailable, false, "只差一个 v 前缀不算新版本");
+  assert.equal(checked.body.data.currentIsNewer, false, "同版本也不能说成「本地高于公开版」");
+});
+
+test("回归：带 v 前缀的更高版本仍然正常提示可更新", async t => {
+  const { root, open } = await makeRoot(t, "v-prefix-newer");
+  const { request } = await boot(root, open, {
+    updateCurrentTag: "2008.2.7-linli9-1.0.5",
+    updateFetch: githubStub({ stable: release("v2008.2.7-linli9-1.0.6") }),
+  });
+
+  const checked = await request("/admin/api/update");
+
+  assert.equal(checked.body.data.updateAvailable, true, "真出了新版本还是要提示，别修成一律不提示");
+  assert.equal(checked.body.data.currentIsNewer, false);
+});
+
+test("回归：本地版本高于带 v 前缀的公开版时，如实说「高于公开版」且不给下载", async t => {
+  const { root, open } = await makeRoot(t, "v-prefix-ahead");
+  const { request } = await boot(root, open, {
+    updateCurrentTag: "2008.2.7-linli9-1.0.9",
+    updateFetch: githubStub({ stable: release("v2008.2.7-linli9-1.0.5") }),
+  });
+
+  const checked = await request("/admin/api/update");
+
+  assert.equal(checked.body.data.updateAvailable, false, "不能引导用户去下旧包");
+  assert.equal(checked.body.data.currentIsNewer, true, "要如实说明本地版本更高");
+});
+
+// —— 7. 源码钉死（防漂移）——
 
 test("界面源码：通道选项写在下拉框里、切换后立刻重查、降级分支不谎报「已是最新」", () => {
   const select = /<select id="updateChannel"[\s\S]*?<\/select>/u.exec(indexHtml)?.[0] ?? "";
@@ -468,4 +531,44 @@ test("服务端源码：更新检查不再 502，stable/beta 各走各的来源�
   assert.match(serverSource, /draft !== true/u, "列表里必须显式排除草稿");
   assert.match(serverSource, /fetchLatestRelease\(signal, updateChannel\(\)\)/u,
     "下载也要跟着通道走，否则 beta 用户会下到正式版");
+});
+
+// —— 8. 界面侧 v 前缀回归（同一个事故的另一面）——
+//
+// updateAvailable 修对之后，紧接着暴露的是文案分支：
+// app.js 原来用 `data.currentTag !== data.latestTag` 判断「本地版本更高」，
+// 而 GitHub 的 tag 带 v 前缀、本机版本号不带，于是「已是最新」会被显示成
+// 「当前版本高于 GitHub 公开版，无需更新」。所以版本高低的判断必须由后端给语义字段。
+
+test("界面：已是最新时不得显示「当前版本高于 GitHub 公开版」（v 前缀事故的另一面）", () => {
+  const f = uiFixture();
+  f.render({ channel: "stable", degraded: false, currentTag: "2008.2.7-linli9-1.0.5",
+    latestTag: "v2008.2.7-linli9-1.0.5", updateAvailable: false, currentIsNewer: false,
+    releaseUrl: `${RELEASES_PAGE}/tag/v2008.2.7-linli9-1.0.5`, publishedAt: "", assetName: "",
+    assetSize: 0, assetUrl: "", notes: "", releaseName: "" });
+
+  assert.equal(f.node("#updateResult").textContent, "当前已经是最新版本",
+    "只差一个 v 前缀不能被说成本地版本更高");
+  assert.equal(f.node("#downloadUpdate").hidden, true, "已是最新时不能给「下载安装包」");
+});
+
+test("界面：只有后端说 currentIsNewer 才显示「高于 GitHub 公开版」", () => {
+  const f = uiFixture();
+  f.render({ channel: "stable", degraded: false, currentTag: "2008.2.7-linli9-1.0.9",
+    latestTag: "v2008.2.7-linli9-1.0.5", updateAvailable: false, currentIsNewer: true,
+    releaseUrl: `${RELEASES_PAGE}/tag/v2008.2.7-linli9-1.0.5`, publishedAt: "", assetName: "",
+    assetSize: 0, assetUrl: "", notes: "", releaseName: "" });
+
+  assert.equal(f.node("#updateResult").textContent, "当前版本高于 GitHub 公开版，无需更新");
+});
+
+test("源码钉死：版本高低用后端语义字段，不得再自己比 tag 文本", () => {
+  assert.doesNotMatch(appSource, /data\.currentTag !== data\.latestTag/u,
+    "GitHub 的 tag 带 v 前缀而本机版本号不带，比字符串会把「已是最新」误判成「本地更新」");
+  assert.match(appSource, /data\.currentIsNewer === true/u, "要用后端算好的 currentIsNewer");
+  assert.match(serverSource, /currentIsNewer: isNewerRelease\(release\.latestTag, updateCurrentTag\)/u,
+    "currentIsNewer 必须由后端按版本语义算出来，不能把裸 tag 丢给前端自己比");
+  assert.match(serverSource, /function stripTagPrefix\(tag\) \{/u, "缺少统一的 tag 前缀剥离");
+  assert.match(serverSource, /\.replace\(\/\^\[vV\]\(\?=\\d\)\/u, ""\)/u,
+    "只剥「v/V 紧跟数字」的那一个字符，别把正文里的字母当版本前缀吃掉");
 });

@@ -239,13 +239,25 @@ function modelIdsFromPayload(payload) {
   }).filter(Boolean))].sort((left, right) => left.localeCompare(right));
 }
 
+  /**
+   * 剥掉 GitHub tag 的 v 前缀（1.0.6）。
+   * GitHub 上的 Release tag 一直写作 v2008.2.7-linli9-1.0.5，而随包 package.json 的版本号不带 v。
+   * 只剥「v/V 紧跟数字」的那一个字符：v2008… → 2008…，但 verify-… 原样返回，
+   * 免得把正文里的字母当成版本前缀吃掉。
+   */
+  function stripTagPrefix(tag) {
+    return String(tag ?? "").trim().replace(/^[vV](?=\d)/u, "");
+  }
+
   function releaseVersion(tag) {
     // 支持三种写法，并统一成同一个可比较的段数组：
     //   2008.2.7-linli.9     上游老格式
     //   2008.2.7-linli9-g28  本支旧格式（本支序号 = 28）
     //   2008.2.7-linli9-1.0  本支语义化格式（本支序号 = 1*1000 + 0*10 + 0 = 1000）
     // 本支序号放在同一维度，保证 1.0(1000) 严格大于任何 gXX，且 1.1 > 1.0、2.0 > 1.9。
-    const text0 = String(tag ?? "").trim();
+    // 比较前先剥 v 前缀：否则以数字开头的正则匹配不上会返回 null，
+    // 上层只好退回字符串比较，结果是「装了最新版也永远提示可更新」。
+    const text0 = stripTagPrefix(tag);
     const base = /^(\d+)\.(\d+)\.(\d+)-linli\.?(\d+)/u.exec(text0);
     if (!base) return null;
     const head = [Number(base[1]), Number(base[2]), Number(base[3]), Number(base[4])];
@@ -265,7 +277,8 @@ function modelIdsFromPayload(payload) {
   function isNewerRelease(currentTag, latestTag) {
     const current = releaseVersion(currentTag);
     const latest = releaseVersion(latestTag);
-    if (!current || !latest) return String(currentTag) !== String(latestTag);
+    // 两边都解析不出来时的兜底：仍然先剥 v 前缀，避免「只差一个 v」被当成新版本。
+    if (!current || !latest) return stripTagPrefix(currentTag) !== stripTagPrefix(latestTag);
     for (let index = 0; index < current.length; index += 1) {
       if (latest[index] !== current[index]) return latest[index] > current[index];
     }
@@ -980,6 +993,10 @@ export async function createOliviaService(options = {}) {
       currentTag: updateCurrentTag,
       latestTag: release.latestTag,
       updateAvailable: isNewerRelease(updateCurrentTag, release.latestTag),
+      // 当前版本是否严格高于 GitHub 公开版（本地手改了版本号、或发了又撤回的场景）。
+      // 为什么不在前端比字符串：GitHub 的 tag 带 v 前缀而本机版本号不带，
+      // 直接比会把「已经是最新」误判成「本地更新」——同一个 v 前缀事故的另一面（1.0.6）。
+      currentIsNewer: isNewerRelease(release.latestTag, updateCurrentTag),
       releaseUrl: release.releaseUrl,
       publishedAt: release.publishedAt,
       assetName: release.asset.name,
