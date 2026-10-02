@@ -1,4 +1,4 @@
-﻿# publish.ps1 —— 一键发布（默认 dry-run，零副作用）
+# publish.ps1 —— 一键发布（默认 dry-run，零副作用）
 #
 # 目的：把 1.0.4 发布时**人工一步一步敲过的那套流程**固化成一条命令，避免每次发版
 #       漏步骤（漏传产物、忘记勾 prerelease、同号重发、哈希与 Release 正文不一致）。
@@ -291,6 +291,12 @@ function Set-OliviaPublishHashSection {
     $marker = '### 📦 文件校验（SHA256）'
     $idx = $Body.IndexOf($marker)
     if ($idx -ge 0) { $trimmed = $Body.Substring(0, $idx).TrimEnd() } else { $trimmed = $Body.TrimEnd() }
+    # 正文末尾可能还留着发布说明里版本节之间的分隔线（`---`）；不先去掉，就会和下面这条拼成两条
+    # （1.0.7 发布时出现过，只能事后手工改 Release 正文）。
+    do {
+        $prev = $trimmed
+        $trimmed = [regex]::Replace($trimmed, '(?s)(?:^|\r?\n)-{3,}[ \t]*$', '').TrimEnd()
+    } while ($trimmed -ne $prev)
     $nl = [Environment]::NewLine
     return ($trimmed + $nl + $nl + '---' + $nl + $nl + $Section + $nl)
 }
