@@ -85,8 +85,11 @@ param(
     # 所以「不稳定功能发测试版」必须带这个开关；正式版**绝不能**带。
     [switch]$Prerelease,
 
-    # gh 可执行文件（本机不在 PATH 上，用全路径）
-    [string]$GhPath = 'E:\olivia_tool\gh\bin\gh.exe',
+    # gh 可执行文件：留空则自动找（先 PATH、再环境变量 OLIVIA_GH_PATH），也可用 -GhPath 指定。
+    # 这里**不能**写死作者本机的 gh 全路径：公开仓库的隐私门禁
+    # （repo\source\local-service\test\repo-privacy.test.js）会拦下本机工具目录指纹，
+    # 写死了连发布门禁都过不去（1.0.6 发布时踩过）。
+    [string]$GhPath = '',
 
     # 仅供测试/调试：用一个替身程序接收与 gh 完全相同的参数序列（替代 $GhPath）
     [string]$GhRunner = '',
@@ -442,7 +445,7 @@ function New-OliviaPublishContext {
         [string]$TitleFile = '',
         [string]$NotesFile = '',
         [bool]$Prerelease = $false,
-        [string]$GhPath = 'E:\olivia_tool\gh\bin\gh.exe',
+        [string]$GhPath = '',
         [string]$GhRunner = '',
         [string]$ProxyUrl = 'http://127.0.0.1:7890',
         [string]$ToolsDir = ''
@@ -536,10 +539,23 @@ function New-OliviaPublishContext {
     if (-not $TitleFile) { $TitleFile = Join-Path $KitRoot ".test-twins\_release-title-$short.txt" }
     if (-not $NotesFile) { $NotesFile = Join-Path $KitRoot ".test-twins\_release-notes-$short.md" }
 
+    # gh 定位顺序：-GhPath > PATH 上的 gh > 环境变量 OLIVIA_GH_PATH。
+    # 刻意不把任何具体机器的路径写进脚本（见上面 $GhPath 参数处的说明）。
+    if (-not $GhRunner -and -not $GhPath) {
+        $foundGh = Get-Command gh -ErrorAction SilentlyContinue
+        if ($foundGh) { $GhPath = [string]$foundGh.Source }
+        elseif ($env:OLIVIA_GH_PATH) { $GhPath = [string]$env:OLIVIA_GH_PATH }
+    }
     $ghExe = if ($GhRunner) { $GhRunner } else { $GhPath }
+    if (-not $GhRunner -and -not $GhPath) {
+        Stop-OliviaPublish -Code 3 -Message '找不到 gh：没有传 -GhPath，PATH 上也没有 gh' -Hints @(
+            '用 -GhPath 指定 gh 全路径，或把 gh 放进 PATH，或设环境变量 OLIVIA_GH_PATH；',
+            '真的没有 gh 时，用浏览器手工建 Release（1.0.4 就是这么发的，见 .test-twins\1.0.4发布步骤.md）。'
+        )
+    }
     if (-not $GhRunner -and -not (Test-Path -LiteralPath $GhPath)) {
         Stop-OliviaPublish -Code 3 -Message "找不到 gh：$GhPath" -Hints @(
-            '本机 gh 不在 PATH 上，必须用全路径（默认 E:\olivia_tool\gh\bin\gh.exe）；',
+            '该路径不存在，请用 -GhPath 指定正确的 gh 全路径；',
             '真的没有 gh 时，用浏览器手工建 Release（1.0.4 就是这么发的，见 .test-twins\1.0.4发布步骤.md）。'
         )
     }
