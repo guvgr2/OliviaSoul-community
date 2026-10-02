@@ -5,6 +5,8 @@
 
   const TAB = "listen-tools";
   const BASE = "/toy/listen-naming";
+  // g13：三个时段与它们在界面上的叫法（数组顺序就是界面上从左到右的顺序）
+  const SLOTS = [["TOD12", "白天"], ["TOD1730", "傍晚"], ["TOD20", "夜晚"]];
   let ui = null;
 
   function node(tag, text, className) {
@@ -65,6 +67,25 @@
         card.append(img);
       }
       if (segment.reason) card.append(node("p", segment.reason, "fieldHint"));
+
+      // g14：手动指定必须挂在「这一段」自己的卡片上。以前三个按钮是全局一行，
+      // 后端永远拿第 1 段的变体键写库 —— 第 2、3 段根本改不动，界面却看着像单选。
+      const cardActions = node("div", null, "actions ln-todCardActions");
+      if (segment.video) {
+        cardActions.append(node("span", "指定这一段为：", "fieldHint"));
+        for (const [slot, label] of SLOTS) {
+          const button = node("button", label, "secondary compact");
+          button.type = "button";
+          button.addEventListener("click", async () => {
+            if (!global.confirm(`把 ${data.folder} 的第 ${segment.index + 1} 段画面设为「${label}」？\n只改这一首的时段，写库前会自动备份数据库。`)) return;
+            await runAction(host, cardActions, `/time-of-day/set-slot`, { folder: data.folder, slot, variant: segment.video }, data);
+          });
+          cardActions.append(button);
+        }
+      } else {
+        cardActions.append(node("span", "这一段没有可用的变体键，无法手动指定。", "fieldHint"));
+      }
+      card.append(cardActions);
       row.append(card);
     }
     host.append(row);
@@ -74,8 +95,7 @@
       `判定阈值：亮度 ≥ ${t.brightnessDay} 且偏冷 → 白天；亮度 < ${t.brightnessNight} → 夜晚；偏暖（色温 ≥ ${t.warmthDusk}）→ 傍晚。`,
       "fieldHint"));
 
-    // g13：判错了也能改 —— 显示数据库现值 + 一键按判定重写 + 手动指定
-    const SLOTS = [["TOD12", "白天"], ["TOD1730", "傍晚"], ["TOD20", "夜晚"]];
+    // g13：判错了也能改 —— 显示数据库现值 + 一键按判定重写 + 每段自己手动指定
     const showMapping = (mapping) => {
       if (!mapping) return "（数据库里现在是空）";
       const parts = SLOTS
@@ -90,21 +110,28 @@
     const actions = node("div", null, "actions ln-todActions");
     const rework = node("button", "按画面判定重写这一首", "secondary");
     rework.type = "button";
-    actions.append(rework, node("span", "手动指定：", "fieldHint"));
-    for (const [slot, label] of SLOTS) {
-      const button = node("button", label, "secondary compact");
-      button.type = "button";
-      button.addEventListener("click", async () => {
-        if (!global.confirm(`把 ${data.folder} 设为「${label}」？\n只改这一首的时段，写库前会自动备份数据库。`)) return;
-        await runAction(host, actions, `/time-of-day/set-slot`, { folder: data.folder, slot }, data);
-      });
-      actions.append(button);
+    // g14：一首歌正常有 3 段画面（白天 / 傍晚 / 夜晚各一段）。只剩 1 段时「按画面判定重写」
+    // 会把另外两个时段的映射清成空，播放时三段都回退到同一段视频 —— 这时宁可禁用并说明原因。
+    const segmentCount = data.segments.length;
+    const shortOfSegments = segmentCount < SLOTS.length;
+    if (segmentCount === 1) {
+      rework.disabled = true;
+      rework.title = "只识别到 1 段画面：重写会清空另外两个时段的映射，播放时三段都会回退到同一段视频。请先补齐这首歌的其它时段视频。";
     }
+    actions.append(rework);
     rework.addEventListener("click", async () => {
-      if (!global.confirm(`按画面判定重写 ${data.folder} 的时段？\n会覆盖这一首已有的时段，写库前会自动备份数据库。`)) return;
+      const warning = shortOfSegments
+        ? `\n\n注意：只识别到 ${segmentCount}/3 段画面，重写会清空另外 ${SLOTS.length - segmentCount} 个时段的映射（播放时回退到同一段视频）。`
+        : "";
+      if (!global.confirm(`按画面判定重写 ${data.folder} 的时段？\n会覆盖这一首已有的时段，写库前会自动备份数据库。${warning}`)) return;
       await runAction(host, actions, `/time-of-day/rework`, { folder: data.folder }, data);
     });
     host.append(actions);
+    if (shortOfSegments) {
+      host.append(node("p",
+        `这首歌只识别到 ${segmentCount}/3 段画面：按画面判定重写会清空缺的时段，建议先补齐视频，或用每段卡片上的「白天 / 傍晚 / 夜晚」逐个指定。`,
+        "fieldHint"));
+    }
 
     const result = node("p", "", "result ln-todResult");
     host.append(result);

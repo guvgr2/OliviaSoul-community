@@ -60,6 +60,8 @@ export const TOD_LABELS = Object.freeze({ TOD12: "白天", TOD1730: "傍晚", TO
 
 // 「时段可视化」用：缩略图缓存目录名与宽度（截帧只用于人工复核，不参与判定）
 const THUMB_DIR_NAME = "time-of-day-thumbs";
+// g14：段号含义变了（改为按 video_by_tod_view 的键排序），缓存名带版本，避免旧图串段
+const THUMB_CACHE_VERSION = "v2";
 const THUMB_WIDTH = 160;
 const THUMB_TIMEOUT_MS = 20_000;
 // 与 listen-naming 一致的文件夹名校验
@@ -523,20 +525,63 @@ export async function createTimeOfDayRoutes(options = {}) {
     return fallback;
   }
 
+  /**
+   * 一首歌在库里的**全部**视频变体（g14 修既有 bug）。
+   *
+   * 以前这里、handleInspect、handleThumbnail 三条读路径都只认 row.video_path：
+   * 一首歌明明有 3 段画面（video_by_tod_view 里 3 条路径），却永远只被看成 1 段 ——
+   * 页面只列 1 段、缩略图 seg=1/2 直接 404，classifySong() 也凑不齐 3 段去走排序法，
+   * 于是「按画面判定重写这一首」写进库的 mapping 根本不可信。
+   *
+   * 现在按 video_by_tod_view 的每条路径产出变体（键就是游戏认的那个键），
+   * video_path 只作为旧数据兜底，并按规范化路径去重。
+   */
+  function variantsOfRow(row) {
+    const items = [];
+    const seen = new Set();
+    const push = (rawPath, key) => {
+      const video = toAbsoluteVideoPath(rawPath, libraryRoot);
+      if (!video) return;
+      const identity = normalizePathKey(video);
+      if (seen.has(identity)) return;
+      seen.add(identity);
+      const named = String(key ?? "").trim();
+      // 变体键优先取 video_by_tod_view 里的键（游戏认这个），拿不到才退回文件名
+      items.push({ video, variant: named || variantKeyFor(row, video, variantKeyOf(video)), row });
+    };
+    let map = null;
+    try {
+      const parsed = JSON.parse(String(row?.video_by_tod_view ?? "{}"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) map = parsed;
+    } catch { map = null; }
+    if (map) for (const [key, path] of Object.entries(map)) push(path, key);
+    // 旧数据/手工导库可能只有 video_path，不在 video_by_tod_view 里
+    push(row?.video_path, "");
+    return items;
+  }
+
   /** 把 user_songs 的行按曲库文件夹分组：folder -> { songIds, videos:[{video, variant}] }。 */
   function groupByFolder(rows) {
     const groups = new Map();
+    const seenVideos = new Map();
     for (const row of rows) {
       const folder = folderFromPath(row.video_path);
       if (!folder) continue;
-      if (!groups.has(folder)) groups.set(folder, { folder, songIds: [], rows: [], videos: [] });
+      if (!groups.has(folder)) {
+        groups.set(folder, { folder, songIds: [], rows: [], videos: [] });
+        seenVideos.set(folder, new Set());
+      }
       const group = groups.get(folder);
+      const seen = seenVideos.get(folder);
       group.songIds.push(String(row.id));
       group.rows.push(row);
-      const video = toAbsoluteVideoPath(row.video_path, libraryRoot);
-      if (!video) continue;
-      // 变体键优先取 video_by_tod_view 里的键（游戏认这个），拿不到才退回文件名
-      group.videos.push({ video, variant: variantKeyFor(row, video, variantKeyOf(video)), row });
+      // 同一个文件夹可能有多首歌（个人上传常见），同一段视频只收一次
+      for (const item of variantsOfRow(row)) {
+        const identity = normalizePathKey(item.video);
+        if (seen.has(identity)) continue;
+        seen.add(identity);
+        group.videos.push(item);
+      }
     }
     for (const group of groups.values()) group.videos.sort((left, right) => left.variant.localeCompare(right.variant, "en"));
     return groups;
@@ -703,9 +748,28 @@ export async function createTimeOfDayRoutes(options = {}) {
     return written;
   }
 
-  /** 缩略图绝对路径（按文件夹 + 段号缓存）。 */
+  /**
+   * 缩略图绝对路径（按文件夹 + 段号缓存）。
+   * g14：段号的含义变了（以前 1 段 = video_path，现在按 video_by_tod_view 的键排序后的第 N 段），
+   * 所以缓存名带版本号，避免旧缓存被当成新段号的图显示。
+   */
   function thumbnailPath(folder, segment) {
-    return join(USER_DATA_DIR || DEFAULT_DATA_DIR, THUMB_DIR_NAME, `${folder}__${segment}.jpg`);
+    return join(USER_DATA_DIR || DEFAULT_DATA_DIR, THUMB_DIR_NAME, `${THUMB_CACHE_VERSION}__${folder}__${segment}.jpg`);
+  }
+
+  /** 列出某文件夹下全部视频变体，排序与 handleInspect 完全一致（按游戏变体键）。 */
+  function videosOfFolder(rows) {
+    const seen = new Set();
+    return rows
+      .flatMap((row) => variantsOfRow(row))
+      .filter((item) => {
+        const identity = normalizePathKey(item.video);
+        if (seen.has(identity)) return false;
+        seen.add(identity);
+        return true;
+      })
+      .map((item) => ({ video: item.video, key: item.variant }))
+      .sort((a, b) => a.key.localeCompare(b.key, "en"));
   }
 
   /**
@@ -747,20 +811,9 @@ export async function createTimeOfDayRoutes(options = {}) {
     const folder = candidates[0];
 
     // g13：变体名用游戏自己的键（DEFAULT / DEFAULT_2 / …），跟写库时保持一致
-    const seen = new Set();
-    const videos = rows
-      .map((row) => {
-        const video = toAbsoluteVideoPath(row.video_path, libraryRoot);
-        if (!video) return null;
-        return { video, key: variantKeyFor(row, video, variantKeyOf(video)) };
-      })
-      .filter(Boolean)
-      .filter((item) => {
-        if (seen.has(item.video)) return false;
-        seen.add(item.video);
-        return true;
-      })
-      .sort((a, b) => a.key.localeCompare(b.key, "en"));
+    // g14：一首歌的 3 段画面都要列出来（以前只看 video_path，永远只有 1 段）；
+    //      段号顺序必须与 handleThumbnail 完全一致，否则图和判定会串位
+    const videos = videosOfFolder(rows);
 
     const segments = [];
     for (let index = 0; index < videos.length; index += 1) {
@@ -833,17 +886,14 @@ export async function createTimeOfDayRoutes(options = {}) {
       const db = openReadOnly(databasePath);
       let rows = [];
       try {
+        // g14：必须带上 video_by_tod_view，否则一首歌只看得见 1 段视频，seg=1/2 必然 404
         rows = db.prepare(
-          "SELECT video_path FROM user_songs WHERE removed_at IS NULL AND video_path LIKE ? ESCAPE '\\'"
+          "SELECT video_path, video_by_tod_view FROM user_songs WHERE removed_at IS NULL AND video_path LIKE ? ESCAPE '\\'"
         ).all(`%${folder}%`);
       } finally {
         db.close();
       }
-      const videos = rows
-        .map((row) => toAbsoluteVideoPath(row.video_path, libraryRoot))
-        .filter(Boolean)
-        .map((video) => ({ video, key: variantKeyOf(video) }))
-        .sort((a, b) => a.key.localeCompare(b.key, "en"));
+      const videos = videosOfFolder(rows);
       const picked = videos[segment];
       if (!picked) throw httpError(404, "这首歌没有这一段视频", "TIME_OF_DAY_THUMBNAIL_MISSING");
       await mkdir(dirname(target), { recursive: true });
@@ -1015,7 +1065,29 @@ export async function createTimeOfDayRoutes(options = {}) {
     }
     const group = groupOfFolder(folder);
     if (!group) throw httpError(404, "曲库里没有这个文件夹", "TIME_OF_DAY_FOLDER_NOT_FOUND");
-    const variant = group.videos.map(item => item.variant).filter(Boolean)[0];
+
+    // g14：手动指定必须能落到第 2、3 段。以前这里写死取第 1 个变体键，界面上的
+    // 三个按钮看着像「单选」，实际永远只改第 1 段 —— 另外两段的映射根本没被写到。
+    // 现在优先认 body.variant（界面按每段卡片发上来），其次兼容 body.seg（段号），
+    // 都没有才退回老行为（第 1 段），保证旧调用方不受影响。
+    const variants = group.videos.map(item => item.variant).filter(Boolean);
+    const wanted = String(body?.variant ?? "").trim();
+    const legacySegment = body?.seg;
+    let variant;
+    if (wanted) {
+      if (!variants.includes(wanted)) {
+        throw httpError(400, `这个文件夹里没有变体「${wanted}」`, "TIME_OF_DAY_VARIANT_NOT_FOUND");
+      }
+      variant = wanted;
+    } else if (legacySegment !== undefined && legacySegment !== null && legacySegment !== "") {
+      const index = Number(legacySegment);
+      if (!Number.isInteger(index) || index < 0 || index >= variants.length) {
+        throw httpError(400, `段号超出范围（0 ~ ${Math.max(variants.length - 1, 0)}）`, "TIME_OF_DAY_SEGMENT_INVALID");
+      }
+      variant = variants[index];
+    } else {
+      variant = variants[0];
+    }
     if (!variant) throw httpError(400, "这个文件夹里没有可解析的视频文件名", "TIME_OF_DAY_VARIANT_MISSING");
 
     // 保留其它变体原来的时段，只把当前变体挪到目标时段

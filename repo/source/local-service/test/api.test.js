@@ -980,7 +980,7 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
   assert.match(patchScript, /h\.value==="songlist"/u);
   assert.match(patchScript, /OliviaSoulFinishLocalPlayback\(B\)/u);
   assert.match(patchScript, /p\.value===ot\.Single&&u\.value&&a\(u\.value\)\?M\(u\.value\):U\(\)/u);
-  assert.match(webplayerScript, /OliviaSoulPatch:webplayer-instant-seamless-v19/u);
+  assert.match(webplayerScript, /OliviaSoulPatch:webplayer-instant-seamless-v20/u);
   assert.match(webplayerScript, /\/toy\/player-command/u);
   assert.match(webplayerScript, /\/toy\/player-state/u);
   assert.match(webplayerScript, /sessionId/u);
@@ -1084,8 +1084,8 @@ test("webplayer 补丁精确移除桌面 UID 水印并可从原版备份还原",
     readFile(new URL("../../tools/restore-webplayer-original.ps1", import.meta.url), "utf8"),
   ]);
   const watermark = 'S(n)?(k(),we(l,{key:0,uid:S(n)},null,8,["uid"])):Re("",!0)';
-  assert.match(patch, /OliviaSoulPatch:webplayer-instant-seamless-v19/u);
-  assert.match(status, /OliviaSoulPatch:webplayer-instant-seamless-v19/u);
+  assert.match(patch, /OliviaSoulPatch:webplayer-instant-seamless-v20/u);
+  assert.match(status, /OliviaSoulPatch:webplayer-instant-seamless-v20/u);
   assert.match(status, /OliviaSoulPatch:webplayer-no-watermark-direct-http-progress-v13/u);
   assert.match(status, /OliviaSoulPatch:webplayer-no-watermark-direct-http-progress-v12/u);
   assert.match(status, /OliviaSoulPatch:webplayer-no-watermark-direct-http-progress-v11/u);

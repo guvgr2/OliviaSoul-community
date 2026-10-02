@@ -14,7 +14,15 @@ function replacement(name) {
 }
 const nativeControl = (patch.match(/\$nativeControl = @'\r?\n([\s\S]*?)\r?\n'@/u)?.[1] ?? "")
   .replaceAll("__OLIVIA_PLAYER_STATE_URL__", stateUrl);
-const wallpaper = "https://olivia.local/assets/Wallpaper_Presence/default.mp4";
+// 时段改写辅助函数（真实定义在 tools/webplayer-pause.js，与补丁注入的函数同作用域）。
+// 这里取真实实现，才能验证「恢复默认画面时按当前时段换段」这条链路。
+const pauseSource = await readFile(new URL("../../tools/webplayer-pause.js", import.meta.url), "utf8");
+const wallpaperHelpers = pauseSource.slice(
+  pauseSource.indexOf("const OliviaSoulWallpaperSlots"),
+  pauseSource.indexOf("function OliviaSoulSwapPlayback"));
+const wallpaper = "https://olivia.local/assets/Wallpaper_Presence/A_R1_1730.mp4";
+// 快照里记下的旧时段壁纸（例如中午挂载时记的白天档）。恢复时必须按当前时段改写成 wallpaper。
+const dayWallpaper = "https://olivia.local/assets/Wallpaper_Presence/A_R1_1200.mp4";
 const localUrl = "http://127.0.0.1:27149/toy/midi/songs/local-song/video.mp4?playSession=local-session";
 
 // Run the actual mounted subscription, command branches and progress handler.
@@ -23,6 +31,10 @@ function fixture() {
   let nativeHandler;
   let poll;
   let serviceCommand = { revision: 0, command: null };
+  // 服务端 /toy/player-command 现在会下发当前时段（server.js 的 playbackTimeOfDay 调用）。
+  // 恢复默认画面时要按它改写壁纸段，而不是照抄快照里的旧段。
+  let timeOfDay = "TOD1730";
+  let feCalls = 0;
   let serviceState = {};
   let fetchFailure = false;
   let pendingStateResponse;
@@ -68,7 +80,7 @@ function fixture() {
         if (pendingCommandResponse) return pendingCommandResponse;
       }
       if (url === stateUrl && pendingStateResponse) return pendingStateResponse;
-      return { ok: true, json: async () => ({ code: 0, data: url === commandUrl ? serviceCommand : serviceState }) };
+      return { ok: true, json: async () => ({ code: 0, data: url === commandUrl ? { ...serviceCommand, timeOfDay } : serviceState }) };
     },
     le(url, options) {
       video.src = video.currentSrc = url;
@@ -76,7 +88,7 @@ function fixture() {
       video.loop = options.loop;
       video.play();
     },
-    fe() { video.pause(); }, ae() {}, ce() { video.play(); }, K(offset) { video.currentTime = offset; },
+    fe() { feCalls += 1; video.pause(); }, ae() {}, ce() { video.play(); }, K(offset) { video.currentTime = offset; },
     // 补丁注入的另外三个函数（真实定义在 tools/webplayer-pause.js）。
     // 测试关心的是「会话所有权」，这里只提供受控实现并记录调用。
     OliviaSoulSwapPlayback(url, options) {
@@ -89,7 +101,8 @@ function fixture() {
     OliviaSoulReportPausedPlayback() {},
     Z(event) { nativeEvents.push(event); }, de() {}, ye() {}, ve(loop) { video.loop = loop; },
   });
-  vm.runInContext(`${nativeControl}
+  vm.runInContext(`${wallpaperHelpers}
+    ${nativeControl}
     function pe(e){if(!e?.cmd)return;switch(e.cmd){${replacement("playTo")}${replacement("stopTo")}${replacement("preloadTo")}
       case "seek":K(e.offset);break;case "resume":ce();break;case "setLoop":ve(e.loop);break;}}
     ${replacement("timeUpdateTo")}
@@ -116,6 +129,8 @@ function fixture() {
     },
     async command(command, revision = 2) { serviceCommand = { revision, command }; await runPoll(); },
     setState(next) { serviceState = next; },
+    setTimeOfDay(next) { timeOfDay = next; },
+    feCalls: () => feCalls,
     offline() { fetchFailure = true; },
     holdState() {
       let resolve;
@@ -182,14 +197,29 @@ for (const command of [{ cmd: "pause" }, { cmd: "stop" }, { cmd: "play", url: wa
   });
 }
 
-test("current-session service stop still returns to the most recently remembered wallpaper", async () => {
+test("current-session service stop returns to the current time-of-day wallpaper, not the stale snapshot", async () => {
   const player = fixture();
   await player.start();
-  const nextWallpaper = "https://olivia.local/assets/Wallpaper_Presence/evening.mp4";
-  await player.native({ cmd: "play", url: nextWallpaper, offset: 8, loop: true });
+  // 快照里记的是中午挂载时的白天档；停止时服务端报的当前时段已经是傍晚。
+  await player.native({ cmd: "play", url: dayWallpaper, offset: 8, loop: true });
   await player.command({ cmd: "stop", songId: "local-song", sessionId: "local-session", restoreDefault: true });
-  assert.equal(player.video.currentSrc, nextWallpaper);
-  assert.equal(player.video.currentTime, 8);
+  assert.equal(player.video.currentSrc, wallpaper);
+  assert.equal(player.video.currentTime, 0, "crossing the time-of-day boundary must reset the offset");
+  assert.deepEqual(player.swapCalls.at(-1), [wallpaper, { loop: true, offset: 0 }]);
+  assert.equal(player.state.__OliviaSoulActiveSessionId, null);
+});
+
+test("service stop without a reported time of day falls back to the official restore", async () => {
+  const player = fixture();
+  await player.start();
+  // 服务端没报时段（或报了未知值）时不得猜一个段，交回官方 stop 路径。
+  player.setTimeOfDay(undefined);
+  delete player.state.__OliviaSoulCurrentTod;
+  await player.native({ cmd: "play", url: dayWallpaper, offset: 8, loop: true });
+  await player.command({ cmd: "stop", songId: "local-song", sessionId: "local-session", restoreDefault: true });
+  assert.equal(player.swapCalls.some(([url]) => url.includes("wallpaper_presence")), false,
+    "an unknown time of day must not replay a guessed slot");
+  assert.ok(player.feCalls() > 0, "an unknown time of day must hand back to the official stop path");
   assert.equal(player.state.__OliviaSoulActiveSessionId, null);
 });
 
@@ -227,7 +257,9 @@ test("native stop remains available when no local session owns playback", async 
   const player = fixture();
   await player.native({ cmd: "play", url: "https://media.example.test/official.mp4" });
   await player.native({ cmd: "stop" });
-  assert.equal(player.video.currentSrc, wallpaper);
+  assert.ok(player.feCalls() > 0, "the official stop path must still run when no time of day was ever reported");
+  assert.equal(player.swapCalls.some(([url]) => url.includes("wallpaper_presence")), false,
+    "an unknown time of day must not replay a guessed slot");
 });
 
 test("an unreachable service permits native emergency stop", async () => {

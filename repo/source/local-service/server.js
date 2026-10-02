@@ -3196,7 +3196,14 @@ export async function createOliviaService(options = {}) {
     }
 
     if (req.method === "GET" && path === "/toy/player-command") {
-      return ok(req, res, {...localPlayerCommand,nativeCommand:nativeLyricsControl.poll()}, { "Cache-Control": "no-store" });
+      // timeOfDay 供补丁注入的 webplayer 在「恢复默认画面」时把壁纸快照改写到当前时段：
+      // 停止播放后仍停在启动时段（例如 19 点还播白天）就是这么来的。
+      // 时段边界只由 midi/playback-clock.js 计算，前端不另写一套，否则两边会漂移。
+      return ok(req, res, {
+        ...localPlayerCommand,
+        nativeCommand: nativeLyricsControl.poll(),
+        timeOfDay: playbackTimeOfDay(options.playbackNow?.() ?? new Date()),
+      }, { "Cache-Control": "no-store" });
     }
     if (req.method === "POST" && path === "/toy/player-command") {
       const body = await readJson(req);

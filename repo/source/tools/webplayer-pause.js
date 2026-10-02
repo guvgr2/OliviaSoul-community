@@ -1,4 +1,23 @@
 // Runs inside the existing WebPlayer component; no extra player or timer.
+
+// 桌面壁纸资产的时段后缀：{A,B,C}_R{1,2,3}_{1200,1730,2000}.mp4（另外还有 *_Transition_*.mp4 过场）。
+// 时段值由本地服务在 /toy/player-command 里下发（服务端用 midi/playback-clock.js 的
+// playbackTimeOfDay 计算），前端不另写一套边界判定，否则两边迟早漂移。
+const OliviaSoulWallpaperSlots = { TOD12: '1200', TOD1730: '1730', TOD20: '2000' };
+
+// 把壁纸快照的 URL 改写成「当前时段」的那一段；判断不了就返回空串，
+// 让调用方退回游戏原生 stop（宁可交给官方，也不要钉在过期时段上）。
+function OliviaSoulCurrentTodUrl(url, timeOfDay) {
+  const slot = OliviaSoulWallpaperSlots[String(timeOfDay || '')];
+  if (!slot) return '';
+  const value = String(url || '');
+  if (!value.toLowerCase().includes('/assets/wallpaper_presence/')) return '';
+  // 过场片段语义就是「上一时段→下一时段」，改写成单一时段会指到不存在的文件。
+  if (/_transition_/i.test(value)) return '';
+  if (!/_(1200|1730|2000)\.mp4(\?|#|$)/i.test(value)) return '';
+  return value.replace(/_(1200|1730|2000)\.mp4(\?|#|$)/i, '_' + slot + '.mp4$2');
+}
+
 function OliviaSoulSwapPlayback(url, options, onReady) {
   window.__OliviaSoulMediaSwap?.cancel();
   const old = i.value, next = v.value;

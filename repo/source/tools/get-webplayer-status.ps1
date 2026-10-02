@@ -27,8 +27,9 @@ finally {
     $stream.Dispose()
 }
 
-$patchMarker = '/*OliviaSoulPatch:webplayer-instant-seamless-v19*/'
+$patchMarker = '/*OliviaSoulPatch:webplayer-instant-seamless-v20*/'
 $legacyPatchMarkers = @(
+    '/*OliviaSoulPatch:webplayer-instant-seamless-v19*/',
     '/*OliviaSoulPatch:webplayer-instant-seamless-v18*/',
     '/*OliviaSoulPatch:webplayer-lyrics-wallpaper-pause-v16*/',
     '/*OliviaSoulPatch:webplayer-instant-seamless-v17*/',

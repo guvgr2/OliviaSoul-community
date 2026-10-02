@@ -43,6 +43,14 @@ async function fixture(options = {}) {
   };
 }
 
+// 轮询 /toy/player-command 的响应比命令发布多一个「当前时段」字段（webplayer 补丁靠它
+// 决定恢复默认画面时该放哪一段）。断言「命令本身没变」时必须把它剔掉。
+function commandOf(body) {
+  const { timeOfDay, ...command } = body;
+  assert.match(timeOfDay, /^TOD(12|1730|20)$/u, "player-command polls must report the current time-of-day slot");
+  return command;
+}
+
 test("permanent API saves persist a portable correction and restore to that baseline without playback effects", async () => {
   const ctx = await fixture();
   try {
@@ -59,7 +67,7 @@ test("permanent API saves persist a portable correction and restore to that base
     await ctx.json(endpoint, { name: "Display" });
     assert.equal((await ctx.json(endpoint, { name: null })).data.name, "Correct title");
     assert.equal((await ctx.json(`/toy/media/songs/${ctx.song.id}/metadata`)).data.correctedName, "Correct title");
-    assert.deepEqual((await ctx.json("/toy/player-command")).data, started);
+    assert.deepEqual(commandOf((await ctx.json("/toy/player-command")).data), started);
   } finally { await ctx.close(); }
 });
 
@@ -99,7 +107,7 @@ test("metadata aliases rename one work in uploads and playlist without replaying
     assert.equal((await ctx.json("/toy/searchPlaylist")).data.list[0].name, "新的名称");
     const list = (await ctx.json("/toy/searchUserSongs?query=" + encodeURIComponent("新的名称"))).data.list;
     assert.equal(list[0].id, ctx.song.id);
-    assert.deepEqual((await ctx.json("/toy/player-command")).data, started);
+    assert.deepEqual(commandOf((await ctx.json("/toy/player-command")).data), started);
     const after = (await ctx.json("/toy/player-state")).data;
     for (const key of ["sessionId", "mediaUrl", "currentTime", "commandRevision", "playbackState"]) {
       assert.equal(after[key], before[key], key);
@@ -125,7 +133,11 @@ test("play starts use native local-clock boundaries and never change a running s
       assert.equal(new URL(started.data.command.url).searchParams.get("variant"), variant);
       assert.equal(await fetch(started.data.command.url).then(r => r.text()), contents);
       ctx.clock(12);
-      assert.deepEqual((await ctx.json("/toy/player-command")).data, started.data);
+      // 轮询响应会带上「当前时段」（webplayer 补丁靠它决定恢复默认画面时放哪一段），
+      // 但正在跑的这一场的命令本身不得因为跨时段边界而变化。
+      const polled = (await ctx.json("/toy/player-command")).data;
+      assert.deepEqual(commandOf(polled), started.data);
+      assert.equal(polled.timeOfDay, "TOD12", "player-command polls report the wall-clock slot (12:00 here)");
     }
   } finally { await ctx.close(); }
 });

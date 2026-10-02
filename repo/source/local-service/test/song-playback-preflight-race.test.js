@@ -93,6 +93,14 @@ async function fixture() {
   };
 }
 
+// 轮询 /toy/player-command 的响应比命令发布多一个「当前时段」字段（webplayer 补丁靠它
+// 决定恢复默认画面时该放哪一段）。断言「命令本身没变」时必须把它剔掉。
+function commandOf(body) {
+  const { timeOfDay, ...command } = body;
+  assert.match(timeOfDay, /^TOD(12|1730|20)$/u, "player-command polls must report the current time-of-day slot");
+  return command;
+}
+
 test("a slow play preflight cannot publish early or replace a newer successful play", { concurrency: false, timeout: 60000 }, async () => {
   const ctx = await fixture();
   const gate = holdNextStat(ctx.files.a);
@@ -108,7 +116,7 @@ test("a slow play preflight cannot publish early or replace a newer successful p
     assert.equal(newer.data.command.songId, ctx.songs.b.id);
     gate.release();
     assert.notEqual((await pending).code, 0);
-    assert.deepEqual((await ctx.json("/toy/player-command")).data, {...newer.data,nativeCommand:null});
+    assert.deepEqual(commandOf((await ctx.json("/toy/player-command")).data), {...newer.data,nativeCommand:null});
     const state = (await ctx.json("/toy/player-state")).data;
     assert.equal(state.songId, ctx.songs.b.id);
     assert.equal(state.sessionId, newer.data.command.sessionId);
@@ -130,7 +138,7 @@ test("stopping the active work invalidates an older pending play preflight", { c
     gate = holdNextStat(ctx.files.a);
     pending = ctx.play(ctx.songs.a);
     await gate.entered();
-    assert.deepEqual((await ctx.json("/toy/player-command")).data, {...active.data,nativeCommand:null});
+    assert.deepEqual(commandOf((await ctx.json("/toy/player-command")).data), {...active.data,nativeCommand:null});
     const stopped = await ctx.json("/toy/player-command", {
       cmd: "stop", songId: ctx.songs.b.id, sessionId: active.data.command.sessionId,
     });
@@ -138,7 +146,7 @@ test("stopping the active work invalidates an older pending play preflight", { c
     assert.equal(stopped.data.command.cmd, "stop");
     gate.release();
     assert.notEqual((await pending).code, 0);
-    assert.deepEqual((await ctx.json("/toy/player-command")).data, {...stopped.data,nativeCommand:null});
+    assert.deepEqual(commandOf((await ctx.json("/toy/player-command")).data), {...stopped.data,nativeCommand:null});
     const state = (await ctx.json("/toy/player-state")).data;
     assert.equal(state.songId, ctx.songs.b.id);
     assert.equal(state.sessionId, active.data.command.sessionId);

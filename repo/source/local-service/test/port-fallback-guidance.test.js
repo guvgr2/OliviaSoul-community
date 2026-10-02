@@ -207,7 +207,7 @@ test("实测：播放器状态脚本会报出补丁里的服务端口", async t 
   // 这里显式指定条目名，内容从文件读入，免得把 JS 文本塞进命令行。
   const payloadPath = join(root, "payload.js");
   await writeFile(payloadPath,
-    "/*OliviaSoulPatch:webplayer-instant-seamless-v19*/"
+    "/*OliviaSoulPatch:webplayer-instant-seamless-v20*/"
     + "const a='http://127.0.0.1:27149/toy/player-command';"
     + "const b='http://127.0.0.1:27149/toy/player-state';"
     + "const c='__OliviaSoulPlayerPoll';", "utf8");

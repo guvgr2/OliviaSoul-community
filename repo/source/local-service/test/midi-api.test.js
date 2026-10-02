@@ -374,7 +374,10 @@ test("local webplayer command channel publishes a selected My Upload HTTP video"
     assert.equal(published.body.data.command.name, item.name);
     assert.ok(published.body.data.revision > 0);
     const current = await ctx.json("/toy/player-command");
-    assert.deepEqual(current.body.data, {...published.body.data,nativeCommand:null});
+    // 轮询响应比命令发布多一个「当前时段」字段（webplayer 补丁靠它改写恢复时的壁纸段）。
+    const { timeOfDay, ...currentData } = current.body.data;
+    assert.deepEqual(currentData, {...published.body.data,nativeCommand:null});
+    assert.match(timeOfDay, /^TOD(12|1730|20)$/u);
     const progress = await ctx.json("/toy/player-state", {
       method: "POST",
       body: JSON.stringify({
