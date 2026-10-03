@@ -3043,7 +3043,10 @@ export async function createOliviaService(options = {}) {
     {
       const currentRoot = getSetting(MIDI_LIBRARY_ROOT_SETTING) ?? "";
       if (!listenNamingRoutesPromise || (!listenNamingRoutesRoot && currentRoot)) {
-        listenNamingRoutesPromise = createListenNamingRoutes({ libraryRoot: currentRoot });
+        // 与下面的「画面识别（时段）」同理：数据库路径必须跟着本次启动的 dataDir 走，
+        // 否则显式指定的 dataDir（测试、便携版异位数据目录）会被模块级默认值顶掉 ——
+        // 那时这一页会去开安装目录下的库，界面顶部报「读取失败：unable to open database file」。
+        listenNamingRoutesPromise = createListenNamingRoutes({ libraryRoot: currentRoot, databasePath });
         listenNamingRoutesRoot = currentRoot;
       }
     }

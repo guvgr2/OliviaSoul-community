@@ -279,8 +279,12 @@
 [data-page="listen-naming"] .ln-guardLine { overflow-wrap: anywhere; }
 [data-page="listen-naming"] .ln-clueActions { flex-wrap: wrap; gap: 8px; }
 [data-page="listen-naming"] .ln-clueOut { display: block; }
-[data-page="listen-naming"] .ln-clueOut .ln-todRow { display: flex; flex-wrap: wrap; gap: 10px; }
-[data-page="listen-naming"] .ln-clueOut .ln-todCard { min-width: 178px; padding: 10px; }
+/* 时段卡片有两处：曲名与时段页（.ln-clueOut 内，见 listen-naming.js）与
+   试听工具页的「时段依据复核」面板（time-of-day-inspect.js）。
+   原来只写了 listen-naming 的作用域，试听工具页匹配不到，卡片退化成竖排且没有内边距；
+   这里去掉页面与父级限定，两页共用同一套排布（取值与原来一致，曲名与时段页表现不变）。 */
+.ln-todRow { display: flex; flex-wrap: wrap; gap: 10px; }
+.ln-todCard { min-width: 178px; padding: 10px; }
 /* g12：批量命名表按钮行 */
 [data-page="listen-naming"] .ln-tableActions { flex-wrap: wrap; gap: 8px; margin-top: 2px; }
 [data-page="listen-naming"] .ln-importFile { display: none; }

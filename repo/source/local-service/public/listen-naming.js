@@ -141,6 +141,20 @@
     return element;
   }
 
+  /**
+   * 亮度 / 色温是后端算出来的原始浮点，展示时取整；拿不到就显示问号，不猜。
+   * 与 time-of-day-inspect.js 里的同名函数**刻意保持一份拷贝**：两个文件都是普通
+   * <script>（没有模块系统，单独抽公共文件还要动 server.js 的静态白名单与打包清单），
+   * 为 4 行代码不值得；两边行为由 test/time-of-day-inspect-display.test.js 同时把关。
+   * 注意必须先判 null / 空串再转 Number：Number(null) 是 0、Number("") 也是 0，
+   * 直接转会把「没有值」显示成 0，反而比原来的 `?? "?"` 更糟。
+   */
+  function formatMetric(value) {
+    if (value == null || value === "") return "?";
+    const number = Number(value);
+    return Number.isFinite(number) ? String(Math.round(number)) : "?";
+  }
+
   async function request(path, options) {
     const response = await global.fetch(path, {
       credentials: "include",
@@ -739,7 +753,7 @@
         const card = node("section", null, "settingsBlock ln-todCard");
         card.append(
           node("strong", `第 ${segment.index + 1} 段`),
-          node("p", `亮度 ${segment.brightness ?? "?"} · 色温 ${segment.warmth ?? "?"}`, "fieldHint"),
+          node("p", `亮度 ${formatMetric(segment.brightness)} · 色温 ${formatMetric(segment.warmth)}`, "fieldHint"),
           node("p", `判定：${segment.verdictLabel ?? "?"}`, "ln-todVerdict"),
         );
         if (segment.thumbnailUrl) {

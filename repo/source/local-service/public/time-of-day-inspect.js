@@ -16,6 +16,17 @@
     return element;
   }
 
+  /**
+   * 亮度 / 色温是后端算出来的原始浮点，展示时取整；拿不到就显示问号，不猜。
+   * 注意必须先判 null / 空串再转 Number：Number(null) 是 0、Number("") 也是 0，
+   * 直接转会把「没有值」显示成 0，反而比原来的 `?? "?"` 更糟。
+   */
+  function formatMetric(value) {
+    if (value == null || value === "") return "?";
+    const number = Number(value);
+    return Number.isFinite(number) ? String(Math.round(number)) : "?";
+  }
+
   async function api(path, options) {
     const response = await global.fetch(BASE + path, Object.assign({
       credentials: "include",
@@ -55,7 +66,9 @@
     for (const segment of data.segments) {
       const card = node("section", null, "settingsBlock ln-todCard");
       const title = node("strong", `第 ${segment.index + 1} 段`);
-      const info = node("p", `亮度 ${segment.brightness ?? "?"} · 色温 ${segment.warmth ?? "?"}`, "fieldHint");
+      // 后端返回的是原始浮点（亮度如 227.285），而判定阈值都是整数（110 / 62 / 10），
+      // 直接上屏既啰嗦，还和色温的小数位数对不齐 —— 展示层统一取整。
+      const info = node("p", `亮度 ${formatMetric(segment.brightness)} · 色温 ${formatMetric(segment.warmth)}`, "fieldHint");
       const verdict = node("p", `判定：${segment.verdictLabel}`, "ln-todVerdict");
       card.append(title, info, verdict);
       if (segment.thumbnailUrl) {
