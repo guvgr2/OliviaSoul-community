@@ -27,6 +27,25 @@
     return Number.isFinite(number) ? String(Math.round(number)) : "?";
   }
 
+  /**
+   * 这一段画面当前被哪些时段占着（返回 [slot, 中文名] 数组）。
+   * 一首歌里同一段画面只能占一个时段，所以「改完到底改成了什么」只能这样反查 ——
+   * 界面上原来只有「数据库现值：白天=DEFAULT · …」，看不出这一段归谁。
+   */
+  function slotsOfVariant(mapping, variant) {
+    const key = String(variant ?? "");
+    if (!key || !mapping) return [];
+    return SLOTS.filter(([slot]) => String(mapping[slot] ?? "") === key);
+  }
+
+  /** 变体键 → 「第 N 段」，给确认框和写入回执写人话；认不出来就原样显示键名。 */
+  function segmentTextOfVariant(segments, variant) {
+    const key = String(variant ?? "");
+    if (!key) return "";
+    const index = (segments ?? []).findIndex((segment) => String(segment.video ?? "") === key);
+    return index >= 0 ? `第 ${index + 1} 段` : key;
+  }
+
   async function api(path, options) {
     const response = await global.fetch(BASE + path, Object.assign({
       credentials: "include",
@@ -45,7 +64,11 @@
     return el ? el.textContent.trim() : "";
   }
 
-  function renderReport(host, data) {
+  /**
+   * message：写入成功后要显示的回执。必须在**渲染过程中**就塞进新的结果行 ——
+   * 这块报告是整体 replaceChildren 重建的，渲染完再往旧节点写回执等于写进空气。
+   */
+  function renderReport(host, data, message) {
     host.replaceChildren();
     // g13：拿不到数据时给一句人话，别让整块面板炸在 null 上
     if (!data || typeof data !== "object" || !Array.isArray(data.segments)) {
@@ -70,7 +93,13 @@
       // 直接上屏既啰嗦，还和色温的小数位数对不齐 —— 展示层统一取整。
       const info = node("p", `亮度 ${formatMetric(segment.brightness)} · 色温 ${formatMetric(segment.warmth)}`, "fieldHint");
       const verdict = node("p", `判定：${segment.verdictLabel}`, "ln-todVerdict");
-      card.append(title, info, verdict);
+      // 1.0.9：手动指定以前只回一句「已写入 N 行」，用户点完仍然不知道这一段现在算哪个时段
+      // （截图核对时就是这么卡住的）。每张卡直接写出它在数据库里当前的归属。
+      const held = slotsOfVariant(data.current, segment.video);
+      const current = node("p",
+        held.length ? `当前：${held.map(([, label]) => label).join(" · ")}` : "当前：未指定",
+        "fieldHint ln-todCurrent");
+      card.append(title, info, verdict, current);
       if (segment.thumbnailUrl) {
         const img = node("img", null, "ln-todThumb");
         img.src = segment.thumbnailUrl;
@@ -90,7 +119,19 @@
           const button = node("button", label, "secondary compact");
           button.type = "button";
           button.addEventListener("click", async () => {
-            if (!global.confirm(`把 ${data.folder} 的第 ${segment.index + 1} 段画面设为「${label}」？\n只改这一首的时段，写库前会自动备份数据库。`)) return;
+            // 1.0.9：确认框提前说清代价。同一段只能占一个时段，所以把这一段指到新时段时，
+            // 原来占着它的那个时段会被清空；目标时段原本指着别的段，也会被替换掉。
+            const lines = [`把 ${data.folder} 的第 ${segment.index + 1} 段画面设为「${label}」？`];
+            const willClear = slotsOfVariant(data.current, segment.video).filter(([name]) => name !== slot);
+            if (willClear.length) {
+              lines.push(`当前「${willClear.map(([, name]) => name).join("、")}」指向这一段，会被清空（同一段只能占一个时段）。`);
+            }
+            const previousVariant = data.current?.[slot];
+            if (previousVariant && String(previousVariant) !== String(segment.video)) {
+              lines.push(`「${label}」原本指向${segmentTextOfVariant(data.segments, previousVariant)}，将被替换。`);
+            }
+            lines.push("只改这一首的时段，写库前会自动备份数据库。");
+            if (!global.confirm(lines.join("\n"))) return;
             await runAction(host, cardActions, `/time-of-day/set-slot`, { folder: data.folder, slot, variant: segment.video }, data);
           });
           cardActions.append(button);
@@ -147,6 +188,7 @@
     }
 
     const result = node("p", "", "result ln-todResult");
+    if (message) result.textContent = message;
     host.append(result);
     host._todResult = result;
   }
@@ -158,15 +200,32 @@
     if (result) result.textContent = "正在写库（先备份数据库）…";
     try {
       const updated = await api(path, { method: "POST", body: JSON.stringify(body) });
-      const slots = [["TOD12", "白天"], ["TOD1730", "傍晚"], ["TOD20", "夜晚"]];
-      const text = slots.filter(([slot]) => updated?.mapping?.[slot])
-        .map(([slot, label]) => `${label}=${updated.mapping[slot]}`).join(" · ");
-      if (result) {
-        result.textContent = `✓ 已写入 ${updated?.written ?? 0} 行：${text}`
-          + (updated?.backupFile ? `（备份 ${updated.backupFile}）` : "");
+      // 1.0.9：回执要写清「这次改成了什么、原来那个时段被怎么处理了」。老文案只把三个时段
+      // 全列一遍，改前改后看着一样，用户没法确认到底生效没有。
+      // before 优先用后端回传的 previous（写前快照）；「按画面判定重写」没有 previous，
+      // 就退回本次渲染时拿到的现值 —— 两者都是写库前的状态，够用。
+      const before = updated?.previous ?? data?.current ?? null;
+      const after = updated?.mapping ?? null;
+      const currentText = SLOTS
+        .filter(([slot]) => after?.[slot])
+        .map(([slot, label]) => `${label}=${after[slot]}`)
+        .join(" · ");
+      const changes = SLOTS
+        .filter(([slot]) => String(before?.[slot] ?? "") !== String(after?.[slot] ?? ""))
+        .map(([slot, label]) => (after?.[slot]
+          ? `${label} → ${segmentTextOfVariant(data?.segments, after[slot])}（${after[slot]}）`
+          : `原「${label}」已清空`));
+      const receipt = `✓ 已写入 ${updated?.written ?? 0} 行：${currentText || "（空）"}`
+        + (changes.length ? `；${changes.join("；")}` : "")
+        + (updated?.backupFile ? `（备份 ${updated.backupFile}）` : "");
+      // 重新读一次依据，让"数据库现值"和每张卡的"当前"立刻更新。
+      // 回执必须交给重渲染去写（它会把整块报告连同结果行一起换掉），否则用户点完什么都看不到。
+      try {
+        renderReport(host, await api(`/time-of-day/inspect?folder=${encodeURIComponent(data.folder)}`), receipt);
+      } catch {
+        // 刷新失败不影响写入结果：退回旧的结果行显示回执
+        if (result) result.textContent = receipt;
       }
-      // 重新读一次依据，让"数据库现值"立刻更新
-      try { renderReport(host, await api(`/time-of-day/inspect?folder=${encodeURIComponent(data.folder)}`)); } catch { /* 刷新失败不影响写入结果 */ }
     } catch (error) {
       if (result) result.textContent = `写入失败：${error.message}`;
     } finally {

@@ -1,5 +1,5 @@
 /**
- * 时段复核面板「显示层」的防回归测试（1.0.8 修的两个界面缺陷）。
+ * 时段复核面板「显示层」的防回归测试（1.0.8 修的两个界面缺陷 + 1.0.9 的反馈修复）。
  *
  * 为什么不直接加进 time-of-day-inspect-ui.test.js：
  *   那个文件是既有的门禁套件，改动它会波及别人的测试流程。这里单独成文件，
@@ -57,17 +57,34 @@ function segment(index, verdictLabel) {
   };
 }
 
-async function renderPanel(segments) {
-  const window = { setTimeout: (fn) => setTimeout(fn, 0), confirm: () => true };
-  window.fetch = async () => ({
-    json: async () => ({
-      code: 0,
-      data: {
-        folder: FOLDER, segments, current: null, mapping: null,
-        thresholds: { brightnessDay: 110, brightnessNight: 62, warmthDusk: 10 },
-      },
-    }),
-  });
+/** 报告里的画面卡（注意用完整类名比对：ln-todCardActions 也含 ln-todCard 子串）。 */
+function cardsOf(box) {
+  return box.descendants().filter(element => String(element.className).split(/\s+/u).includes("ln-todCard"));
+}
+
+/**
+ * options.current  —— 数据库现值映射（{ TOD12: "DEFAULT", … }），null 表示库里是空
+ * options.confirm  —— 替换 confirm；缺省会记录每次提问并一律答应（prompts 里能读到）
+ * options.respond  —— 自定义响应（{ path, init, calls, base } → { code, data }），缺省一律返回 base
+ */
+async function renderPanel(segments, options = {}) {
+  const prompts = [];
+  const calls = [];
+  const base = {
+    folder: FOLDER, segments, current: options.current ?? null, mapping: null,
+    thresholds: { brightnessDay: 110, brightnessNight: 62, warmthDusk: 10 },
+  };
+  const window = {
+    setTimeout: (fn) => setTimeout(fn, 0),
+    confirm: options.confirm ?? ((message) => { prompts.push(message); return true; }),
+  };
+  window.fetch = async (path, init) => {
+    calls.push({ path: String(path), init, body: init && init.body ? JSON.parse(init.body) : null });
+    const payload = options.respond
+      ? options.respond({ path: String(path), init, calls: calls.length, base })
+      : { code: 0, data: base };
+    return { json: async () => payload };
+  };
   const document = { createElement: (tag) => new FakeElement(tag), querySelector: () => null };
   new Function("window", "document", source)(window, document);
 
@@ -81,7 +98,7 @@ async function renderPanel(segments) {
     box.find(element => element.tagName === "BUTTON" && element.textContent === REWORK_LABEL),
     "报告里应该有重写按钮（数据没渲染出来的话这条会先挂）",
   );
-  return { box };
+  return { box, prompts, calls };
 }
 
 // 后端给的是原始浮点（亮度如 227.285），判定阈值却是整数（110 / 62 / 10）。
@@ -159,4 +176,80 @@ test("「曲名与时段」页的就地依据也走同一个取整函数", async
     /亮度 \$\{segment\.brightness/u,
     "就地依据不能直接拼原始浮点（会显示 227.285）",
   );
+});
+
+// 1.0.9：手动指定写库成功以前只回一句「已写入 N 行」，界面上看不出「这一段现在算哪个时段」——
+// 照着截图核对修复效果时就是这么卡住的。每张画面卡必须直接写出它在数据库里的当前归属，
+// 没被任何时段占着就老实写「未指定」，不能猜。
+test("每张画面卡写明它当前被哪个时段占着，没被占就写未指定", async () => {
+  const segments = [segment(0, "白天"), segment(1, "傍晚"), segment(2, "夜晚")];
+  const all = await renderPanel(segments, {
+    current: { TOD12: "DEFAULT", TOD1730: "DEFAULT_2", TOD20: "DEFAULT_3" },
+  });
+  const texts = cardsOf(all.box).map(card => card.textOf());
+  assert.match(texts[0], /当前：白天/u);
+  assert.match(texts[1], /当前：傍晚/u);
+  assert.match(texts[2], /当前：夜晚/u);
+
+  // 只把「夜晚」指到第 1 段：第 1 段归夜晚，另外两段谁都不占 → 未指定
+  const partial = await renderPanel(segments, { current: { TOD20: "DEFAULT" } });
+  const partialTexts = cardsOf(partial.box).map(card => card.textOf());
+  assert.match(partialTexts[0], /当前：夜晚/u);
+  assert.match(partialTexts[1], /当前：未指定/u);
+  assert.match(partialTexts[2], /当前：未指定/u);
+});
+
+// 1.0.9：手动指定是有代价的 —— 同一段只能占一个时段。以前确认框只说「设为夜晚」，
+// 用户不知道原来占着它的「白天」会被清空、目标时段原本指着的那段会被替换。
+test("确认框提前讲清哪个时段会被清空、哪个时段会被替换", async () => {
+  const segments = [segment(0, "白天"), segment(1, "傍晚"), segment(2, "夜晚")];
+  const { box, prompts } = await renderPanel(segments, {
+    current: { TOD12: "DEFAULT", TOD1730: "DEFAULT_2", TOD20: "DEFAULT_3" },
+  });
+  const night = cardsOf(box)[0].querySelectorAll("button").find(button => button.textContent === "夜晚");
+  assert.ok(night, "第 1 段卡里应该有「夜晚」按钮");
+  await night.click();
+
+  assert.equal(prompts.length, 1, "点一下只应该问一次");
+  assert.match(prompts[0], /第 1 段画面设为「夜晚」/u);
+  assert.match(prompts[0], /当前「白天」指向这一段，会被清空/u, "第 1 段现在占着「白天」，改到夜晚就得把白天清掉");
+  assert.match(prompts[0], /「夜晚」原本指向第 3 段，将被替换/u, "「夜晚」原本指着第 3 段，界面要说清");
+});
+
+// 1.0.9：写库成功的回执必须写清「改成了什么、原来那个时段怎么了」，而且**重渲染之后仍然看得见**。
+// 老代码的顺序是「先往结果行写回执 → 再整体重渲染」——重渲染会把整块报告连同结果行一起换掉，
+// 回执当场消失，用户点完什么都看不到。这条用「回执节点仍在当前报告里」把它钉死。
+test("写入回执写清改动，并且在重渲染之后仍然看得见", async () => {
+  const segments = [segment(0, "白天"), segment(1, "傍晚"), segment(2, "夜晚")];
+  const before = { TOD12: "DEFAULT", TOD1730: "DEFAULT_2", TOD20: "DEFAULT_3" };
+  const posted = {
+    folder: FOLDER,
+    slot: "TOD20",
+    slotLabel: "夜晚",
+    variant: "DEFAULT",
+    previous: before,
+    mapping: { TOD12: null, TOD1730: "DEFAULT_2", TOD20: "DEFAULT" },
+    written: 1,
+    backupFile: "backup-2026.sqlite",
+  };
+  const { box } = await renderPanel(segments, {
+    current: before,
+    respond: ({ init, calls, base }) => {
+      if (init && init.method === "POST") return { code: 0, data: posted };
+      // 第一次 GET 是「查看依据」，写入之后的第二次 GET 要带回新的现值
+      return { code: 0, data: { ...base, current: calls > 1 ? posted.mapping : before } };
+    },
+  });
+  const night = cardsOf(box)[0].querySelectorAll("button").find(button => button.textContent === "夜晚");
+  await night.click();
+
+  const result = box.find(element => String(element.className).split(/\s+/u).includes("ln-todResult"));
+  assert.ok(result, "重渲染之后报告里应该还有结果行");
+  assert.match(result.textContent, /✓ 已写入 1 行/u);
+  assert.match(result.textContent, /夜晚 → 第 1 段（DEFAULT）/u, "回执要说清这次是把哪一段指给了哪个时段");
+  assert.match(result.textContent, /原「白天」已清空/u, "被清空的时段必须在回执里点出来");
+  assert.match(result.textContent, /备份 backup-2026\.sqlite/u);
+  // 重渲染后每张卡的「当前」也要跟着变
+  assert.match(cardsOf(box)[0].textOf(), /当前：夜晚/u);
+  assert.match(cardsOf(box)[2].textOf(), /当前：未指定/u);
 });

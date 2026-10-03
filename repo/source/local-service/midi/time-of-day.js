@@ -92,7 +92,16 @@ export function configure(options = {}) {
   USER_DATA_DIR = pick(options.dataDir, USER_DATA_DIR);
   if (USER_DATA_DIR && !DATABASE_PATH) DATABASE_PATH = join(USER_DATA_DIR, "database", "olivia-local.sqlite");
   DATABASE_PATH = pick(options.databasePath, DATABASE_PATH);
-  BACKUP_DIR = pick(options.backupDir, BACKUP_DIR || (DATABASE_PATH ? dirname(DATABASE_PATH) : ""));
+  // 备份要跟着**这次真正要写的库**走：BACKUP_DIR 一直被上面那行的模块级默认值填满，
+  // `BACKUP_DIR || dirname(DATABASE_PATH)` 这个兜底永远轮不到 —— 便携版 / --data-dir 时
+  // 备份会落进安装目录树，用户找不到也带不走（1.0.9 修）。
+  if (typeof options.backupDir === "string" && options.backupDir.trim()) {
+    BACKUP_DIR = resolve(options.backupDir.trim());
+  } else if (typeof options.databasePath === "string" && options.databasePath.trim()) {
+    BACKUP_DIR = dirname(DATABASE_PATH);
+  } else {
+    BACKUP_DIR = BACKUP_DIR || (DATABASE_PATH ? dirname(DATABASE_PATH) : "");
+  }
   LIBRARY_ROOT = pick(options.libraryRoot, LIBRARY_ROOT);
   FFMPEG_PATH = typeof options.ffmpegPath === "string" && options.ffmpegPath.trim()
     ? options.ffmpegPath.trim()
@@ -480,7 +489,12 @@ export async function createTimeOfDayRoutes(options = {}) {
     };
   }
 
-  const backupDir = resolve(options.backupDir ?? BACKUP_DIR ?? dirname(databasePath));
+  // 备份必须和**这次真正要写的库**放在一起：BACKUP_DIR 是模块级默认值（安装目录的 UserData\database），
+  // 一直非空，`?? dirname(databasePath)` 永远轮不到 —— 便携版 / --data-dir 时备份会落进安装目录树
+  // （1.0.9 修复：沙箱实测写到了 repo/source/UserData/database）。
+  const backupDir = resolve(
+    options.backupDir ?? (options.databasePath ? dirname(databasePath) : BACKUP_DIR) ?? dirname(databasePath),
+  );
   const ffmpegPath = options.ffmpegPath ?? "";
 
   // 一次会话（= 一次服务进程）只备份一次数据库
