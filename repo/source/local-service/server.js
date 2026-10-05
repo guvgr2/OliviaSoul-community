@@ -29,7 +29,7 @@ import { createCommandEvents } from "./lyrics/command-events.js";
 import { createNativeLyricsObserver } from './lyrics/native.js';
 import { createNativeLyricsControl } from './lyrics/native-control.js';
 import { createHash, randomUUID } from "node:crypto";
-import { copyFile, readFile, writeFile, mkdir, open, rename, rm, stat, statfs } from "node:fs/promises";
+import { access, copyFile, readFile, writeFile, mkdir, open, rename, rm, stat, statfs } from "node:fs/promises";
 import { createReadStream, createWriteStream, existsSync, readFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -1941,6 +1941,96 @@ export async function createOliviaService(options = {}) {
     return exchange;
   }
 
+  function letterExportRows(userId) {
+    return db.prepare("SELECT * FROM letters WHERE user_id = ? ORDER BY created_at ASC, rowid ASC").all(userId);
+  }
+
+  // 精确到秒：旧名字只到分钟，同一分钟内连点两次导出会撞名并直接覆盖掉前一份。
+  function letterExportStamp(epochSeconds) {
+    const second = String(new Date(epochSeconds * 1000).getSeconds()).padStart(2, "0");
+    return `${localDate(epochSeconds).replace(/-/gu, "")}-${localTime(epochSeconds).replace(/:/gu, "")}${second}`;
+  }
+
+  // 就算精确到秒也可能撞名（同一秒里连点、或系统时间被改回去），所以落盘前再让一步：撞了就加 -2、-3。
+  async function letterExportFileName(directory, base, format) {
+    for (let index = 1; index <= 100; index += 1) {
+      const name = index === 1 ? `${base}.${format}` : `${base}-${index}.${format}`;
+      try {
+        await access(join(directory, name));
+      } catch {
+        return name;
+      }
+    }
+    throw httpError(409, "导出目录里的同名文件太多了，先清理一下再导出吧");
+  }
+
+  // 未到 available_at 的回信一律按「还没收到」处理：导出物不该剧透还没解锁的回信。
+  function letterExportReplied(row, at) {
+    return row.status === STATUS.REPLIED && Boolean(row.reply_text) && Number(row.available_at ?? 0) <= at;
+  }
+
+  function letterExportStateLabel(row, at) {
+    if (letterExportReplied(row, at)) return row.reply_label || "回信";
+    if (row.status === STATUS.FAILED) return "回信失败";
+    return "等待回信";
+  }
+
+  // 通信人名字优先取当前用户设置；用户还没起名时退回信件自带的名字，避免出现「与的往来信件」。
+  function letterExportPartner(user, rows) {
+    return user.person || rows.find(row => row.person)?.person || "林离";
+  }
+
+  function letterExportMarkdown(user, rows, exportedAt) {
+    const partner = letterExportPartner(user, rows);
+    const repliedCount = rows.filter(row => letterExportReplied(row, exportedAt)).length;
+    const lines = [
+      `# 与${partner}的往来信件`,
+      "",
+      `- 导出时间：${localDate(exportedAt)} ${localTime(exportedAt)}`,
+      `- 通信人：${partner}`,
+      `- 共 ${rows.length} 封（已回信 ${repliedCount} 封）`,
+      "- 本文件由 OliviaSoul 本地服务生成，只包含信件正文与回信，不含账号、密钥或本机路径信息。",
+      "",
+      "---",
+      "",
+    ];
+    rows.forEach((row, index) => {
+      const date = row.letter_date || localDate(row.created_at);
+      const time = row.letter_time || localTime(row.created_at);
+      const replied = letterExportReplied(row, exportedAt);
+      lines.push(`## ${String(index + 1).padStart(2, "0")} · ${date} ${time}`, "");
+      lines.push(`**我写给${partner}**`, "", row.content ?? "", "");
+      lines.push(`**${partner}的回信**（${letterExportStateLabel(row, exportedAt)}）`, "",
+        replied ? row.reply_text : "（尚未收到回信）", "");
+      if (replied && row.reply_video) lines.push(`> 回信视频：${row.reply_video}`, "");
+      lines.push("---", "");
+    });
+    return `${lines.join("\n").trimEnd()}\n`;
+  }
+
+  function letterExportJson(user, rows, exportedAt) {
+    return `${JSON.stringify({
+      schema: "olivia-soul-letters",
+      version: 1,
+      exportedAt: new Date(exportedAt * 1000).toISOString(),
+      person: letterExportPartner(user, rows),
+      count: rows.length,
+      letters: rows.map(row => {
+        const replied = letterExportReplied(row, exportedAt);
+        return {
+          letterId: row.id,
+          date: row.letter_date || localDate(row.created_at),
+          time: row.letter_time || localTime(row.created_at),
+          incoming: row.content ?? "",
+          reply: replied ? row.reply_text : "",
+          replyLabel: letterExportStateLabel(row, exportedAt),
+          hasReplyVideo: replied && Boolean(row.reply_video),
+          contentMd5: row.content_md5,
+        };
+      }),
+    }, null, 2)}\n`;
+  }
+
   function memorySourceMd5(userId) {
     const rows = archiveRows(userId).map(row => ({
       letterId: row.id,
@@ -2976,7 +3066,7 @@ export async function createOliviaService(options = {}) {
     // 正确做法：serveStatic 启动时扫描 publicRoot（只留必要的排除项），或把清单抽成单一常量
     //   并补一条「与 public/ 实际文件比对」的测试，让漏登记在测试期就暴露。
     // 何时回来收拾：下一次新增/删除 public/ 前端文件时，或静态服务改为目录扫描的那一版。
-    if (!["index.html", "app.js", "game-lyrics.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "update-download-ui.js", "tab-notices.js", "patch-loss-notice.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "diagnostics-panel.js", "twin-groups-panel.js", "game-log-panel.js", "getting-started.js", "game-stability-panel.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
+    if (!["index.html", "app.js", "game-lyrics.js", "game-letter-export.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "update-download-ui.js", "tab-notices.js", "patch-loss-notice.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "diagnostics-panel.js", "twin-groups-panel.js", "game-log-panel.js", "getting-started.js", "game-stability-panel.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
       throw httpError(404, "文件不存在");
     const file = join(publicRoot, relative);
     const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".png": "image/png" };
@@ -3635,6 +3725,31 @@ export async function createOliviaService(options = {}) {
       const shareId = row.share_id ?? randomUUID();
       if (!row.share_id) db.prepare("UPDATE letters SET share_id = ? WHERE id = ?").run(shareId, row.id);
       return ok(req, res, { shareId });
+    }
+
+    if (req.method === "POST" && path === "/toy/letter/export") {
+      const user = getLocalUser();
+      const body = await readJson(req).catch(() => ({}));
+      const format = String(body?.format ?? "md").toLowerCase() === "json" ? "json" : "md";
+      const rows = letterExportRows(user.id);
+      if (!rows.length) throw httpError(409, "还没有可以导出的信件");
+      const exportedAt = nowSeconds();
+      const directory = join(dataDir, "exports");
+      await mkdir(directory, { recursive: true });
+      const fileName = await letterExportFileName(directory, `信件导出-${letterExportStamp(exportedAt)}`, format);
+      const filePath = join(directory, fileName);
+      const text = format === "json" ? letterExportJson(user, rows, exportedAt) : letterExportMarkdown(user, rows, exportedAt);
+      await writeFile(filePath, text, "utf8");
+      console.log(`[letter-export] format=${format} count=${rows.length} bytes=${Buffer.byteLength(text, "utf8")}`);
+      return ok(req, res, {
+        format,
+        file: fileName,
+        path: filePath,
+        directory,
+        count: rows.length,
+        repliedCount: rows.filter(row => letterExportReplied(row, exportedAt)).length,
+        bytes: Buffer.byteLength(text, "utf8"),
+      });
     }
 
     function playlistDuration(value) {

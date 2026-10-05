@@ -872,10 +872,10 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
     readFile(new URL("../../tools/upgrade-webplayer-v6-v7.ps1", import.meta.url), "utf8"),
     readFile(new URL("../desktop/controller.js", import.meta.url), "utf8"),
   ]);
-  // 当前补丁标记是 v60（v60 只改了 handleTogglePlay 的「再次播放」恢复逻辑，仍是 FE v59 那套注入；
+  // 当前补丁标记是 v61（v61 在原有注入之外多加了一个 game-letter-export.js 桥，仍是 FE v59 那套注入；
   // 文档里写「FE v59 或更高」依然成立）；
   // 这里钉住它，改补丁版本时测试会提醒你同步文档
-  assert.match(patchScript, /OliviaSoulPatch:mail-music-v60/u);
+  assert.match(patchScript, /OliviaSoulPatch:mail-music-v61/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v32/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v30/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v29/u);
@@ -4247,7 +4247,8 @@ test("管理前端包含视频维护、上方插入和本地服务状态", async
   assert.doesNotMatch(patch, /\$listWaitingCondition|\$listWaitingReply|\$waitingCondition/u);
   assert.match(patch, /\$pollingStateTo/u);
   assert.match(patch, /\$processingIconTo/u);
-  assert.match(patch, /OliviaSoulPatch:mail-music-v60/u);
+  assert.match(patch, /OliviaSoulPatch:mail-music-v61/u);
+  assert.match(patch, /admin\/game-letter-export\.js/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v32/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v30/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v29/u);

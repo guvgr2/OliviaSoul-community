@@ -39,7 +39,7 @@ if ($mainFiles.Count -ne 1) { throw "expected one main-*.js, got $($mainFiles.Co
 $utf8 = New-Object System.Text.UTF8Encoding $false
 $mainPath = $mainFiles[0].FullName
 $text = [IO.File]::ReadAllText($mainPath, $utf8)
-$patchMarker = '/*OliviaSoulPatch:mail-music-v60*/'
+$patchMarker = '/*OliviaSoulPatch:mail-music-v61*/'
 if ($text.Contains($patchMarker)) { throw "original feapp already contains current patch" }
 $text = $patchMarker + $text
 $playerCommandUrl = $ServiceUrl.TrimEnd("/") + "/toy/player-command"
@@ -50,7 +50,7 @@ if (-not (Test-Path -LiteralPath $songEditorSourcePath -PathType Leaf)) { throw 
 $songEditorSource = [IO.File]::ReadAllText($songEditorSourcePath, $utf8)
 $songEditorBase = $ServiceUrl.TrimEnd("/") + "/toy"
 $songEditorBridge = @'
-(()=>{const s=document.createElement("script");s.charset="utf-8";s.src="__OLIVIA_SONG_EDITOR_BASE__/../admin/game-lyrics.js";document.head.appendChild(s)})();
+(()=>{const s=document.createElement("script");s.charset="utf-8";s.src="__OLIVIA_SONG_EDITOR_BASE__/../admin/game-lyrics.js";document.head.appendChild(s);const t=document.createElement("script");t.charset="utf-8";t.src="__OLIVIA_SONG_EDITOR_BASE__/../admin/game-letter-export.js";document.head.appendChild(t)})();
 function OliviaSoulEditSong(song){
   if(!String(song&&song.videoUrl||"").includes("/toy/midi/songs/"))return;
   return window.OliviaSoulSongEditor.open({baseUrl:"__OLIVIA_SONG_EDITOR_BASE__",songId:window.OliviaSoulSongEditor.stableId(song)});
@@ -177,6 +177,180 @@ $toggleLocalTo = 'else if(m.value)w("stop_button"),Ct({cmd:"stop"}),m.value=!1,u
 $toggleLocalCount = ([regex]::Matches($text, [regex]::Escape($toggleLocalFrom))).Count
 if ($toggleLocalCount -ne 1) { throw "expected one songlist play toggle, got $toggleLocalCount" }
 $text = $text.Replace($toggleLocalFrom, $toggleLocalTo)
+
+# g30：随机播放不再连续抽到同一首 —— Fisher-Yates 牌堆 + 游标 + localStorage。
+# 官方原本是「每次随机抽 + 排除最近 K 首」：K=clamp(2,floor(len/3),5)，短歌单（<=6 首）排除窗口一吃满
+# 就退化成「只排除当前」的纯随机；播放历史 I.value 又会被切页面/切模式清空，所以历史法天生不可靠。
+# 牌堆本体放 $shuffleDeckSource，注入到 bundle 顶部（与 x/a/u/f 同作用域），这里只改 4 个调用点：
+# 下一首、上一首、songlist 页面的「播放」（原来固定播第一首可用曲，根本不随机）、切到随机模式。
+# 不动 S()（上一首按钮）：它走 L()，游标已经在 L() 里退好了，I.value 的既有行为原样保留。
+$shuffleDeckSource = @'
+/*OliviaSoulShuffleDeck*/
+// 「随机播放不重复」牌堆：Fisher-Yates 洗牌 + 游标 + localStorage。
+// 为什么不用播放历史 I.value 去重：它会被切页面/切模式清空，而且按 itemId 排重拦不住同曲多条。
+let OliviaSoulShuffleDeck=[],OliviaSoulShuffleCursor=0,OliviaSoulShuffleTail="",OliviaSoulShuffleReady=false,OliviaSoulShuffleSource="";
+const OliviaSoulShuffleKey="olivia-soul-shuffle-deck-v1";
+function OliviaSoulShuffleId(item){
+  if(!item)return "";
+  try{return String(window.OliviaSoulSongEditor.stableId(item)||"")}
+  catch(error){return String(item.itemId!=null?item.itemId:item.id||"")}
+}
+function OliviaSoulShuffleUsable(){
+  const list=[];
+  for(const item of x.value)if(a(item))list.push(item);
+  return list;
+}
+// 当前歌单的指纹（可用曲目的 id 列表）：换歌单/换列表时指纹变化，必须重洗一轮。
+function OliviaSoulShuffleSourceOf(){
+  return JSON.stringify(OliviaSoulShuffleUsable().map(OliviaSoulShuffleId));
+}
+let OliviaSoulShuffleSaved="";
+// 只写真正变过的状态：上一首/下一首/切歌单会连着调好几次 Save，重复写整份牌堆纯属浪费。
+function OliviaSoulShuffleSave(){
+  try{
+    const text=JSON.stringify({ids:OliviaSoulShuffleDeck.map(OliviaSoulShuffleId),cursor:OliviaSoulShuffleCursor,tail:OliviaSoulShuffleTail,source:OliviaSoulShuffleSource});
+    if(text===OliviaSoulShuffleSaved)return;
+    OliviaSoulShuffleSaved=text;
+    localStorage.setItem(OliviaSoulShuffleKey,text);
+  }
+  catch(error){}
+}
+function OliviaSoulShuffleLoad(){
+  try{
+    const raw=localStorage.getItem(OliviaSoulShuffleKey);
+    if(!raw)return null;
+    const saved=JSON.parse(raw);
+    return saved&&Array.isArray(saved.ids)?saved:null;
+  }catch(error){return null}
+}
+// 把牌堆对齐到当前可用曲目：保留原顺序、丢掉已删除的、把新出现的补到末尾；
+// 每张牌都换成 x.value 里的当前对象（列表刷新后对象会重建，直接 indexOf 会认不出来）。
+function OliviaSoulShuffleSync(){
+  const usable=OliviaSoulShuffleUsable(),byId=new Map();
+  for(const item of usable)if(!byId.has(OliviaSoulShuffleId(item)))byId.set(OliviaSoulShuffleId(item),item);
+  const deck=[];
+  for(const item of OliviaSoulShuffleDeck){
+    const id=OliviaSoulShuffleId(item);
+    if(byId.has(id)){deck.push(byId.get(id));byId.delete(id)}
+  }
+  for(const item of byId.values())deck.push(item);
+  OliviaSoulShuffleDeck=deck;
+}
+// 重新洗一轮；previous 是上一轮最后一首，用来避免「一轮的结尾」和「下一轮的开头」是同一首。
+function OliviaSoulShuffleReshuffle(previous){
+  const deck=OliviaSoulShuffleDeck.slice();
+  for(let index=deck.length-1;index>0;index--){
+    const pick=Math.floor(Math.random()*(index+1)),swap=deck[index];
+    deck[index]=deck[pick];deck[pick]=swap;
+  }
+  if(deck.length>1&&previous&&OliviaSoulShuffleId(deck[0])===previous){
+    const swap=deck[0];deck[0]=deck[1];deck[1]=swap;
+  }
+  OliviaSoulShuffleDeck=deck;
+  OliviaSoulShuffleCursor=0;
+}
+// 首次调用时把 localStorage 里的进度接回来；游标到底就重洗，绝不退化成纯随机。
+// 另外比「当前歌单指纹」判断列表有没有换过：换过就必须重洗，否则换列表后的第一轮会把新歌单
+// 按原顺序播一遍（旧牌被 Sync 全丢掉、新的按 x.value 顺序补到尾巴，游标又没越界，于是不洗）——那就不是随机。
+function OliviaSoulShufflePrepare(){
+  const usable=OliviaSoulShuffleUsable();
+  if(!usable.length){OliviaSoulShuffleDeck=[];OliviaSoulShuffleCursor=0;OliviaSoulShuffleSource="";return}
+  if(!OliviaSoulShuffleReady){
+    OliviaSoulShuffleReady=true;
+    const saved=OliviaSoulShuffleLoad();
+    if(saved){
+      const byId=new Map();
+      for(const item of usable)if(!byId.has(OliviaSoulShuffleId(item)))byId.set(OliviaSoulShuffleId(item),item);
+      for(const id of saved.ids){
+        const item=byId.get(String(id));
+        if(item){OliviaSoulShuffleDeck.push(item);byId.delete(String(id))}
+      }
+      OliviaSoulShuffleCursor=Math.max(0,Number(saved.cursor)||0);
+      OliviaSoulShuffleTail=String(saved.tail||"");
+      OliviaSoulShuffleSource=String(saved.source||"");
+    }
+  }
+  const source=OliviaSoulShuffleSourceOf();
+  const stale=source!==OliviaSoulShuffleSource;
+  OliviaSoulShuffleSync();
+  if(stale||OliviaSoulShuffleDeck.length===0||OliviaSoulShuffleCursor>=OliviaSoulShuffleDeck.length){
+    OliviaSoulShuffleSource=source;
+    OliviaSoulShuffleReshuffle(OliviaSoulShuffleTail);
+  }
+}
+function OliviaSoulShuffleNextIndex(){
+  if(!x.value.length)return -1;
+  OliviaSoulShufflePrepare();
+  if(!OliviaSoulShuffleDeck.length)return -1;
+  if(OliviaSoulShuffleCursor>=OliviaSoulShuffleDeck.length)OliviaSoulShuffleReshuffle(OliviaSoulShuffleTail);
+  const item=OliviaSoulShuffleDeck[OliviaSoulShuffleCursor];
+  OliviaSoulShuffleCursor++;
+  OliviaSoulShuffleTail=OliviaSoulShuffleId(item);
+  OliviaSoulShuffleSave();
+  const index=x.value.indexOf(item);
+  return index>=0?index:-1;
+}
+function OliviaSoulShufflePrevIndex(){
+  if(!x.value.length)return -1;
+  OliviaSoulShufflePrepare();
+  if(!OliviaSoulShuffleDeck.length)return -1;
+  const at=Math.max(0,OliviaSoulShuffleCursor-2);
+  OliviaSoulShuffleCursor=at+1;
+  const item=OliviaSoulShuffleDeck[at];
+  OliviaSoulShuffleTail=OliviaSoulShuffleId(item);
+  OliviaSoulShuffleSave();
+  const index=x.value.indexOf(item);
+  return index>=0?index:-1;
+}
+// 切到随机模式时从当前这首重新起一轮，避免刚切过去就重复。
+function OliviaSoulShuffleRestart(){
+  OliviaSoulShuffleTail=OliviaSoulShuffleId(u.value||f.value||null);
+  OliviaSoulShuffleDeck=[];
+  OliviaSoulShuffleCursor=0;
+  OliviaSoulShuffleReady=true;
+  OliviaSoulShuffleSource=OliviaSoulShuffleSourceOf();
+  OliviaSoulShuffleSync();
+  OliviaSoulShuffleReshuffle(OliviaSoulShuffleTail);
+  OliviaSoulShuffleSave();
+}
+'@
+
+$shuffleNextFrom = '$=()=>{if(!x.value.length)return-1;if(p.value===ot.Shuffle){const B=P.value;if(x.value.length===1)return a(x.value[0])?0:-1;const K=Math.min(Math.max(2,Math.floor(x.value.length/3)),5),W=I.value.slice(-K),ue=x.value.map((re,ye)=>ye).filter(re=>re!==B&&!W.includes(x.value[re].itemId)&&a(x.value[re]));if(ue.length===0){const re=x.value.map((ye,Ee)=>Ee).filter(ye=>ye!==B&&a(x.value[ye]));return re.length===0?-1:re[Math.floor(Math.random()*re.length)]}return ue[Math.floor(Math.random()*ue.length)]}else{const B=P.value,K=x.value.length;for(let W=1;W<=K;W++){const ue=(B+W)%K;if(a(x.value[ue]))return ue}return-1}}'
+$shuffleNextTo = '$=()=>{if(!x.value.length)return-1;if(p.value===ot.Shuffle)return OliviaSoulShuffleNextIndex();const B=P.value,K=x.value.length;for(let W=1;W<=K;W++){const ue=(B+W)%K;if(a(x.value[ue]))return ue}return-1}'
+
+$shufflePrevFrom = 'L=()=>{if(!x.value.length)return-1;if(p.value===ot.Shuffle)for(let W=I.value.length-2;W>=0;W--){const ue=I.value[W],re=x.value.findIndex(ye=>ye.itemId===ue);if(re!==-1&&a(x.value[re]))return re}const B=P.value,K=x.value.length;for(let W=1;W<=K;W++){const ue=(B-W+K)%K;if(a(x.value[ue]))return ue}return-1}'
+$shufflePrevTo = 'L=()=>{if(!x.value.length)return-1;if(p.value===ot.Shuffle)return OliviaSoulShufflePrevIndex();const B=P.value,K=x.value.length;for(let W=1;W<=K;W++){const ue=(B-W+K)%K;if(a(x.value[ue]))return ue}return-1}'
+
+$shufflePlayFrom = 'U=()=>{if(h.value==="songlist"){const K=x.value.findIndex(W=>a(W));K!==-1&&M(x.value[K]);return}const B=$();B!==-1&&x.value[B]&&M(x.value[B])}'
+$shufflePlayTo = 'U=()=>{if(h.value==="songlist"&&p.value!==ot.Shuffle){const K=x.value.findIndex(W=>a(W));K!==-1&&M(x.value[K]);return}const B=$();B!==-1&&x.value[B]&&M(x.value[B])}'
+
+$shuffleModeFrom = 'ne=()=>{p.value===ot.Shuffle?p.value=ot.Repeat:p.value===ot.Repeat?p.value=ot.Single:p.value===ot.Single&&(p.value=ot.Shuffle,u.value?I.value=[u.value.itemId]:I.value=[]),t.value===Se.LITE&&Ct({cmd:"setPlayMode",mode:p.value})}'
+$shuffleModeTo = 'ne=()=>{p.value===ot.Shuffle?p.value=ot.Repeat:p.value===ot.Repeat?p.value=ot.Single:p.value===ot.Single&&(p.value=ot.Shuffle,OliviaSoulShuffleRestart(),u.value?I.value=[u.value.itemId]:I.value=[]),t.value===Se.LITE&&Ct({cmd:"setPlayMode",mode:p.value})}'
+
+# 这四处替换的是压缩后的函数体（不像端点那样只是字符串字面量），官方一重建前端 bundle 就会失配。
+# 所以做成「全有或全无」：四处都唯一命中才整块应用；只要有一处对不上，就整块跳过并报出来 ——
+# 不能让「随机不重复」一个功能失配就拖垮整个前端补丁（端点、歌词、进度上报都还在，用户还能用）。
+# 这个块必须放在四个 $shuffleXxxFrom 全部定义之后：PowerShell 里未定义变量会静默变成空串，
+# 那样每处都算「命中 0 次」，功能会被永久跳过却看不出原因。
+$shuffleSites = @(
+    @{ Name = "shuffle next-track resolver"; From = $shuffleNextFrom; To = $shuffleNextTo },
+    @{ Name = "shuffle previous-track resolver"; From = $shufflePrevFrom; To = $shufflePrevTo },
+    @{ Name = "next-song entry point"; From = $shufflePlayFrom; To = $shufflePlayTo },
+    @{ Name = "play-mode cycler"; From = $shuffleModeFrom; To = $shuffleModeTo }
+)
+$shuffleMisses = New-Object System.Collections.Generic.List[string]
+foreach ($shuffleSite in $shuffleSites) {
+    $shuffleSite.Count = ([regex]::Matches($text, [regex]::Escape($shuffleSite.From))).Count
+    if ($shuffleSite.Count -ne 1) { $shuffleMisses.Add("$($shuffleSite.Name)=$($shuffleSite.Count)") }
+}
+$shuffleDeckApplied = $shuffleMisses.Count -eq 0
+if ($shuffleDeckApplied) {
+    foreach ($shuffleSite in $shuffleSites) { $text = $text.Replace($shuffleSite.From, $shuffleSite.To) }
+    $shuffleDeckState = "applied"
+} else {
+    $shuffleDeckState = "skipped($($shuffleMisses -join ','))"
+    Write-Warning "random-playback deck skipped - the game bundle changed: $($shuffleMisses -join ', ')"
+}
 
 $playerStateStoreFrom = 'Ge=()=>{m.value&&z(),G(),h.value="playlist",x.value=[],I.value=[]};return{isSongAvailable:a'
 $playerStateStoreTo = 'Ge=()=>{m.value&&z(),G(),h.value="playlist",x.value=[],I.value=[]},OliviaSoulFinishLocalPlayback=async B=>{window.__OliviaSoulDuckIdleSince=0;OliviaSoulDuckAmbience(!1);try{fetch("' + $playerStateUrl + '",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({cmd:"progress",songId:window.__OliviaSoulSongId||"x",sessionId:window.__OliviaSoulSessionId||"x",currentTime:0,note:"STOP u="+(u.value?OliviaSoulSongIdFromItem(u.value):"none")+" f="+(f.value?OliviaSoulSongIdFromItem(f.value):"none")+" xlen="+x.value.length+" h="+h.value+" ct="+d.value})}).catch(function(){});}catch{}const K=Number(window.__OliviaSoulSessionEpoch||0),W=String(window.__OliviaSoulSongId||""),ue=String(B.sessionId||"");if(!W||String(B.songId)!==W||window.__OliviaSoulEndingSessionId===ue)return;window.__OliviaSoulEndingSessionId=ue;const re=h.value==="songlist";let ye=!1;try{const Ee=await fetch("' + $playerCommandUrl + '",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({cmd:"stop",songId:W,sessionId:ue,restoreDefault:re})}),ee=await Ee.json();ye=Ee.ok&&Number(ee&&ee.code)===0}catch{}if(Number(window.__OliviaSoulSessionEpoch||0)!==K||String(window.__OliviaSoulSongId||"")!==W){window.__OliviaSoulEndingSessionId===ue&&(window.__OliviaSoulEndingSessionId=null);return}if(!ye)return We({action:"sendWebPlayerControlCmd",data:{cmd:"stop"}}).catch(()=>{}),window.__OliviaSoulSongId=null,window.__OliviaSoulCommandRevision=null,window.__OliviaSoulSessionId=null,window.__OliviaSoulEndingSessionId=null,window.__OliviaSoulSessionEpoch=K+1,G();re&&We({action:"sendWebPlayerControlCmd",data:{cmd:"stop"}}).catch(()=>{}),window.__OliviaSoulSongId=null,window.__OliviaSoulCommandRevision=null,window.__OliviaSoulSessionId=null,window.__OliviaSoulEndingSessionId=null,window.__OliviaSoulSessionEpoch=K+1;if(re){G();return}window.__OliviaSoulApplyingProgress=!0,d.value=0;queueMicrotask(()=>{window.__OliviaSoulApplyingProgress=!1});const Le=u.value&&u.value.itemId;p.value===ot.Single&&u.value&&a(u.value)?M(u.value):U(),queueMicrotask(()=>{Number(window.__OliviaSoulSessionEpoch||0)===K+1&&!window.__OliviaSoulSongId&&!m.value&&u.value&&u.value.itemId===Le&&(We({action:"sendWebPlayerControlCmd",data:{cmd:"stop"}}).catch(()=>{}),G())})},OliviaSoulApplyPlayerState=B=>{if(String(B.songId)!==String(window.__OliviaSoulSongId)||String(B.sessionId)!==String(window.__OliviaSoulSessionId))return;const OliviaSoulDuration=Number(B.duration);if(Number.isFinite(OliviaSoulDuration)&&OliviaSoulDuration>0)for(const OliviaSoulItem of [u.value,f.value])OliviaSoulItem&&window.OliviaSoulSongEditor.stableId(OliviaSoulItem)===String(B.songId)&&(OliviaSoulItem.duration=OliviaSoulDuration,OliviaSoulItem.videoDuration=OliviaSoulDuration);if(B.playbackState==="ended"){if(window.__OliviaSoulEndingSessionId===String(B.sessionId||""))return;w("natural_end"),m.value=!1,OliviaSoulFinishLocalPlayback(B);return}d.value=Number(B.currentTime)||0,m.value=B.playbackState==="playing",(function(){try{const a=Number(B&&B.resumeAt);if(!(a>0))return;const sid=String(B&&B.sessionId||"");if(!sid||window.__OliviaSoulResumeAppliedSession===sid)return;window.__OliviaSoulResumeAppliedSession=sid;window.__OliviaSoulOfferResume&&window.__OliviaSoulOfferResume(a)}catch{}})()},OliviaSoulEnsurePlayerPoll=()=>{window.__OliviaSoulProgressPoll||(window.__OliviaSoulProgressPoll=setInterval(async()=>{
@@ -578,7 +752,8 @@ foreach ($replacementBase64 in $localeReplacementBase64) {
 }
 [IO.File]::WriteAllText($localePath, $localeText, $utf8)
 
-$text = $patchMarker + "`n" + $songEditorSource + "`n" + $songEditorBridge + "`n" + $text.Substring($patchMarker.Length)
+$shuffleInjection = if ($shuffleDeckApplied) { $shuffleDeckSource + "`n" } else { "" }
+$text = $patchMarker + "`n" + $songEditorSource + "`n" + $shuffleInjection + $songEditorBridge + "`n" + $text.Substring($patchMarker.Length)
 [IO.File]::WriteAllText($mainPath, $text, $utf8)
 
 # g27：注入后 JS 语法校验 —— 续播等注入一旦把 main 的 JS 写坏，游戏前端会整体失效。
@@ -693,6 +868,14 @@ if (-not $verifyText.Contains($addPlaylistTo)) { throw "patched archive missing 
 if (-not $verifyText.Contains($addPlaylistCallTo)) { throw "patched archive missing StudioLite add-playlist payload fix" }
 if (-not $verifyText.Contains($collectionAddTo)) { throw "patched archive missing Collection add-playlist payload fix" }
 if ($verifyText.Contains($offlinePlaylistSkip)) { throw "patched archive still has the original offline playlist fetch skip" }
+# 牌堆是可选功能：整块被跳过时就不能再要求产物里有它，否则等于把「官方改了 bundle」升级成补丁失败。
+if ($shuffleDeckApplied) {
+    if (-not $verifyText.Contains($shuffleDeckSource)) { throw "patched archive missing the shuffle deck" }
+    foreach ($shuffleSite in $shuffleSites) {
+        if (-not $verifyText.Contains($shuffleSite.To)) { throw "patched archive missing the $($shuffleSite.Name)" }
+        if ($verifyText.Contains($shuffleSite.From)) { throw "patched archive retains the original $($shuffleSite.Name)" }
+    }
+}
 
 if ($PatchNativeOfflineChecks) {
     if ($Version -ne '0.0.9.627') { throw "native widget patch only supports verified client 0.0.9.627" }
@@ -771,6 +954,7 @@ try {
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $source).Hash
 Write-Output "patched=$source"
 Write-Output "sha256=$hash"
+Write-Output "shuffleDeck=$shuffleDeckState"
 if ($PatchNativeOfflineChecks) {
     $studioHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $studioUiPath).Hash
     $pluginHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $containerPluginPath).Hash
