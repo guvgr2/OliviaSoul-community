@@ -3,7 +3,7 @@
 // 背景：程序版本标识从 gXX 改为语义化 1.0（上游部分 2008.2.7-linli9 不变）。
 // 若按普通字符串比较，"1"(ASCII 49) 小于 "g"(103)，装了 g28 的用户会被误判为
 // 「已是最新」而收不到 1.0 的更新提示。因此 releaseVersion 把本支标识统一映射为
-// 可比较序号：gXX → XX；语义化 → major*1000 + minor*10 + patch。
+// 可比较序号：gXX → XX；语义化 → major*10000 + minor*100 + patch（minor/patch 各两位）。
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -67,21 +67,44 @@ test("上游版本提升仍然生效", () => {
 
 test("解析结果形状一致（可直接逐段比较）", () => {
   assert.deepEqual(Array.from(context.version(T("g28"))), [2008, 2, 7, 9, 28]);
-  assert.deepEqual(Array.from(context.version(T("1.0"))), [2008, 2, 7, 9, 1000]);
-  assert.deepEqual(Array.from(context.version(T("1.1"))), [2008, 2, 7, 9, 1010]);
-  assert.deepEqual(Array.from(context.version(T("2.0"))), [2008, 2, 7, 9, 2000]);
+  assert.deepEqual(Array.from(context.version(T("1.0"))), [2008, 2, 7, 9, 10000]);
+  assert.deepEqual(Array.from(context.version(T("1.1"))), [2008, 2, 7, 9, 10100]);
+  assert.deepEqual(Array.from(context.version(T("2.0"))), [2008, 2, 7, 9, 20000]);
   assert.deepEqual(Array.from(context.version("2008.2.7-linli.9")), [2008, 2, 7, 9, 0]);
 });
 
 test("与历史小数字版本（如 g7）不会比较错", () => {
   // 用户担心：以前发过 g7，以后又出到 1.7，会不会混淆。
-  // 由于新格式序号从 1000 起步，任何 gXX 都严格小于它。
+  // 由于新格式序号从 10000 起步，任何 gXX（含 g999）都严格小于它。
   assert.equal(newer(T("g7"), T("1.0")), true, "装 g7 应看到 1.0 的更新");
   assert.equal(newer(T("g7"), T("1.7")), true, "装 g7 应看到 1.7 的更新");
   assert.equal(newer(T("1.7"), T("g7")), false, "1.7 不应被判为旧于 g7");
   assert.equal(newer(T("g7"), T("g8")), true, "旧格式之间仍然正确");
   assert.equal(newer(T("g99"), T("1.0")), true, "即使 g99 也小于 1.0");
-  assert.equal(newer(T("g999"), T("1.0")), true, "g999 仍小于 1.0（新格式从 1000 起）");
+  assert.equal(newer(T("g999"), T("1.0")), true, "g999 仍小于 1.0（新格式从 10000 起）");
+});
+
+// —— 真实事故回归（1.0.9 之后发现）：本支序号位宽只有一位 ——
+//
+// 事故现场：序号曾写作 major*1000 + minor*10 + patch，minor / patch 各占一位。
+// 于是 1.0.9 之后无论发 1.0.10 还是 1.1.0，都会编成同一个 1010：
+// 两边比较都是 false —— 装了其中一个的人，在更新页**永远**看不到另一个，
+// 而不是报错（静默失效，与 1.0.5 的 v 前缀事故同一类）。
+// 现在 minor / patch 各占两位：位宽上限是 1.0.99（10099）< 1.1.0（10100）。
+test("1.0.10 与 1.1.0 不再同号（位宽回归）", () => {
+  assert.deepEqual(Array.from(context.version(T("1.0.9"))), [2008, 2, 7, 9, 10009]);
+  assert.deepEqual(Array.from(context.version(T("1.0.10"))), [2008, 2, 7, 9, 10010]);
+  assert.deepEqual(Array.from(context.version(T("1.1.0"))), [2008, 2, 7, 9, 10100]);
+  assert.equal(newer(T("1.0.9"), T("1.0.10")), true, "1.0.9 应看到 1.0.10");
+  assert.equal(newer(T("1.0.9"), T("1.1.0")), true, "1.0.9 应看到 1.1.0");
+  assert.equal(newer(T("1.0.10"), T("1.1.0")), true, "1.0.10 应看到 1.1.0（旧编码下这两个同号）");
+  assert.equal(newer(T("1.1.0"), T("1.0.10")), false, "1.1.0 不应被判为旧于 1.0.10");
+});
+
+test("两位位宽内的相邻号仍严格递增", () => {
+  assert.equal(newer(T("1.0.99"), T("1.1.0")), true, "位宽上限 1.0.99 仍小于 1.1.0");
+  assert.equal(newer(T("1.1.99"), T("1.2.0")), true);
+  assert.equal(newer(T("1.99.99"), T("2.0.0")), true);
 });
 
 // —— 真实事故回归（1.0.6）：GitHub tag 带 v 前缀 ——

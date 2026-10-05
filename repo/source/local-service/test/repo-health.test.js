@@ -82,6 +82,16 @@ test("所有 .ps1 带 UTF-8 BOM（仓库规范：否则中文乱码）", () => {
   assert.deepEqual(missing, [], `以下 .ps1 缺 BOM（用 node .test-twins/add-bom.mjs 补）：\n${missing.join("\n")}`);
 });
 
+test("packaging/OliviaSoul.iss 带 UTF-8 BOM（否则安装器界面中文乱码）", () => {
+  // 真实教训（1.1.0）：.iss 不在 allSourceFiles 的扩展名白名单里（只收 .js/.json/.ps1），
+  // 所以上面那条「.ps1 必须带 BOM」管不到它；而顺手改 .iss 的编辑工具会吞掉 BOM，
+  // 结果安装器里所有中文字符串（CustomMessages、MsgBox 提示）变成乱码 —— 只有装机的人才会发现。
+  const file = join(serviceRoot, "packaging", "OliviaSoul.iss");
+  const bytes = readFileSync(file);
+  assert.ok(bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF,
+    "packaging/OliviaSoul.iss 缺 UTF-8 BOM（用 node .test-twins/add-bom.mjs 补）");
+});
+
 test("所有 JS/MJS 语法有效（只查源码目录，不查构建产物）", () => {
   const files = allSourceFiles([".js"]).filter(f => !f.includes(".min."));
   assert.ok(files.length > 0, "应找到 JS 文件");

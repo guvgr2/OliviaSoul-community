@@ -35,6 +35,7 @@ import {
   readBaseVersion,
   runVersionBump,
   shortVersion,
+  shortVersionProblem,
 } from "../../tools/lib/version-bump.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -192,6 +193,83 @@ describe("规则表与单一来源", () => {
     const rules = buildAdvisoryRules("2008.2.7-linli9-1.0.4");
     assert.ok(rules.length >= 3, "三份打包文档都要提示短版本号");
     for (const rule of rules) assert.ok(!rule.pattern.includes("%V%"), "advisory 规则不参与替换");
+  });
+
+  test("位宽校验：minor / patch 超过 99 才是超限（1.0.100 会与 1.1.0 撞号）", () => {
+    assert.equal(shortVersionProblem("2008.2.7-linli9-1.0.9"), null, "1.0.9 正常");
+    assert.equal(
+      shortVersionProblem("2008.2.7-linli9-1.0.10"),
+      null,
+      "1.0.10 在两位位宽内仍合法（10010 ≠ 1.1.0 的 10100，别被旧编码的撞号吓到）",
+    );
+    assert.equal(shortVersionProblem("2008.2.7-linli9-1.99.99"), null, "位宽上限本身合法");
+    assert.equal(shortVersionProblem("2008.2.7-linli9-g28"), null, "gXX 是老格式，不适用本规则");
+    assert.equal(shortVersionProblem("2008.2.7"), null, "上游裸版本号不适用本规则");
+    const patchOver = shortVersionProblem("2008.2.7-linli9-1.0.100");
+    assert.ok(patchOver, "1.0.100 应被判为超限");
+    assert.equal(patchOver.limit, 99);
+    assert.deepEqual(patchOver.parts, ["patch=100"]);
+    const minorOver = shortVersionProblem("2008.2.7-linli9-1.100.0");
+    assert.ok(minorOver, "minor 超限同样要拦");
+    assert.deepEqual(minorOver.parts, ["minor=100"]);
+    assert.deepEqual(
+      shortVersionProblem("2008.2.7-linli9-1.100.100").parts,
+      ["minor=100", "patch=100"],
+      "两位都超限时都要报出来",
+    );
+  });
+});
+
+describe("版本号位宽闸门（防静默撞号）", () => {
+  // 起因：客户端把短号编成 major*10000 + minor*100 + patch（各两位）。旧编码是一位，
+  // 于是 1.0.10 与 1.1.0 编成同一个序号 → 两版互不提示更新（静默失效，发布后才由用户发现）。
+  // 现在超位宽在发布前的 -Check 里直接失败。
+  test("目标版本超位宽时失败，且不写盘", () => {
+    const root = makeFixture();
+    const lines = [];
+    const result = runVersionBump({
+      root,
+      targetVersion: "2008.2.7-linli9-1.0.100",
+      check: true,
+      log: (line) => lines.push(line),
+    });
+    assert.equal(result.exitCode, 1, lines.join("\n"));
+    assert.ok(
+      result.plan.problems.some((problem) => problem.code === "short-version-part-overflow"),
+      `应报 short-version-part-overflow，实际：${JSON.stringify(result.plan.problems)}`,
+    );
+    assert.equal(result.written.length, 0);
+    assert.match(lines.join("\n"), /位宽超限/u, "失败信息要讲清是位宽问题");
+  });
+
+  test("位宽内的目标版本照常通过（1.0.10 不再被误拦）", () => {
+    const root = makeFixture();
+    const result = runVersionBump({
+      root,
+      targetVersion: "2008.2.7-linli9-1.0.10",
+      check: true,
+      log: () => {},
+    });
+    assert.equal(result.exitCode, 2, "1.0.10 合法：-Check 应正常报出需替换的位置");
+    assert.equal(result.plan.problems.length, 0, JSON.stringify(result.plan.problems));
+  });
+
+  test("-Check 自查现状版本：package.json 已是超位宽号时失败", () => {
+    const root = makeFixture();
+    const packagePath = join(root, "package.json");
+    const text = readFileSync(packagePath, "utf8");
+    writeFileSync(
+      packagePath,
+      text.replace(shortVersion(CURRENT), "1.0.100"),
+      "utf8",
+    );
+    const lines = [];
+    const result = runVersionBump({ root, check: true, log: (line) => lines.push(line) });
+    assert.equal(result.exitCode, 1, lines.join("\n"));
+    assert.ok(
+      result.plan.problems.some((problem) => problem.code === "short-version-part-overflow"),
+      "现状版本超位宽必须报出来",
+    );
   });
 });
 

@@ -120,7 +120,11 @@ test('removing active song immediately clears pending play and playback state',(
  assert.equal(f.window.__OliviaSoulPendingPlay,null);
 });
 
-const nativeProgress=patch.match(/\$text = \$text.Replace\(\$nativeProgressFrom, '([^']*)'\)/)[1];
+// 1.1.0 修：原来用脆正则 `\$text = \$text.Replace\(\$nativeProgressFrom, '([^']*)'\)` 取替换后的内容，
+// 但补丁脚本后来把第二个参数写成了变量 $progressReport（patch-feapp-local.ps1:201），正则会失配 →
+// match(...) 返回 null → 读 [1] 抛 "Cannot read properties of null"，看起来像测试坏了、实际是定位方式太脆
+// （与文件顶部同一条历史教训）。改用文件里现成的结构容忍定位。
+const nativeProgress=patchAssignment(patch,'progressReport','patch-feapp-local.ps1');
 function sendNativeProgress(f,seconds){
  f.state.te={get value(){return f.state.f.value||f.state.u.value;}};
  f.state.B={currentTime:seconds};

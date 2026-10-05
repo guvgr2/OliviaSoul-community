@@ -191,6 +191,33 @@ export function shortVersion(version) {
 }
 
 /**
+ * 本支语义化版本的位宽上限：客户端把短号编成序号 `major*10000 + minor*100 + patch`
+ * （唯一实现见 repo/source/local-service/server.js 的 releaseVersion），minor / patch 各占两位。
+ * 超了这个上限就会与上一层进位撞号：1.0.100 与 1.1.0 同号 → 两版互不提示更新。
+ */
+export const SHORT_VERSION_PART_MAX = 99;
+
+/**
+ * 短版本号是否超位宽：返回 null = 没问题（含 gXX 等不适用本规则的写法）。
+ * 为什么要在这里拦：1.0.9 之后才发现旧编码（*1000 + *10 + patch，各一位）会让
+ * 1.0.10 与 1.1.0 编成同一个 1010 —— 撞号是**静默失效**（不报错，只是永远不提示更新），
+ * 发版后才由用户发现，所以必须在发布前的 --check 里拦住。
+ */
+export function shortVersionProblem(version) {
+  const short = shortVersion(version);
+  const matched = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-beta\.\d+)?$/u.exec(short);
+  if (!matched) return null;
+  const over = [["minor", matched[2]], ["patch", matched[3]]]
+    .filter(([, text]) => text !== undefined && Number(text) > SHORT_VERSION_PART_MAX);
+  if (over.length === 0) return null;
+  return {
+    short,
+    limit: SHORT_VERSION_PART_MAX,
+    parts: over.map(([name, text]) => `${name}=${text}`),
+  };
+}
+
+/**
  * 短版本号（散文里的 `1.0.4`）只报告、不自动改：文档里出现短号的地方可能是历史段落，
  * 机器分不清「本版提法」和「历史提法」，所以交给发版者逐处判断。
  */
@@ -364,6 +391,27 @@ export function planVersionBump(options = {}) {
       problems.push({
         code: "invalid-version",
         message: `目标版本 ${targetVersion} 不符合打包脚本的版本格式（应为 ${base} 或 ${base}-linli9-x.y[.z][-beta.N]，见 ${BUILD_SCRIPT}:33）`,
+      });
+    }
+    const width = shortVersionProblem(targetVersion);
+    if (width) {
+      problems.push({
+        code: "short-version-part-overflow",
+        message: `目标版本 ${targetVersion} 的号 ${width.short} 位宽超限（${width.parts.join("、")} > ${width.limit}）：`
+          + `客户端把本支号编成 major*10000 + minor*100 + patch（minor / patch 各两位），超限会与上一层进位撞号`
+          + `（如 1.0.100 与 1.1.0 同号），两版将**互不提示更新**（见 server.js 的 releaseVersion）`,
+      });
+    }
+  } else if (oldVersion !== null) {
+    // 无目标版本（只做一致性检查 -Check）时，也要自查现状版本：package.json 若已经是超位宽的号，
+    // 说明它此刻已经和别的号撞在一起，必须尽快换号。带 -Version 发新版时**不**查现状版本 ——
+    // 「把超位宽的旧号换成合法新号」正是一次正当代偿，不该被这条拦住。
+    const width = shortVersionProblem(oldVersion);
+    if (width) {
+      problems.push({
+        code: "short-version-part-overflow",
+        message: `package.json 当前版本 ${oldVersion} 的号 ${width.short} 位宽超限（${width.parts.join("、")} > ${width.limit}）：`
+          + `它已经与别的号同号（如 1.0.100 与 1.1.0 同为 10100），两者互不提示更新（见 server.js 的 releaseVersion）`,
       });
     }
   }

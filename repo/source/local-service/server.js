@@ -253,8 +253,12 @@ function modelIdsFromPayload(payload) {
     // 支持三种写法，并统一成同一个可比较的段数组：
     //   2008.2.7-linli.9     上游老格式
     //   2008.2.7-linli9-g28  本支旧格式（本支序号 = 28）
-    //   2008.2.7-linli9-1.0  本支语义化格式（本支序号 = 1*1000 + 0*10 + 0 = 1000）
-    // 本支序号放在同一维度，保证 1.0(1000) 严格大于任何 gXX，且 1.1 > 1.0、2.0 > 1.9。
+    //   2008.2.7-linli9-1.0  本支语义化格式（本支序号 = 1*10000 + 0*100 + 0 = 10000）
+    // 本支序号放在同一维度：major*10000 + minor*100 + patch（minor / patch 各占两位），
+    // 保证 1.0(10000) 严格大于任何 gXX（g 系列最多四位数字，≤ 9999），且 1.1 > 1.0、2.0 > 1.9。
+    // 位宽规则：minor / patch 必须各 ≤ 99。曾经写成 *1000 + *10 + patch（各一位），
+    // 于是 1.0.10 与 1.1.0 都编成 1010：两版同号，互相永远不提示更新（1.0.9 之后发现）。
+    // tools/lib/version-bump.mjs 已有同口径校验，超位宽会在发布前报错。
     // 比较前先剥 v 前缀：否则以数字开头的正则匹配不上会返回 null，
     // 上层只好退回字符串比较，结果是「装了最新版也永远提示可更新」。
     const text0 = stripTagPrefix(tag);
@@ -268,7 +272,7 @@ function modelIdsFromPayload(payload) {
       const major = Number(modern[1]);
       const minor = Number(modern[2] ?? 0);
       const patch = Number(modern[3] ?? 0);
-      return [...head, major * 1000 + minor * 10 + patch];
+      return [...head, major * 10000 + minor * 100 + patch];
     }
     // 既没有 g 段也没有语义化段：按序号 0（等同上游裸版本）
     return [...head, 0];
@@ -2964,7 +2968,9 @@ export async function createOliviaService(options = {}) {
     // TODO(技术债 · 静态文件白名单硬编码)：下面是**手工维护**的文件名列表 —— public/ 里新增一个前端文件
     // 就必须同步登记进来，否则 serveStatic 一律 404；而 app.js 用 ESM import 引这些文件，
     // 只要有一个 import 404 被浏览器拒绝，整个管理界面白屏（不是局部功能失效，用户没有可用界面）。
-    // 1.0.5 新增 patch-loss-notice.js 时就靠人手把它补进这份名单；漏掉不会有任何启动期或测试期报错。
+    // 1.0.5 新增 patch-loss-notice.js 时就靠人手把它补进这份名单（当时漏掉不会有任何报错）。
+    // 1.1.0 起 test/admin-static-whitelist.test.js 拿 public/ 顶层实际文件与这份名单**双向比对**：
+    //   漏登记（名单少）和多登记的死人条目（名单多）都会在门禁里失败。
     // 为什么现在不能做对：public/ 的产物清单与这份白名单是两处真相，改成目录扫描会同时牵动
     //   静态服务与打包两条链路，超出 1.0.5 收尾的范围，故先记账、不改本版行为。
     // 正确做法：serveStatic 启动时扫描 publicRoot（只留必要的排除项），或把清单抽成单一常量

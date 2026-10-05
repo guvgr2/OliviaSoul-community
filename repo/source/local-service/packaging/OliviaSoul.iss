@@ -206,7 +206,7 @@ end;
 { 安装目录：检测到旧版就默认用它（原地升级，UserData 自然保留） }
 function GetDefaultDir(Param: String): String;
 begin
-  if ExistingDir <> '' then Result := ExistingDir else Result := ExpandConstant('{autopf}\\OliviaSoul-community');
+  if ExistingDir <> '' then Result := ExistingDir else Result := ExpandConstant('{autopf}\OliviaSoul-community');
 end;
 
 function InitializeSetup(): Boolean;
