@@ -49,7 +49,7 @@ const release = (tag, { prerelease = false, draft = false, withAsset = true, bod
 });
 
 /** 起一个真实服务；updateFetch 是打桩的 GitHub。open 里的实例由 makeRoot 统一收尾。 */
-async function boot(root, open, { updateFetch, updateCurrentTag = CURRENT_TAG } = {}) {
+async function boot(root, open, { updateFetch, updateCurrentTag = CURRENT_TAG, updateReleaseReuseMs } = {}) {
   const service = await createOliviaService({
     root,
     dataDir: join(root, "data"),
@@ -60,6 +60,7 @@ async function boot(root, open, { updateFetch, updateCurrentTag = CURRENT_TAG } 
     updateCurrentTag,
     updateRepository: REPO,
     updateFetch,
+    updateReleaseReuseMs,
   });
   let address = await service.listen(0);
   while (blockedFetchPorts.has(address.port)) {
@@ -255,6 +256,39 @@ test("超时与 GitHub 报错同样走降级：都给原因 + 发布页链接，
   assert.equal(httpError.body.data.releaseUrl, RELEASES_PAGE);
 });
 
+test("接口限流：单独说明「限流 + 什么时候恢复」，不当成网络故障，也不谎报已是最新", async t => {
+  const { root, open } = await makeRoot(t, "rate-limited");
+  const resetAt = Math.floor(Date.now() / 1000) + 1800;
+  const limited = () => { throw Object.assign(
+    new Error("GitHub 接口限流（未登录时每个出口 IP 每小时 60 次，代理节点上的额度还是和其他人共用的），约 05:30 后恢复；可稍后重试、换一个代理节点，或直接到发布页手动下载"),
+    { code: "UPDATE_RATE_LIMITED", status: 403, resetAt }); };
+  const { request } = await boot(root, open, { updateFetch: limited });
+
+  const checked = await request("/admin/api/update");
+  assert.equal(checked.status, 200, "限流也必须降级返回，不能让界面报错卡死");
+  const data = checked.body.data;
+  assert.equal(data.degraded, true);
+  assert.equal(data.rateLimited, true, "后端必须显式标记限流，界面才有分支可走");
+  assert.equal(data.updateAvailable, false);
+  assert.equal(data.latestTag, "", "限流时绝不编造版本号");
+  assert.match(data.message, /未能检查更新/u);
+  assert.match(data.message, /限流/u);
+  assert.doesNotMatch(data.message, /无法连接更新服务/u, "限流不是网络故障，否则用户会一直点重试");
+  assert.equal(data.releaseUrl, RELEASES_PAGE, "仍要给发布页，让用户能手动下载");
+});
+
+test("普通 403（网关/安全软件）不得被说成限流", async t => {
+  const { root, open } = await makeRoot(t, "forbidden-gateway");
+  const { request } = await boot(root, open, {
+    updateFetch: async () => new Response("Forbidden by gateway", { status: 403 }) });
+  const checked = await request("/admin/api/update");
+
+  assert.equal(checked.body.data.degraded, true);
+  assert.equal(checked.body.data.rateLimited, false);
+  assert.match(checked.body.data.message, /GitHub HTTP 403/u);
+  assert.doesNotMatch(checked.body.data.message, /限流/u, "查不出限流证据就别让用户等配额");
+});
+
 test("beta 下载也按通道走：点下载拿到的是测试版安装包", async t => {
   const { root, open } = await makeRoot(t, "beta-download");
   const payload = Buffer.from("beta-installer-bytes", "utf8");
@@ -284,6 +318,107 @@ test("beta 下载也按通道走：点下载拿到的是测试版安装包", asy
   assert.equal(status.body.data.tag, BETA_TAG, "测试版通道下载的必须是测试版");
   assert.ok(downloads.some(url => url.includes(BETA_TAG)), `下载地址必须指向测试版，实际 ${downloads.join(", ")}`);
   assert.deepEqual(await readFile(status.body.data.path), payload);
+});
+
+// 复用 Release 信息省配额的另一面：发布页撤下 / 重传过安装包之后，记录里的地址或摘要就是死的。
+// 这一组锁住兜底行为 —— 死地址要能自愈一次，而「刷新发布页失败」绝不能反过来把下载搞失败。
+const waitDownload = async request => {
+  let status;
+  for (let index = 0; index < 300; index++) {
+    status = await request("/admin/api/update/download/status");
+    if (["completed", "failed"].includes(status.body.data.state) && !status.body.data.running) return status.body.data;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  return status.body.data;
+};
+
+test("发布页重传安装包后：下载撞上死地址会自动重查一次并改下新地址", async t => {
+  const { root, open } = await makeRoot(t, "stale-asset");
+  const payload = Buffer.from("re-uploaded-installer-bytes", "utf8");
+  const digest = createHash("sha256").update(payload).digest("hex");
+  const asset = (id, name) => ({ id, name, size: payload.length, digest: `sha256:${digest}`,
+    browser_download_url: `https://github.com/${REPO}/releases/download/${STABLE_TAG}/${name}` });
+  let latest = release(STABLE_TAG);
+  latest.assets = [asset(1, `OliviaSoul-${STABLE_TAG}-Setup.exe`)];
+  const lookups = [], downloads = [];
+  const { request } = await boot(root, open, { updateFetch: async url => {
+    const target = String(url);
+    if (target.includes("/releases/latest")) { lookups.push(target); return Response.json(latest); }
+    if (target.includes("/releases?")) return Response.json([latest]);
+    downloads.push(target);
+    return target.endsWith("-v2-Setup.exe") ? new Response(payload) : new Response("gone", { status: 404 });
+  } });
+
+  const checked = await request("/admin/api/update");
+  assert.equal(checked.body.data.updateAvailable, true);
+  assert.equal(lookups.length, 1);
+  // 发布页上把安装包换成了另一个地址（GitHub 重传会换 id、换下载地址）
+  latest = release(STABLE_TAG);
+  latest.assets = [asset(2, `OliviaSoul-${STABLE_TAG}-v2-Setup.exe`)];
+
+  const started = await request("/admin/api/update/download", { method: "POST" });
+  assert.equal(started.status, 200);
+  const status = await waitDownload(request);
+  assert.equal(status.state, "completed", status.error);
+  assert.deepEqual(await readFile(status.path), payload);
+  assert.equal(lookups.length, 2, "地址失效后必须重查一次发布页");
+  assert.equal(downloads.length, 2);
+  assert.ok(downloads[1].endsWith("-v2-Setup.exe"), `第二次必须下重传后的新地址，实际 ${downloads.join(", ")}`);
+});
+
+test("复用太旧（超过 updateReleaseReuseMs）时下载先确认一次发布页", async t => {
+  const { root, open } = await makeRoot(t, "stale-refresh");
+  const payload = Buffer.from("cached-installer-bytes", "utf8");
+  const digest = createHash("sha256").update(payload).digest("hex");
+  const tagged = release(STABLE_TAG);
+  tagged.assets[0] = { ...tagged.assets[0], size: payload.length, digest: `sha256:${digest}` };
+  const lookups = [];
+  const { request } = await boot(root, open, { updateReleaseReuseMs: 0, updateFetch: async url => {
+    const target = String(url);
+    if (target.includes("/releases/download/")) return new Response(payload);
+    if (target.includes("/releases")) { lookups.push(target); return Response.json(tagged); }
+    throw new Error(`意外的请求 ${target}`);
+  } });
+
+  await request("/admin/api/update");
+  assert.equal(lookups.length, 1);
+  const started = await request("/admin/api/update/download", { method: "POST" });
+  assert.equal(started.status, 200);
+  const status = await waitDownload(request);
+  assert.equal(status.state, "completed", status.error);
+  assert.deepEqual(await readFile(status.path), payload);
+  assert.equal(lookups.length, 2, "复用超过阈值必须先真查一次发布页");
+});
+
+test("超龄确认失败要退回旧结果：限流不能让「检查成功」变成「下载失败」", async t => {
+  const { root, open } = await makeRoot(t, "stale-fallback");
+  const payload = Buffer.from("still-good-installer", "utf8");
+  const digest = createHash("sha256").update(payload).digest("hex");
+  const tagged = release(STABLE_TAG);
+  tagged.assets[0] = { ...tagged.assets[0], size: payload.length, digest: `sha256:${digest}` };
+  let blocked = false;
+  const lookups = [];
+  const { request } = await boot(root, open, { updateReleaseReuseMs: 0, updateFetch: async url => {
+    const target = String(url);
+    if (target.includes("/releases/download/")) return new Response(payload);
+    if (target.includes("/releases")) {
+      lookups.push(target);
+      if (blocked) throw new Error("fetch failed");
+      return Response.json(tagged);
+    }
+    throw new Error(`意外的请求 ${target}`);
+  } });
+
+  await request("/admin/api/update");
+  // 此刻开始发布页拉不到（限流 / 断网）
+  blocked = true;
+  const started = await request("/admin/api/update/download", { method: "POST" });
+  assert.equal(started.status, 200);
+  const status = await waitDownload(request);
+  assert.equal(status.state, "completed", status.error);
+  assert.deepEqual(await readFile(status.path), payload);
+  assert.equal(lookups.length, 2, "确实尝试过确认一次");
+  assert.doesNotMatch(String(status.error ?? ""), /fetch failed/u);
 });
 
 // —— 5. 界面（vm 里跑真实 app.js）——
@@ -529,8 +664,15 @@ test("服务端源码：更新检查不再 502，stable/beta 各走各的来源�
   assert.match(serverSource, /path === "\/admin\/api\/update\/channel"/u);
   assert.match(serverSource, /setSetting\(UPDATE_CHANNEL_SETTING, requested\)/u, "通道必须存进本机 settings");
   assert.match(serverSource, /draft !== true/u, "列表里必须显式排除草稿");
-  assert.match(serverSource, /fetchLatestRelease\(signal, updateChannel\(\)\)/u,
+  assert.match(serverSource, /const channel = updateChannel\(\);/u,
     "下载也要跟着通道走，否则 beta 用户会下到正式版");
+  assert.match(serverSource, /await fetchLatestRelease\(signal, channel\)/u);
+  assert.match(serverSource, /lastReleaseCheck\?\.channel === channel/u,
+    "同一通道内复用刚查到的结果：少打一次 api.github.com，点下载就不容易撞限流");
+  assert.match(serverSource, /const UPDATE_RELEASE_REUSE_MS = /u,
+    "复用要有年龄上限，否则发布页撤下 / 重传后会把死地址一直交给下载器");
+  assert.match(serverSource, /renewRelease: async signal => \{/u,
+    "下载发现地址 / 摘要和记录不符时要能强制重查一次发布页");
 });
 
 // —— 8. 界面侧 v 前缀回归（同一个事故的另一面）——

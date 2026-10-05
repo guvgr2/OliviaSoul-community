@@ -92,7 +92,75 @@ function proxyRequest(url, init, proxy, redirects = 0) {
   });
 }
 
-export function createUpdateFetch({ readProxySettings = readWindowsProxySettings, directFetch = fetch } = {}) {
+// —— 更新走哪条路：直连 / 系统代理 ——
+//
+// 2026-10-06 本机实测（1.1.1 更新失败排障）：
+//   * api.github.com 直连可用；经代理也能通，但吃的是「未登录 60 次/小时、按出口 IP 共享」的配额，
+//     撞满就是 403，body 写着 `API rate limit exceeded for <节点 IP>`（实测经代理 remaining=0，
+//     同一请求直连 remaining=54）。
+//   * github.com / *.githubusercontent.com（Release 资产与网页）直连被 SNI 阻断（实测读超时 /
+//     fetch failed），必须走代理（实测经代理 Range 拿到 206，直连直接失败）。
+// 所以「所有更新请求一律交给系统代理」在开着代理的机器上必然坏一半：检查更新 403、下载反而正常。
+// 这里按主机分路 + 首选路失败就换另一条，并把「这台机器上哪条路通」记在内存里，之后不再试错。
+//
+// 两条边界照样守住（与上游一致，不许被换路绕过）：
+//   1. 只有 GitHub 的公开更新端点允许换路；其他主机维持 fail-closed —— 系统代理开着就绝不偷偷直连。
+//   2. 请求带凭据（Authorization / Cookie / Proxy-Authorization）时只有代理一条路，凭据绝不越过代理。
+const FALLBACK_HOSTS = Object.freeze([
+  'api.github.com',
+  'github.com',
+  'objects.githubusercontent.com',
+  'raw.githubusercontent.com',
+  'codeload.github.com',
+]);
+const RATE_LIMIT_STATUS = Object.freeze([403, 429]);
+
+export function isUpdateFallbackHost(host) {
+  const name = String(host ?? '').toLowerCase();
+  return FALLBACK_HOSTS.some(allowed => name === allowed || name.endsWith(`.${allowed}`));
+}
+
+/** 返回探路顺序（第一条是首选）。remembered 是上次成功的路。 */
+export function planUpdateRoutes({ host, proxy, remembered, credentials = false } = {}) {
+  if (!proxy) return ['direct'];
+  if (credentials) return ['proxy'];
+  if (!isUpdateFallbackHost(host)) return ['proxy'];
+  const preferred = remembered ?? (String(host).toLowerCase() === 'api.github.com' ? 'direct' : 'proxy');
+  return preferred === 'direct' ? ['direct', 'proxy'] : ['proxy', 'direct'];
+}
+
+function hasCredentials(headers) {
+  return ['authorization', 'cookie', 'proxy-authorization'].some(name => headers.has(name));
+}
+
+// 403/429 一律换路重试，但只有响应自己说了「rate limit」才敢对用户讲「接口限流」——
+// 代理网关/安全软件也会回 403，那种得按原样报 `GitHub HTTP 403`，不能让用户去等配额恢复。
+async function readRateLimitFacts(response) {
+  let text = '';
+  try { text = (await response.text()).slice(0, 600); } catch { text = ''; }
+  const remaining = response.headers.get('x-ratelimit-remaining');
+  const resetAt = Number(response.headers.get('x-ratelimit-reset')) || 0;
+  return { status: response.status, resetAt,
+    rateLimited: response.status === 429 || remaining === '0' || /rate[-\s]?limit|too many requests/iu.test(text) };
+}
+
+function rateLimitError({ status, resetAt }) {
+  const at = resetAt ? new Date(resetAt * 1000) : null;
+  const when = at && !Number.isNaN(at.getTime())
+    ? `，约 ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')} 后恢复` : '';
+  const error = new Error(`${status === 429 ? 'GitHub 接口请求过于频繁' : 'GitHub 接口限流'}`
+    + `（未登录时每个出口 IP 每小时 60 次，代理节点上的额度还是和其他人共用的）${when}；`
+    + '可稍后重试、换一个代理节点，或直接到发布页手动下载');
+  error.code = 'UPDATE_RATE_LIMITED';
+  error.status = status;
+  error.resetAt = resetAt;
+  return error;
+}
+
+export function createUpdateFetch({ readProxySettings = readWindowsProxySettings, directFetch = fetch,
+  attemptTimeoutMs = 12_000, planRoutes = planUpdateRoutes } = {}) {
+  // 一个进程记一份：首次探路可能要白等一次超时，之后就按记住的路走。
+  const remembered = new Map();
   return async (input, init = {}) => {
     init.signal?.throwIfAborted();
     const url = new URL(input);
@@ -100,6 +168,29 @@ export function createUpdateFetch({ readProxySettings = readWindowsProxySettings
     init.signal?.throwIfAborted();
     if (!proxy) return directFetch(input, init);
     if (init.body || !['GET', 'HEAD'].includes(init.method ?? 'GET')) throw new Error('更新代理仅允许读取请求');
-    return proxyRequest(url, init, proxy);
+    const host = url.hostname.toLowerCase();
+    const routes = planRoutes({ host, proxy, remembered: remembered.get(host),
+      credentials: hasCredentials(new Headers(init.headers)) });
+    let lastError = null, limited = null, refused = 0;
+    for (const [index, route] of routes.entries()) {
+      init.signal?.throwIfAborted();
+      // 非最后一条路只给一小段预算：首选路被黑洞掉时要留时间试另一条，
+      // 否则整次请求会被调用方的 30 秒上限吃掉，换路等于白做。
+      const signal = index === routes.length - 1 || !attemptTimeoutMs ? init.signal
+        : AbortSignal.any([init.signal, AbortSignal.timeout(attemptTimeoutMs)].filter(Boolean));
+      try {
+        const options = { ...init, ...(signal ? { signal } : {}) };
+        const response = route === 'proxy' ? await proxyRequest(url, options, proxy) : await directFetch(input, options);
+        if (!RATE_LIMIT_STATUS.includes(response.status)) { remembered.set(host, route); return response; }
+        const facts = await readRateLimitFacts(response);
+        if (facts.rateLimited) limited = facts; else refused = response.status;
+      } catch (error) {
+        if (init.signal?.aborted) throw error;
+        lastError = error;
+      }
+    }
+    if (limited) throw rateLimitError(limited);
+    if (lastError) throw lastError;
+    throw new Error(`GitHub HTTP ${refused || 'UNKNOWN'}`);
   };
 }

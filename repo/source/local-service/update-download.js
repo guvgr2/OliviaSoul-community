@@ -7,6 +7,10 @@ import { pipeline } from 'node:stream/promises';
 
 const MAX_BYTES = 1024 ** 3;
 const activeStates = new Set(['connecting', 'downloading', 'verifying']);
+// 复用的 Release 信息可能已经过期：发布页把安装包撤下或重传过，地址 / 大小 / 摘要就跟记录不符。
+// 这类失败要能和普通网络故障区分开 —— 只有它才值得重查一次发布页。
+const STALE_ASSET = 'UPDATE_STALE_ASSET';
+const staleAsset = message => Object.assign(new Error(message), { code: STALE_ASSET });
 function identity(release) {
   const { latestTag: tag, asset = {} } = release ?? {};
   if (!/^[\w.-]+$/.test(tag ?? '') || tag === '.' || tag === '..'
@@ -39,7 +43,7 @@ async function safePath(root, path) {
 }
 
 export async function createUpdateDownloader({ root, fetchRelease, request = fetch, canInstall = () => true, idleTimeoutMs = 120_000,
-  now = () => performance.now() }) {
+  renewRelease = null, now = () => performance.now() }) {
   root = resolve(root);
   const stateFile = join(root, 'download-state.json');
   let state = { state: 'idle', jobId: null, bytes: 0, totalBytes: 0, percent: 0,
@@ -85,9 +89,29 @@ export async function createUpdateDownloader({ root, fetchRelease, request = fet
 
   async function run(signal) {
     signal.throwIfAborted();
-    const release = await fetchRelease(signal);
+    let info = identity(await fetchRelease(signal));
     signal.throwIfAborted();
-    const info = identity(release), p = paths(info);
+    for (let attempt = 0; ; attempt++) {
+      try { await transferOnce(info, signal); return; }
+      catch (error) {
+        // 只在「拿到的内容和记录不符」时重查一次发布页。正常路径一次网络都不多打，
+        // 所以不会重新引入 1.1.1 的「检查成功、点下载却正好撞在限流上」。
+        if (attempt > 0 || !renewRelease || error?.code !== STALE_ASSET) throw error;
+        signal.throwIfAborted();
+        const renewed = identity(await renewRelease(signal));
+        if (keyOf(renewed) === keyOf(info))
+          throw new Error(`${error.message}；发布页上的安装包记录没有变化，请稍后重试或到发布页手动下载`);
+        const previous = paths(info);
+        info = renewed;
+        // 旧地址的部分下载已经没用了（新地址落在新目录），顺手清掉，别在 UserData 里留几百 MB。
+        try { await safePath(root, previous.dir); await rm(previous.dir, { recursive: true, force: true }); }
+        catch { /* 清不掉旧目录不影响新任务 */ }
+      }
+    }
+  }
+
+  async function transferOnce(info, signal) {
+    const p = paths(info);
     saved = info; cancellable = info;
     state = { ...state, tag: info.tag, bytes: 0, totalBytes: info.size, percent: 0 };
     for (const path of Object.values(p)) await safePath(root, path);
@@ -123,6 +147,8 @@ export async function createUpdateDownloader({ root, fetchRelease, request = fet
         const response = await request(info.url, { headers, signal: transferSignal });
         let accepted = false;
         try {
+          // 404：这个地址已经不在发布页上了（Release 被撤下，或安装包重传后换了地址）。
+          if (response.status === 404) throw staleAsset('下载 HTTP 404（安装包已不在发布页上）');
           if (!response.ok || !response.body) throw new Error(`下载 HTTP ${response.status}`);
           const etag = response.headers.get('etag');
           if (response.status === 206) {
@@ -134,7 +160,7 @@ export async function createUpdateDownloader({ root, fetchRelease, request = fet
           else throw new Error(`不支持的下载响应 HTTP ${response.status}`);
           const contentLength = response.headers.get('content-length');
           if (contentLength !== null && Number(contentLength) !== info.size - offset)
-            throw new Error('服务器返回的安装包长度不一致');
+            throw staleAsset('服务器返回的安装包长度不一致');
           await atomicJson(p.metadata, { identity: keyOf(info), etag: etag && !etag.startsWith('W/') ? etag : null });
           state.state = 'downloading'; state.bytes = offset; state.percent = offset * 100 / info.size;
           transferStarted = now(); samples = []; let received = 0;
@@ -165,7 +191,7 @@ export async function createUpdateDownloader({ root, fetchRelease, request = fet
     if (await hashOf(p.part, signal) !== info.digest) {
       await rename(p.part, `${p.part}.invalid-${randomUUID()}`);
       state.bytes = 0; state.percent = 0;
-      throw new Error('安装包 SHA-256 校验失败，重试将重新下载');
+      throw staleAsset('安装包 SHA-256 校验失败，重试将重新下载');
     }
     signal.throwIfAborted();
     await rename(p.part, p.target);

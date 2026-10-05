@@ -970,12 +970,57 @@ export async function createOliviaService(options = {}) {
       : "最新 Release 没有安装包");
   }
 
+  // 「检查更新」和「开始下载」原来各打一次 api.github.com。未登录配额只有 60 次/小时、按出口 IP
+  // 共享（代理节点上还和别人共用），撞满就是 403 —— 界面表现成「检查能看到新版本，一点下载就失败」。
+  // 1.1.1 发布当天用户撞的正是这个。所以留一份最近一次成功的检查结果：下载直接复用，
+  // 人工连点「检查更新」也顺带去重（20 秒内的同一通道不重复打网络）。
+  const UPDATE_CHECK_TTL_MS = 20_000;
+  // 下载侧复用同一通道刚查到的结果（继续省配额），但结果太旧就先试着刷新一次 —— 复用一份几小时
+  // 甚至几天前的 Release 信息，在发布页撤下或重传过安装包之后就会把一个死地址交给下载器。
+  // 顺序不能反：刷新失败（限流 / 断网）要退回旧结果，绝不能反过来变成「检查成功、下载失败」。
+  const UPDATE_RELEASE_REUSE_MS = Math.max(0, Number(options.updateReleaseReuseMs ?? 600_000) || 0);
+  let lastReleaseCheck = null; // { channel, at, release }
+
+  async function fetchLatestReleaseShared(signal, channel) {
+    if (lastReleaseCheck?.channel === channel && Date.now() - lastReleaseCheck.at < UPDATE_CHECK_TTL_MS)
+      return lastReleaseCheck.release;
+    const release = await fetchLatestRelease(signal, channel);
+    lastReleaseCheck = { channel, at: Date.now(), release };
+    return release;
+  }
+
+  /** 强制重查（绕过复用）。给「下载发现地址/摘要和记录不符」用：这时只认发布页上的当下事实。 */
+  async function renewLatestRelease(signal, channel) {
+    const release = await fetchLatestRelease(signal, channel);
+    lastReleaseCheck = { channel, at: Date.now(), release };
+    return release;
+  }
+
   const updateDownloads = await createUpdateDownloader({
     root: updateDataRoot, request: updateRequest,
     canInstall: tag => isNewerRelease(updateCurrentTag, tag),
     fetchRelease: async signal => {
       // 下载必须跟着用户选的通道走：beta 用户看到的是测试版，点「下载安装包」就得拿到那个测试版。
-      const release = await fetchLatestRelease(signal, updateChannel());
+      const channel = updateChannel();
+      const cached = lastReleaseCheck?.channel === channel ? lastReleaseCheck : null;
+      // 刻意不给复用设「过期就不复用」的硬门槛：用户「先检查、翻一眼说明再点下载」常常超过 20 秒，
+      // 这时重新查一次就可能正好撞上限流（1.1.1 当天用户遇到的就是「检查成功、下载失败」）。
+      // 所以超龄只是「先确认一次发布页」（真查，不再吃 fetchLatestReleaseShared 的 20 秒去重），
+      // 确认不了（限流 / 断网）仍然退回旧结果继续下载。
+      // 传 0 = 不复用（每次下载都先确认一次），给测试与极端保守配置留的开关。
+      let release = cached && UPDATE_RELEASE_REUSE_MS > 0 && Date.now() - cached.at <= UPDATE_RELEASE_REUSE_MS
+        ? cached.release : null;
+      if (!release) {
+        try { release = await renewLatestRelease(signal, channel); }
+        catch (error) { if (!cached) throw error; release = cached.release; }
+      }
+      if (!isNewerRelease(updateCurrentTag, release.latestTag)) throw new Error("当前已经是最新版本");
+      return release;
+    },
+    // 下载中发现地址/大小/摘要和记录不符时才会走到这里：强制重查一次以上面的当下事实为准。
+    renewRelease: async signal => {
+      // 契约与 fetchRelease 一致：交给下载器的永远是「比当前版本新」的 Release。
+      const release = await renewLatestRelease(signal, updateChannel());
       if (!isNewerRelease(updateCurrentTag, release.latestTag)) throw new Error("当前已经是最新版本");
       return release;
     },
@@ -1019,13 +1064,17 @@ export async function createOliviaService(options = {}) {
    */
   function updateFailurePayload(error, channel) {
     const reason = safeModelError(error);
-    const network = error?.name === "AbortError"
-      || /(fetch failed|网络|连接|超时|代理|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|UND_ERR|getaddrinfo|CERT|SSL|TLS|socket)/iu.test(String(reason));
+    // 限流要单独说：文案里带「代理」二字，不特判就会被当成网络故障，用户会去反复点重试。
+    const rateLimited = error?.code === "UPDATE_RATE_LIMITED";
+    const network = !rateLimited && (error?.name === "AbortError"
+      || /(fetch failed|网络|连接|超时|代理|ECONN|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|UND_ERR|getaddrinfo|CERT|SSL|TLS|socket)/iu.test(String(reason)));
     return {
       channel: normalizeUpdateChannel(channel),
       degraded: true,
+      rateLimited,
       reason,
-      message: network ? `无法连接更新服务，可手动到发布页下载（原因：${reason}）`
+      message: rateLimited ? `未能检查更新：${reason}`
+        : network ? `无法连接更新服务，可手动到发布页下载（原因：${reason}）`
         : `检查更新失败：${reason}（可手动到发布页下载）`,
       currentTag: updateCurrentTag,
       latestTag: "",
@@ -4112,7 +4161,7 @@ export async function createOliviaService(options = {}) {
       // 通道现读本机 settings：用户切换通道后下一次检查立刻按新通道走（不用重启服务/程序）。
       const channel = updateChannel();
       try {
-        return ok(req, res, updatePayload(await fetchLatestRelease(null, channel), channel));
+        return ok(req, res, updatePayload(await fetchLatestReleaseShared(null, channel), channel));
       } catch (error) {
         // 连不上 GitHub（例如 SNI 被阻断）时走降级：200 + degraded 载荷，说清原因并给发布页链接。
         // 绝不返回裸错误、也绝不谎报「已是最新版本」—— 界面据此显示「可手动到发布页下载」。

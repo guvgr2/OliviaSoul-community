@@ -3186,7 +3186,10 @@ test("检查更新从公开 GitHub Release 查询并校验下载 Setup 到自定
   assert.match(downloaded.body.data.path, /updates[\\/]2008\.2\.7-linli\.3[\\/][a-f0-9]{64}[\\/]OliviaSoul-2008\.2\.7-Setup\.exe$/u);
   assert.deepEqual(await readFile(downloaded.body.data.path), installer);
   assert.deepEqual(await ctx.service.prepareUpdateInstall(downloaded.body.data.path), { path: downloaded.body.data.path });
-  assert.equal(calls.filter(url => url.includes("api.github.com")).length, 2);
+  // 「检查一次 + 下载」只打一次 api.github.com：未登录配额按出口 IP 每小时 60 次，
+  // 且开启代理时这个 IP 还和同一节点上的其他人共享（1.1.1 实录：点下载就撞 403 限流）。
+  assert.equal(calls.filter(url => url.includes("api.github.com")).length, 1,
+    "下载必须复用刚检查到的结果，不得再打一次 GitHub API");
 });
 
 test('更新取消接口删除当前部分下载并拒绝旧任务标识', async t => {

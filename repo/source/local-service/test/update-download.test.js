@@ -225,3 +225,68 @@ test('retry atomically replaces metadata without truncating the previous descrip
   }
   assert.equal(JSON.parse(await readFile(join(f.root, metadata), 'utf8')).etag, '"two"');
 });
+
+// 复用的 Release 信息可能已经过期（发布页撤下或重传过安装包）。这一组用例锁住兜底：
+// 只有在「拿到的内容和记录不符」时才重查一次发布页并重试一次，正常路径一次网络都不多打。
+test('address that vanished from the release page renews once and installs the re-uploaded package', async t => {
+  let renewals = 0;
+  const f = await fixture(t, (_req, res, n) => { if (n === 1) { res.writeHead(404); res.end('gone'); } else res.end(payload); },
+    { renewRelease: async () => { renewals++; f.release.asset.id = 2; return f.release; } });
+  const m = await f.make(); m.start(); const done = await terminal(m);
+  assert.equal(done.state, 'completed', done.error);
+  assert.deepEqual(await readFile(done.path), payload);
+  assert.equal(renewals, 1);
+  assert.equal(f.requests.length, 2);
+  assert.equal(f.releaseCalls(), 1, '兜底是重查发布页，不是再走一次普通取释放信息');
+  assert.equal((await readdir(join(f.root, 'test.1'))).length, 1, '旧地址留下的部分下载目录要被清掉');
+});
+
+test('full-length transfer of a replaced installer is caught by SHA-256 and renewed', async t => {
+  let renewals = 0;
+  const f = await fixture(t, (_req, res, n) => res.end(n === 1 ? Buffer.alloc(payload.length, 7) : payload),
+    { renewRelease: async () => { renewals++; f.release.asset.id = 3; return f.release; } });
+  const m = await f.make(); m.start(); const done = await terminal(m);
+  assert.equal(done.state, 'completed', done.error);
+  assert.deepEqual(await readFile(done.path), payload);
+  assert.equal(renewals, 1);
+  assert.equal((await readdir(join(f.root, 'test.1'))).length, 1);
+});
+
+test('renewal reporting the same record fails loudly instead of hammering a dead address', async t => {
+  let renewals = 0;
+  const f = await fixture(t, (_req, res) => { res.writeHead(404); res.end('gone'); },
+    { renewRelease: async () => { renewals++; return f.release; } });
+  const m = await f.make(); m.start(); const done = await terminal(m);
+  assert.equal(done.state, 'failed');
+  assert.match(done.error, /404/u);
+  assert.match(done.error, /没有变化/u);
+  assert.equal(renewals, 1);
+  assert.equal(f.requests.length, 1, '同一条记录不会反复重试');
+});
+
+test('a renewal that cannot reach the release page reports the lookup failure', async t => {
+  const f = await fixture(t, (_req, res) => { res.writeHead(404); res.end(); },
+    { renewRelease: async () => { throw new Error('GitHub HTTP 403'); } });
+  const m = await f.make(); m.start(); const done = await terminal(m);
+  assert.equal(done.state, 'failed');
+  assert.match(done.error, /GitHub HTTP 403/u);
+  assert.equal(f.requests.length, 1);
+});
+
+test('ordinary transfer failures never burn a release lookup', async t => {
+  let renewals = 0;
+  const f = await fixture(t, (_req, res) => { res.writeHead(500); res.end('boom'); },
+    { renewRelease: async () => { renewals++; return f.release; } });
+  const m = await f.make(); m.start(); const done = await terminal(m);
+  assert.equal(done.state, 'failed');
+  assert.match(done.error, /下载 HTTP 500/u);
+  assert.equal(renewals, 0);
+});
+
+test('without a renewal hook the stale-address failure still surfaces unchanged', async t => {
+  const f = await fixture(t, (_req, res) => { res.writeHead(404); res.end(); });
+  const m = await f.make(); m.start(); const done = await terminal(m);
+  assert.equal(done.state, 'failed');
+  assert.match(done.error, /404/u);
+  assert.equal(f.requests.length, 1);
+});
