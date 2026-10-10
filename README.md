@@ -102,7 +102,7 @@ Node ESM + 原生 HTML/CSS/JS（沿用上游 `public/styles.css` 的类名与配
 
 ## 构建
 
-    cd source/local-service
+    cd repo/source/local-service
     npm install
     npm run build:win
 
