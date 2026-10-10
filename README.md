@@ -192,15 +192,13 @@ Node ESM + 原生 HTML/CSS/JS（沿用上游 `public/styles.css` 的类名与配
 这个程序**没有代码签名证书**，而且它会启动 `node.exe`、调用 `ffmpeg`、扫描你本地的视频文件，
 这些行为特征和某些恶意软件相似，所以杀软（尤其卡巴斯基）经常误报。程序本身不含恶意代码，源码全部公开可查。
 
-**第三方检测结果（2026-09-25，版本 `2008.2.7-linli9-g04`）**
+**第三方检测结果（2026-10-11，版本 `2008.2.7-linli9-1.2.0`）**
 
-> 这是**当时那个版本**（g04）的存档，**不是当前 1.2.0 的结果** —— 每次重新打包主程序字节都会变，要重做检测才有对应报告。不过结论（误报来自「没有代码签名 + 会启动随包的 node / ffmpeg + 大量读写本地文件」这套行为特征）与下面三件事仍然适用。
-
-| 文件 | VirusTotal 结果 |
+| 文件 | 检测结果 |
 | --- | --- |
-| 安装包 `OliviaSoul-2008.2.7-linli9-g04-Setup.exe` | **51 家引擎全部未检出** —— [报告](https://www.virustotal.com/gui/file/879ebbf9481d69c086e51e9bb90c450f0f4b08456c394bed5aa5599daf90103c) |
-| 便携包 `OliviaSoul-2008.2.7-linli9-g04-Portable.zip` | **60 家中 59 家未检出**；唯一报毒的 ViRobot 报的是 `Win95.Marburg`（1995 年的 DOS 病毒名），属于老特征库误报 —— [报告](https://www.virustotal.com/gui/file/5b97aab0f3242d49951d7d943b4950e224dc30e0a251fe2d3a730384fd14b205) |
-| `OliviaSoul.exe`（主程序本体，1.31 MB） | 卡巴斯基 OpenTip **动态分析：干净**（探测 0 / 可疑活动 0 / 网络活动 0，未提取到任何威胁） —— [报告](https://opentip.kaspersky.com/E502707CF7C3CEE0D00855E8786D53B01C2629B4DF2C11C4031BECD5C282B331/results) |
+| 便携包 `OliviaSoul-2008.2.7-linli9-1.2.0-Portable.zip`（575.1 MB） | VirusTotal **60 家中 58 家未检出**；报毒的 2 家是 Elastic（`Malicious (moderate confidence)`，机器学习信誉类判定）与 VirIT（`Win95.Marburg`，1995 年的 DOS 病毒名，属老特征库误报） —— [报告](https://www.virustotal.com/gui/file/e0faa25468c6e6e21f1530127687456c320191c82000a36a247aa1d3902396e2) |
+| `OliviaSoul.exe`（主程序本体，**1.32 MB**） | VirusTotal **71 家中 70 家未检出**，唯一报毒的仍是 Elastic（同样是 `Malicious (moderate confidence)`，没有具体恶意行为名） —— [报告](https://www.virustotal.com/gui/file/c1b5e62da229f63d89deeef7947a67678ca76349ff3fa0c9b4c63469e92999b8)；卡巴斯基 OpenTip **动态分析：干净**（Detects 0 / Suspicious activities 0 / Network activities 0；提取到的 2 个文件均无分类、无威胁判定） —— [报告](https://opentip.kaspersky.com/C1B5E62DA229F63D89DEEEF7947A67678CA76349FF3FA0C9B4C63469E92999B8/results?tab=upload) |
+| 安装包 `OliviaSoul-2008.2.7-linli9-1.2.0-Setup.exe`（520.6 MB） | 本次**未单独送检**（VirusTotal 网页上传上限 650 MB，520 MB 的包传一次要很久，故略过）。它与 Portable.zip 同源：两个包由构建链在**同一个冻结快照**上生成、并校验过同一份内容指纹，检出情况可参考便携包那一行。 |
 
 也就是说：**内容层面没有恶意代码**，报毒来自“程序没有代码签名 + 会启动随包的 node/ffmpeg + 大量读写本地文件”这套行为与信誉判断。
 
