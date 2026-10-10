@@ -198,7 +198,7 @@ Node ESM + 原生 HTML/CSS/JS（沿用上游 `public/styles.css` 的类名与配
 | --- | --- |
 | 便携包 `OliviaSoul-2008.2.7-linli9-1.2.0-Portable.zip`（575.1 MB） | VirusTotal **60 家中 58 家未检出**；报毒的 2 家是 Elastic（`Malicious (moderate confidence)`，机器学习信誉类判定）与 VirIT（`Win95.Marburg`，1995 年的 DOS 病毒名，属老特征库误报） —— [报告](https://www.virustotal.com/gui/file/e0faa25468c6e6e21f1530127687456c320191c82000a36a247aa1d3902396e2) |
 | `OliviaSoul.exe`（主程序本体，**1.32 MB**） | VirusTotal **71 家中 70 家未检出**，唯一报毒的仍是 Elastic（同样是 `Malicious (moderate confidence)`，没有具体恶意行为名） —— [报告](https://www.virustotal.com/gui/file/c1b5e62da229f63d89deeef7947a67678ca76349ff3fa0c9b4c63469e92999b8)；卡巴斯基 OpenTip **动态分析：干净**（Detects 0 / Suspicious activities 0 / Network activities 0；提取到的 2 个文件均无分类、无威胁判定） —— [报告](https://opentip.kaspersky.com/C1B5E62DA229F63D89DEEEF7947A67678CA76349FF3FA0C9B4C63469E92999B8/results?tab=upload) |
-| 安装包 `OliviaSoul-2008.2.7-linli9-1.2.0-Setup.exe`（520.6 MB） | 本次**未单独送检**（VirusTotal 网页上传上限 650 MB，520 MB 的包传一次要很久，故略过）。它与 Portable.zip 同源：两个包由构建链在**同一个冻结快照**上生成、并校验过同一份内容指纹，检出情况可参考便携包那一行。 |
+| 安装包 `OliviaSoul-2008.2.7-linli9-1.2.0-Setup.exe`（520.8 MB） | VirusTotal **61 家全部未检出**（0/61；便携包那行报毒的 Elastic 这次也没报，标签只有 `peexe` 与安装器常见的 `overlay`） —— [报告](https://www.virustotal.com/gui/file/8b57ff2fed4d503f3ef60d6f42acdffc974f83930869da6505a39b9acb5f561f) |
 
 也就是说：**内容层面没有恶意代码**，报毒来自“程序没有代码签名 + 会启动随包的 node/ffmpeg + 大量读写本地文件”这套行为与信誉判断。
 
