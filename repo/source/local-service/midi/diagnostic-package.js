@@ -48,6 +48,33 @@ async function sensitivePaths() {
   return [...new Set(list)].sort((a, b) => b.length - a.length);
 }
 
+/**
+ * 凭据抹除（P5）。诊断包当前不收集含 Key 的文件，所以今天不会泄露；
+ * 但"排障时顺手加一条模型配置"是最自然的动作，那一刻没有任何护栏 —— 这里兜住它。
+ * 抹掉秘密本身、保留 `sk-` / `Bearer ` 这类前缀，保住"这里本来有个什么东西"的信息量。
+ */
+const REDACTED = "***";
+const CREDENTIAL_PATTERNS = [
+  /sk-[A-Za-z0-9_-]{8,}/gu,                                            // 远程模型 Key（sk- 系）
+  /\bBearer\s+[A-Za-z0-9\-._~+/=]{8,}/giu,                             // Authorization 头
+  /\bgh[pousr]_[A-Za-z0-9]{16,}/gu,                                    // GitHub token
+  /\bxox[baprs]-[A-Za-z0-9-]{8,}/gu,                                   // Slack token
+  /\b(?:AKIA|ASIA)[A-Z0-9]{12,}/gu,                                    // AWS Access Key ID
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}/gu,  // JWT
+];
+const CREDENTIAL_PREFIX = /^(Bearer\s+|sk-|gh[pousr]_|xox[baprs]-|AKIA|ASIA)/u;
+
+function scrubCredentials(text) {
+  let out = String(text ?? "");
+  for (const pattern of CREDENTIAL_PATTERNS) {
+    out = out.replace(pattern, (match) => {
+      const prefix = match.match(CREDENTIAL_PREFIX);
+      return (prefix ? prefix[1] : "") + REDACTED;
+    });
+  }
+  return out;
+}
+
 function scrubWith(paths, text) {
   let out = String(text ?? "");
   for (const p of paths) {
@@ -74,8 +101,43 @@ function scrubWith(paths, text) {
     const tail = segments.length ? segments[segments.length - 1] : "";
     return "<本机路径>\\" + tail;
   });
+  // 兜底 3（P5-b）：JSON 载荷里的绝对路径是**双反斜杠**转义形式 ——
+  // `JSON.stringify({ p: "C:\\Program Files\\a\\b.dll" })` 落地成 `C:\\Program Files\\a\\b.dll`，
+  // 上面那条单反斜杠兜底一个字符都匹配不到（`E:` 后面紧跟的第二个反斜杠让它当场失败）。
+  // 诊断包里绝大多数条目都是 JSON 产物，崩溃栈里的模块路径（crash.txt 的 `模块!符号`）正是这种形态，
+  // 拿不到敏感根目录时就会原样进包。
+  // 这里**允许路径段含空格**（`Program Files`、`我的 曲库`）：JSON 字符串里的路径由 `"` 天然界定，
+  // 不会像非 JSON 文本那样把后面的自然语言一起吃进来（兜底 2 不跨空白，就是为免误吃）。
+  out = out.replace(/[A-Za-z]:\\\\(?:[^\\\n\r"']|\\\\)+/gu, (match) => {
+    const segments = String(match).split(/\\+/u).filter(Boolean);
+    const tail = segments.length ? segments[segments.length - 1] : "";
+    return "<本机路径>\\\\" + tail;
+  });
+  out = scrubCredentials(out);
   return out;
 }
+
+/**
+ * 诊断包的**唯一出口**（P5-b，第十六轮产物复核 §1）：collect() 收到的每一条都从这里出去，
+ * 于是「新增一条收集项忘了脱敏」不再可能 —— 默认安全，而不是靠人记得调 scrub()。
+ *
+ * 为什么不做进 makeZip：makeZip 是通用 zip 写入器，`midi/data-safety.js:19` 也用它打
+ * **用户数据导出包**（`:743-749` 把 database/olivia-local.sqlite 的 Buffer 直接塞进 entries）。
+ * 在那里做文本脱敏会把二进制当字符串替换、毁掉备份包 —— 脱敏只属于诊断包这条链路。
+ *
+ * 二进制条目直接拒绝（fail closed）：诊断包只装文本，宁可生成失败也不静默漏掉脱敏。
+ */
+function scrubEntries(entries, paths) {
+  return entries.map(entry => {
+    if (Buffer.isBuffer(entry.data)) {
+      throw new Error(`诊断包不接受二进制条目（${entry.name}）：脱敏只处理文本，二进制请改走数据备份链路`);
+    }
+    return { ...entry, data: scrubWith(paths, String(entry.data)) };
+  });
+}
+
+// 导出给护栏测试用（P5）：这些函数原先只在本模块内部调用，测试只能起真实服务走 HTTP。
+export { scrubCredentials, scrubWith, sensitivePaths, scrubEntries };
 
 // ---------------------------------------------------------------- 采集
 
@@ -235,7 +297,6 @@ const EXCLUDED = [
 
 async function collect() {
   const paths = await sensitivePaths();
-  const scrub = text => scrubWith(paths, text);
   const dbPath = join(USER_DATA, "database", "olivia-local.sqlite");
 
   const [dependencies, startup, mount, crashes, gameLogs, system] = await Promise.all([
@@ -313,22 +374,23 @@ async function collect() {
     "如果你要发到公开 issue 里，建议先自己扫一眼这几个 txt，确认没有不想公开的内容。",
   ].join("\n");
 
+  // 这里**不做就地脱敏**：所有条目统一从 scrubEntries() 这个出口出去（见上方注释）。
   const entries = [
     { name: "README.txt", data: readme },
     { name: "env.json", data: JSON.stringify(env, null, 2) },
-    { name: "dependencies.json", data: scrub(JSON.stringify(dependencies, null, 2)) },
-    { name: "startup.json", data: scrub(JSON.stringify(startup, null, 2)) },
+    { name: "dependencies.json", data: JSON.stringify(dependencies, null, 2) },
+    { name: "startup.json", data: JSON.stringify(startup, null, 2) },
     { name: "mount.json", data: JSON.stringify(mount, null, 2) },
     { name: "database.json", data: JSON.stringify(dbSummary(dbPath), null, 2) },
     { name: "game-crashes.json", data: JSON.stringify(crashAnalysis ?? crashes, null, 2) },
     { name: "game-logs.json", data: JSON.stringify(gameLogs, null, 2) },
     { name: "system.json", data: JSON.stringify(system, null, 2) },
   ];
-  if (runtimeLog) entries.push({ name: "runtime.log.txt", data: scrub(runtimeLog) });
-  if (runtimePrev) entries.push({ name: "runtime.previous.log.txt", data: scrub(runtimePrev) });
-  if (namingLog) entries.push({ name: "listen-naming.log.txt", data: scrub(namingLog) });
+  if (runtimeLog) entries.push({ name: "runtime.log.txt", data: runtimeLog });
+  if (runtimePrev) entries.push({ name: "runtime.previous.log.txt", data: runtimePrev });
+  if (namingLog) entries.push({ name: "listen-naming.log.txt", data: namingLog });
 
-  return { entries, paths };
+  return { entries: scrubEntries(entries, paths), paths };
 }
 
 // ---------------------------------------------------------------- 路由

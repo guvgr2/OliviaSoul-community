@@ -12,7 +12,7 @@
   const BASE = "/toy/listen-naming";
   // ⚠️ 发布前改成你自己的仓库（与 midi/community-catalog.js 里的 CATALOG_URL 保持一致）
   const REPO = "guvgr2/OliviaSoul-community";
-  const APP_VERSION = "2008.2.7-linli9-1.1.2";
+  const APP_VERSION = "2008.2.7-linli9-1.2.0";
 
   const KINDS = [
     ["bug", "功能坏了 / 报错"],
@@ -65,6 +65,15 @@
     }, options));
     const body = await response.json().catch(() => ({}));
     if (body && body.code !== 0 && body.code != null) throw new Error(body.message || `请求失败（${body.code}）`);
+    // 曲库目录还没设置时服务端回的是指引卡片 { needsLibrary: true, message }（code 仍是 0）：
+    // 那是给用户看的话，不是数据 —— 当成功返回时 diagnostics() 会把它读成「社区名单：0 条 /
+    // 本地未命名：未知 首」，用户拿着这份失真信息去报障。
+    // （本模块调的是 /community/status，兜底在 midi/community-catalog.js，不是 listen-naming。）
+    if (body && body.data && body.data.needsLibrary) {
+      const error = new Error(body.data.message || "还没设置曲目存储路径");
+      error.needsLibrary = true;
+      throw error;
+    }
     return body && "data" in body ? body.data : body;
   }
 
@@ -79,7 +88,11 @@
       lines.push(`- 社区名单：${catalog.count ?? 0} 条，更新于 ${catalog.updatedAt || "未知"}${catalog.stale ? "（本地缓存）" : ""}`);
       lines.push(`- 本地未命名：${status.local?.unnamed ?? "未知"} 首`);
     } catch (error) {
-      lines.push(`- 社区名单：读取失败（${scrub(error.message)}）`);
+      // needsLibrary 时 error.message 就是服务端给的那句指路话（1.2.0 刚把入口改对）：
+      // 套上「读取失败」会让人以为是故障，而真正的原因是还没设置曲库目录。
+      lines.push(error && error.needsLibrary
+        ? `- 曲库目录：还没设置 —— ${scrub(error.message)}`
+        : `- 社区名单：读取失败（${scrub(error.message)}）`);
     }
     return lines.join("\n");
   }

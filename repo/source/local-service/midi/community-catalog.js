@@ -630,7 +630,7 @@ export async function suggestNameFor(folder, options = {}) {
   if (!existsSync(databasePath)) throw new Error(`未找到 OliviaSoul 数据库：${databasePath}`);
   let libraryRoot = String(options.libraryRoot ?? LIBRARY_ROOT ?? "").trim();
   if (!libraryRoot) libraryRoot = readLibraryRootFromDatabase(databasePath);
-  if (!libraryRoot) throw httpError(409, "还没设置曲目存储路径", "COMMUNITY_LIBRARY_MISSING");
+  if (!libraryRoot) throw httpError(409, "还没设置曲目存储路径：到「客户端与歌词 → 客户端挂载与存储」的「数据与曲目保存位置」里设置一次", "COMMUNITY_LIBRARY_MISSING");
   libraryRoot = resolve(libraryRoot);
 
   const catalog = await fetchCatalog(options);
@@ -987,7 +987,7 @@ async function contributionContext(options = {}) {
   let libraryRoot = String(options.libraryRoot ?? LIBRARY_ROOT ?? "").trim();
   if (!libraryRoot) libraryRoot = readLibraryRootFromDatabase(databasePath);
   if (!libraryRoot) {
-    throw httpError(409, "还没设置曲目存储路径：请到「基础设置」里设置后再回来投稿", "COMMUNITY_LIBRARY_MISSING");
+    throw httpError(409, "还没设置曲目存储路径：到「客户端与歌词 → 客户端挂载与存储」的「数据与曲目保存位置」里设置后再回来投稿", "COMMUNITY_LIBRARY_MISSING");
   }
   libraryRoot = resolve(libraryRoot);
 
@@ -1302,7 +1302,7 @@ export async function createCommunityRoutes(options = {}) {
     if (res && typeof res.writeHead !== "function") { url = res; res = null; }
       const path = (typeof url === "string" ? url : (url && url.pathname) || "").replace(/^\/toy/u, "").replace(/^\/admin\/api/u, "");
       if (path.startsWith("/listen-naming/community")) {
-        return { needsLibrary: true, message: "还没设置曲目存储路径。请到「基础设置」里设置后，再回来使用本功能。" };
+        return { needsLibrary: true, message: "还没设置曲目存储路径：到「客户端与歌词 → 客户端挂载与存储」的「数据与曲目保存位置」里设置一次，再回来重试。" };
       }
       return null;
     };

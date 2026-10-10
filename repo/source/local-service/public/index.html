@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OliviaSoul-community</title>
+  <!-- 页面图标：不写这行，浏览器每页都会自己去要 /favicon.ico 并在控制台留一条 404（真机上唯一的 console 噪音）。
+       指向白名单里已有的图，顺带让标签页有个像样的图标。 -->
+  <link rel="icon" href="/admin/olivia-soul-gold.png">
   <link rel="stylesheet" href="/admin/styles.css">
   <link rel="stylesheet" href="/admin/lyrics-settings.css">
   <link rel="stylesheet" href="/admin/listen-naming.css">
@@ -24,7 +27,8 @@
     <div class="workspace">
       <aside class="panel sidebar">
         <nav class="sideTabs" aria-label="管理页签">
-          <!-- g11 导航分类：15 个平铺页签收成 5 组。组内仍是原来的 .sideTab[data-tab]，
+          <!-- g11 导航分类：17 个平铺页签收成 6 组（别写死数字，加了新页签就与事实不符）。
+               组内仍是原来的 .sideTab[data-tab]，
                点页签的行为、通知点、页签联动逻辑都不变（app.js 统一处理展开/收起与提醒点） -->
           <!-- g13 新手引导：每个分组和页签都带 title，鼠标悬停就能看到"这页是干什么的"，
                不用逐个点开摸索。更完整的"想做什么 → 去哪一页"见「基础设置」页顶部的功能地图 -->
@@ -42,8 +46,10 @@
           </details>
 
           <details class="sideGroup" data-group="library" open>
-            <summary class="sideGroupTitle" data-tip="官方作品与视频转文字"><span>曲库与作品</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
+            <summary class="sideGroupTitle" data-tip="官方作品、歌单与收藏、曲库体检、视频转文字"><span>曲库与作品</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
             <button class="sideTab" type="button" data-tab="performances" data-tip="官方作品：官方曲目的曲名与时段、播放与预览">官方作品</button>
+            <button class="sideTab" type="button" data-tab="folders" data-tip="歌单与收藏：一次灌入整个曲库、拖拽排序、看大尺寸二维码、批量导入导出 —— 与游戏里的歌单是同一份数据">歌单与收藏</button>
+            <button class="sideTab" type="button" data-tab="library-health" data-tip="曲库体检：占位名 / 同名冲突 / 缺失视频 / 缺失 MIDI / 时长异常 / 同款群不一致 / 疑似重复，逐条能跳去修">曲库体检</button>
             <button class="sideTab" type="button" data-tab="transcription" data-tip="视频转文字：把视频里的语音转成文字（供写信与记忆使用）">视频转文字</button>
           </details>
 
@@ -64,7 +70,7 @@
             <button class="sideTab" type="button" data-tab="feedback" data-tip="反馈与建议：提交问题或建议、导出反馈材料">反馈与建议</button>
             <button class="sideTab" type="button" data-tab="dependency-check" data-tip="依赖检查：确认 ffmpeg 等运行依赖是否就绪">依赖检查</button>
             <button class="sideTab" type="button" data-tab="logs" data-tip="运行日志：看程序自己的运行日志、定位报错">运行日志</button>
-            <button class="sideTab" type="button" data-tab="debug" data-tip="高级设置（排障与数据安全）：启动耗时 · 曲库健康检查 · 游戏崩溃记录 · 一键诊断包 · 数据备份与恢复（回滚）· 导出/导入迁移 · 游戏崩溃规避 · 游戏日志 · 数据搬移">高级设置</button>
+            <button class="sideTab" type="button" data-tab="debug" data-tip="高级设置（排障与数据安全）：启动耗时 · 曲库健康检查 · 游戏崩溃记录 · 一键诊断包 · 数据备份与恢复（回滚）· 导出/导入迁移 · 游戏崩溃规避 · 游戏日志 · 数据搬家">高级设置</button>
           </details>
         </nav>
       </aside>
@@ -87,6 +93,7 @@
             </summary>
             <ul class="guideMapList">
               <li><b>给曲库起名 / 标白天傍晚夜晚</b> → 「命名与试听 → <em>曲名与时段</em>」（主要工作区，第一次进去有「三步上手」）</li>
+              <li><b>看官方曲目、改官方曲名与时段</b> → 「曲库与作品 → <em>官方作品</em>」</li>
               <li><b>先听一段再决定</b> → 「命名与试听 → <em>试听工具</em>」：试听播放器</li>
               <li><b>某个时段判定对不对 / 想改</b> → 「试听工具 → <em>时段依据复核</em>」：看画面与判定值，可「按画面判定重写」或手动指定</li>
               <li><b>找同一首的不同版本</b> → 「试听工具 → <em>同款群核对</em>」</li>
@@ -94,6 +101,7 @@
               <li><b>确认 ffmpeg 等依赖是否就绪</b> → 「更新与维护 → <em>依赖检查</em>」</li>
               <li><b>看程序日志 / 定位报错</b> → 「更新与维护 → <em>运行日志</em>」</li>
               <li><b>出问题了，想给作者一份材料</b> → 「更新与维护 → <em>高级设置</em>」最下面的「<b>一键诊断包</b>」：导出一个已脱敏的 zip 直接发过去</li>
+              <li><b>提问题 / 提建议、导出反馈材料</b> → 「更新与维护 → <em>反馈与建议</em>」</li>
               <li><b>怕数据丢 / 改错了想回退</b> → 「高级设置 → <b>数据备份与恢复</b>」：立即备份、看某份备份里有什么、一键回到某个时间点（改时段和写曲名前程序也会自动留备份）</li>
               <li><b>换电脑 / 重装，要把整理成果带走</b> → 「高级设置 → <b>导出 / 导入</b>」：导出一个 zip（含曲名、时段、歌词关联、信件；不含 API Key），在新机器上「从导出包导入」即可</li>
               <li><b>游戏崩了 / 崩在哪个模块</b> → 「高级设置 → <b>游戏崩溃记录</b>」（点「解读崩溃报告」）</li>
@@ -102,10 +110,17 @@
               <li><b>启动慢在哪一段</b> → 「高级设置 → <b>读取启动耗时</b>」</li>
               <li><b>游戏自己写了什么</b> → 「高级设置 → <b>游戏日志</b>」（页面最底部，点「读取游戏日志」）</li>
               <li><b>挂界面补丁 / 改曲库目录 / 备份</b> → 「客户端与歌词 → <em>客户端挂载与存储</em>」</li>
+              <li><b>把视频里的语音转成文字（供写信与记忆用）</b> → 「曲库与作品 → <em>视频转文字</em>」</li>
               <li><b>桌面歌词外观</b> → 「客户端与歌词 → <em>歌词设置</em>」</li>
-              <li><b>换模型 / 想用别的模型</b> → 「基础与设置 → <em>AI 模型</em>」：在「<b>选择模型</b>」里挑一个（DeepSeek 的 <b>deepseek-flash</b> / <b>deepseek-v4-pro</b>，智谱 GLM 的 <b>glm-5.3-flash</b> / <b>glm-5.3-flashx</b> / <b>glm-5.3</b>，Kimi 的 <b>kimi-k3</b> / <b>kimi-k2.6</b> / <b>kimi-k2.7-code</b>），或选「<b>自定义</b>」自己填接口地址与模型名。<b>选哪个就用哪个，程序不会自动切换</b>；换完要填 Key 并点「保存并测试远程模型」</li>
+              <li><b>换模型 / 想用别的模型</b> → 「基础与设置 → <em>AI 模型</em>」：在「<b>选择模型</b>」里挑一个（DeepSeek 的 <b>deepseek-flash</b> / <b>deepseek-v4-pro</b>，智谱 GLM 的 <b>glm-5.3-flash</b> / <b>glm-5.3-flashx</b> / <b>glm-5.3</b>，Kimi 的 <b>kimi-k3</b> / <b>kimi-k2.6</b> / <b>kimi-k2.7-code</b>，MiniMax 的 <b>M2-her</b>（角色扮演、多轮闲聊），豆包（火山方舟）的 <b>doubao-seed-character-260628</b> / <b>doubao-seed-character-251128</b> / <b>doubao-seed-2-0-mini-260428</b>（<b>需先在火山方舟控制台开通模型</b>，未开通会报 403）），或选「<b>自定义</b>」自己填接口地址与模型名。<b>选哪个就用哪个，程序不会自动切换</b>；换完要填 Key 并点「保存并测试远程模型」</li>
               <li><b>记忆与信件</b> → 「信件与记忆 → <em>记忆</em>」</li>
               <li><b>使用声明 / 隐私 / 开源许可</b> → 「基础与设置 → <em>声明与合规</em>」</li>
+              <li><b>管理游戏里的歌单 / 建收藏夹</b> → <b>游戏内</b>：曲库与作品列表里每首歌的「加播单」点开就是本地歌单下拉，勾选即可加进去；已经进过歌单的曲目会在行右上角显示「已在 N 个歌单」；下拉底部「＋新建歌单」可以当场建，右上「管理歌单」能改名 / 调顺序 / 看分享码 / 把这一夹设为循环播放。<b>想批量操作（一次灌入整个曲库、拖拽排序、看大尺寸二维码、导入导出）就去「曲库与作品 → 歌单与收藏」</b>，两边是同一份数据</li>
+              <li><b>把歌单给别人 / 换机器导入</b> → 游戏内歌单弹层里、或「曲库与作品 → <em>歌单与收藏</em>」里的「导出」：小歌单出二维码，大歌单导出 .osfolder 文件；导入时选文件即可自动匹配曲库（匹配不上的会列出来告诉你）</li>
+              <li><b>回看以前的来信与回信</b> → <b>游戏内</b>：信箱的「下载 / 分享 / 一键导出」旁边新加了一枚「时间线」，点开按日期往下捋，能看全文与回信视频</li>
+              <li><b>把导出的信件 JSON 放回来</b> → <b>游戏内</b>时间线顶部的「导入」：换电脑或重装后用它恢复信件</li>
+              <li><b>曲库里哪些曲子有问题</b> → 「曲库与作品 → <em>曲库体检</em>」：占位名 / 同名冲突 / 缺失视频 / 缺失 MIDI / 时长异常 / 同款群不一致 / 疑似重复，逐条能跳去修</li>
+              <li><b>备份占了多少空间 / 删掉旧的</b> → 「更新与维护 → <em>高级设置</em>」的「数据备份与恢复」：按类型看占用、看某份里有什么、删除单份、设保留份数</li>
             </ul>
           </details>
 
@@ -625,7 +640,7 @@
           <div class="panelHead">
             <div>
               <h2>高级设置（排障与调试）</h2>
-              <p>本页依次是：显示摘要 · 回信延迟 · 今日信件 · 数据搬移 · 诊断（读取启动耗时 / 曲库健康检查 / 游戏崩溃记录 / 一键诊断包）· <b>数据备份与恢复</b>（含导出迁移）· 游戏日志。要给作者报障，就用「一键诊断包」导出的 zip</p>
+              <p>本页依次是：显示摘要 · 回信延迟 · 今日信件 · 数据搬家 · 诊断（读取启动耗时 / 曲库健康检查 / 游戏崩溃记录 / 一键诊断包）· <b>数据备份与恢复</b>（含导出迁移）· 游戏日志。要给作者报障，就用「一键诊断包」导出的 zip</p>
             </div>
           </div>
           <div class="debugSettings">
@@ -669,6 +684,8 @@
             </section>
           </div>
         </section>
+      <section class="panel tabPage" data-page="folders" hidden></section>
+      <section class="panel tabPage" data-page="library-health" hidden></section>
       <section class="panel tabPage" data-page="listen-naming" hidden></section>
     <section class="panel tabPage" data-page="listen-tools" hidden></section>
       <section class="panel tabPage" data-page="dependency-check" hidden></section>
@@ -710,6 +727,8 @@
   <script src="/admin/legal-notices.js"></script>
   <script src="/admin/logs-page.js"></script>
   <script src="/admin/song-editor.js"></script>
+  <script src="/admin/folder-manager.js"></script>
+  <script src="/admin/library-health-panel.js"></script>
   <script src="/admin/getting-started.js"></script>
   <script src="/admin/game-stability-panel.js"></script>
   <script type="module" src="/admin/app.js"></script>

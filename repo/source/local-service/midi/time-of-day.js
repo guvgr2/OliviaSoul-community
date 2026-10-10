@@ -483,7 +483,7 @@ export async function createTimeOfDayRoutes(options = {}) {
     if (res && typeof res.writeHead !== "function") { url = res; res = null; }
       const path = routePathOf(url).replace(/^\/toy/u, "").replace(/^\/admin\/api/u, "");
       if (path.startsWith("/listen-naming/time-of-day")) {
-        return { needsLibrary: true, message: "还没设置曲目存储路径。请到「基础设置」里设置后，再回来使用本功能。" };
+        return { needsLibrary: true, message: "还没设置曲目存储路径：到「客户端与歌词 → 客户端挂载与存储」的「数据与曲目保存位置」里设置一次，再回来重试。" };
       }
       return null;
     };

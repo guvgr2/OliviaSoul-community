@@ -426,14 +426,26 @@ export async function createListenNamingRoutes(options = {}) {
   const run = options.runProcess ?? runProcess;
 
   // 曲库目录尚未设置（新装用户就是这种状态）：绝不抛错 —— 抛错会让 /admin 界面整个 500。
-  // 这里只对本功能的端点返回明确提示，其它请求返回 null 交回 server.js 正常处理。
+  // 这里对本模块**全部**端点回同一张指引卡片，别的模块的路由返回 null 交回 server.js 处理。
   if (!libraryRoot) {
+    // 与本模块共用 /toy/listen-naming/ 前缀、但不属于本模块的路径。server.js 里这些模块都挂载在
+    // listen-naming 之后（logs / dependencies / diagnostics / data / game-stability /
+    // time-of-day / community），必须放行，否则会被本模块截胡。
+    const FOREIGN = ["/listen-naming/logs", "/listen-naming/dependencies", "/listen-naming/diagnostics",
+      "/listen-naming/data", "/listen-naming/game-stability", "/listen-naming/time-of-day",
+      "/listen-naming/community"];
+    // 指路要给用户能照着走的位置：设置项在「客户端与歌词 → 客户端挂载与存储」页的
+    // 「数据与曲目保存位置」。以前这里指的是侧栏里另一页 —— 那一页根本没有这项设置，
+    // 等于把用户指到空处（1.2.0 第二轮审核 · 新用户安装模拟报告 2.2/2.3）。
+    // （该页名由 test/library-missing-guidance.test.js 逐文件把关，不许再写回旧入口。）
+    const MISSING_MESSAGE = "还没设置曲目存储路径：到「客户端与歌词 → 客户端挂载与存储」的「数据与曲目保存位置」里设置一次，再回来重试。";
     return async function handleWithoutLibrary(req, res, url) {
     // 兼容两种调用写法：(req, res, url) 与旧的 (req, url)——只传两个参数时 res 其实是 URL。
     if (res && typeof res.writeHead !== "function") { url = res; res = null; }
       const path = routePathOf(url).replace(/^\/toy/u, "").replace(/^\/admin\/api/u, "");
-      const OWNED = ["/listen-naming/list", "/listen-naming/clip", "/listen-naming/name", "/listen-naming/status",
-        "/listen-naming/undo", "/listen-naming/progress", "/listen-naming/position"];
+      // 名单反过来写：以前列的是"本模块认领的 7 个路径"，漏一个就退化成 server.js 兜底的
+      // 404「接口不存在」（/listen-naming/health 与 /listen-naming/tags 就这么漏掉了，
+      // 新用户看到「读取标签失败：接口不存在」）。排除法不会随新增端点失效。
       // 「数据搬移」与曲库目录无关，而且**新装机器上曲库目录本来就是空的** —— 这正是最需要它的时候。
       // 以前这里 return null 并注释"交给后面的挂载点"，但 server.js 里并没有第二个 listen-naming
       // 挂载点，结果是这种状态下探测与复制全部 404「接口不存在」。
@@ -444,8 +456,8 @@ export async function createListenNamingRoutes(options = {}) {
         const body = await readJson(req);
         return await applyMigration(body?.path);
       }
-      if (OWNED.includes(path)) {
-        return { needsLibrary: true, message: "还没设置曲目存储路径。请到「基础设置」里设置后，再回来使用本功能。" };
+      if (path.startsWith("/listen-naming/") && !FOREIGN.some(prefix => path.startsWith(prefix))) {
+        return { needsLibrary: true, message: MISSING_MESSAGE };
       }
       return null;
     };
@@ -737,7 +749,9 @@ export async function createListenNamingRoutes(options = {}) {
     const db = openReadOnly(databasePath);
     try {
       return db.prepare(
-        "SELECT id, video_path, custom_name, corrected_name, duration_us FROM user_songs WHERE removed_at IS NULL",
+        // name 一并读出来：曲库体检要用它统计「占位名」（个人上传 · midi_xxx）——
+        // custom_name 只在命名页写过名之后才有值，光看它分不出「没起名」和「名字就是占位名」。
+        "SELECT id, name, video_path, custom_name, corrected_name, duration_us FROM user_songs WHERE removed_at IS NULL",
       ).all();
     } finally {
       db.close();
@@ -1169,18 +1183,29 @@ export async function createListenNamingRoutes(options = {}) {
     return { name: wanted, conflicts: conflicts.slice(0, 20), conflictCount: conflicts.length, siblings };
   }
 
-  async function libraryHealth() {    const [rows, folders, groupIndex] = await Promise.all([
+  // 「曲库体检」的分页口径：默认每类只回前 30 条（旧诊断面板就吃这么多），
+  // 前端要「加载全部」时带 full=1 —— 关键是把 total 一起回去，别让前端把 30 当成全部。
+  const HEALTH_LIST_LIMIT = 30;
+  const HEALTH_TWIN_LIMIT = 20;
+  // 曲库里的占位名（个人上传 · midi_xxx）——只统计，不猜曲名（识别早就验证过不可靠）。
+  const PLACEHOLDER_NAME_PATTERN = /^个人上传\s*·/u;
+
+  async function libraryHealth(options = {}) {
+    const full = options.full === true;
+    const [rows, folders, groupIndex] = await Promise.all([
       Promise.resolve().then(readSongRows),
       existingFolders(),
       groups.load(),
     ]);
     const byName = new Map();
     const byFolder = new Map();
+    const rowFolders = new Set();
     for (const row of rows) {
       const videoPath = String(row.video_path ?? "");
       if (!videoPath.toLowerCase().endsWith(".mp4")) continue;
       const folder = folderFromPath(videoPath);
       if (!folder || !FOLDER_PATTERN.test(folder)) continue;
+      rowFolders.add(folder);
       const name = String(row.custom_name ?? "").trim();
       if (name) {
         if (!byName.has(name)) byName.set(name, []);
@@ -1190,44 +1215,86 @@ export async function createListenNamingRoutes(options = {}) {
     }
     const duplicateNames = [...byName.entries()]
       .filter(([, list]) => new Set(list).size > 1)
-      .map(([name, list]) => ({ name, folders: [...new Set(list)].slice(0, 6), count: new Set(list).size }))
-      .slice(0, 30);
+      .map(([name, list]) => ({ name, folders: [...new Set(list)].slice(0, 6), count: new Set(list).size }));
 
+    // 同款群分两种，颜色和处置完全不同：
+    //   · twinConflicts＝同一个群里的歌名字不一样（要人工核对，属「不一致」）
+    //   · duplicateGroups＝同一个群里的歌名字一模一样（可合并/可忽略，不是错误）
     const twinConflicts = [];
+    const duplicateGroups = [];
+    const seenGroups = new Set();
     for (const [folder, twins] of groupIndex.entries?.() ?? groupIndex.map?.entries?.() ?? []) {
-      const members = [folder, ...(twins ?? [])].filter(value => byFolder.has(value));
+      const members = [...new Set([folder, ...(twins ?? [])])].filter(value => byFolder.has(value));
+      if (members.length < 2) continue;
+      // 索引是「每个成员 → 同群其他人」，不按成员集合去重会把同一个群报 N 次（N = 群大小）。
+      const groupKey = [...members].sort().join("\u0000");
+      if (seenGroups.has(groupKey)) continue;
+      seenGroups.add(groupKey);
       const names = [...new Set(members.map(value => byFolder.get(value)))];
       if (names.length > 1) twinConflicts.push({ folders: members.slice(0, 6), names: names.slice(0, 6) });
+      else duplicateGroups.push({ name: names[0], folders: members.slice(0, 6), count: members.length });
     }
 
     const missingVideo = [];
     const durationOdd = [];
+    const placeholderNames = [];
+    let placeholderTotal = 0;
     for (const row of rows) {
       const videoPath = String(row.video_path ?? "");
       if (!videoPath.toLowerCase().endsWith(".mp4")) continue;
       const folder = folderFromPath(videoPath);
       if (!folder) continue;
+      // 占位名：曲库显示名还是「个人上传 · midi_xxx」，而且命名页/纠正名都没写过真名。
+      const displayName = String(row.name ?? "").trim();
+      const named = Boolean(String(row.custom_name ?? "").trim() || String(row.corrected_name ?? "").trim());
+      if (!named && PLACEHOLDER_NAME_PATTERN.test(displayName)) {
+        placeholderTotal += 1;
+        placeholderNames.push({ folder, name: displayName });
+      }
       if (!folders.has(folder)) { missingVideo.push(folder); continue; }
       const seconds = Number(row.duration_us ?? 0) / 1_000_000;
       if (seconds > 0 && (seconds < 20 || seconds > 3600)) durationOdd.push({ folder, seconds: Math.round(seconds) });
     }
+    // 缺失 MIDI＝磁盘上有这个文件夹，但曲库表里没有对应记录（missingVideo 的反向）
+    const missingMidi = [...folders].filter(folder => FOLDER_PATTERN.test(folder) && !rowFolders.has(folder)).sort();
+
+    const slice = (list, limit) => (full ? list : list.slice(0, limit));
+    const uniqueMissingVideo = [...new Set(missingVideo)].sort();
 
     return {
       checkedAt: new Date().toISOString(),
       libraryRoot,
+      full,
       counts: {
         rows: rows.length,
         folders: folders.size,
         named: byFolder.size,
         duplicateNames: duplicateNames.length,
         twinConflicts: twinConflicts.length,
-        missingVideo: missingVideo.length,
+        duplicateGroups: duplicateGroups.length,
+        missingVideo: uniqueMissingVideo.length,
+        missingMidi: missingMidi.length,
         durationOdd: durationOdd.length,
+        placeholderNames: placeholderTotal,
       },
-      duplicateNames,
-      twinConflicts: twinConflicts.slice(0, 20),
-      missingVideo: [...new Set(missingVideo)].slice(0, 30),
-      durationOdd: durationOdd.slice(0, 30),
+      // 上面 counts 是「全部有多少」，下面每类的 total 是「这类明细一共几条」——
+      // 前端要显示「共 N 条，已列出前 M 条」，两个数都得有。
+      totals: {
+        duplicateNames: duplicateNames.length,
+        twinConflicts: twinConflicts.length,
+        duplicateGroups: duplicateGroups.length,
+        missingVideo: uniqueMissingVideo.length,
+        missingMidi: missingMidi.length,
+        durationOdd: durationOdd.length,
+        placeholderNames: placeholderNames.length,
+      },
+      duplicateNames: slice(duplicateNames, HEALTH_LIST_LIMIT),
+      twinConflicts: slice(twinConflicts, HEALTH_TWIN_LIMIT),
+      duplicateGroups: slice(duplicateGroups, HEALTH_TWIN_LIMIT),
+      missingVideo: slice(uniqueMissingVideo, HEALTH_LIST_LIMIT),
+      missingMidi: slice(missingMidi, HEALTH_LIST_LIMIT),
+      durationOdd: slice(durationOdd, HEALTH_LIST_LIMIT),
+      placeholderNames: slice(placeholderNames, HEALTH_LIST_LIMIT),
     };
   }
 
@@ -1868,8 +1935,9 @@ export async function createListenNamingRoutes(options = {}) {
     // g12：启动耗时报表 + 曲库健康检查（诊断面板用）
     if (req.method === "GET" && path === "/listen-naming/startup-report")
       return await startupReport(Math.min(10, Math.max(1, Number(url.searchParams.get("limit") ?? 3) || 3)));
+    // ?full=1 回到「不截断」：曲库体检页的「加载全部」走这条，默认仍只回前 30/20 条（旧诊断面板口径不变）。
     if (req.method === "GET" && path === "/listen-naming/health")
-      return await libraryHealth();
+      return await libraryHealth({ full: url.searchParams.get("full") === "1" });
     // g12：输入曲名时的即时质量检查（同名冲突 / 同编号已有写法）
     if (req.method === "GET" && path === "/listen-naming/name-check") {
       const name = String(url.searchParams.get("name") ?? "");

@@ -93,3 +93,37 @@ test("Kimi 的推理参数按官方文档分别发送（三个模型各不相同
     "非 Kimi 模型仍应发送 temperature",
   );
 });
+
+/** 2026-10-08 追加：MiniMax（角色扮演 / 多轮闲聊向）——工单《工单-日常聊天与写回信》D。 */
+const MINIMAX = [["M2-her", "https://api.minimax.cn/v1"]];
+
+test("前端模型清单里有 MiniMax 的 M2-her，且 id / 地址 / 模型名一一对应", () => {
+  for (const [model, baseUrl] of MINIMAX) {
+    const re = new RegExp(`id: "minimax-m2-her"[^}]*baseUrl: "${escape(baseUrl)}"[^}]*model: "${escape(model)}"`, "u");
+    assert.match(app, re, `前端预设缺少 MiniMax ${model}（或地址/模型名不匹配）`);
+  }
+});
+
+test("打包审计白名单与两份文档必须覆盖 MiniMax（漏一处就是「界面能选、打包被拦」）", () => {
+  const line = /\$allowedRemoteModels = @\(([^)]*)\)/u.exec(safety);
+  assert.ok(line, "找不到 $allowedRemoteModels");
+  assert.ok(line[1].includes("'M2-her'"),
+    "白名单缺少 M2-her：只加了前端预设而漏了白名单，打包审计会直接失败");
+  assert.ok(apiDoc.includes("https://api.minimax.cn/v1"), "《API配置使用说明》缺少 MiniMax 的接口地址");
+  assert.ok(apiDoc.includes("M2-her"), "《API配置使用说明》缺少 M2-her");
+  assert.ok(guide.includes("M2-her"), "随包《使用说明》缺少 M2-her");
+});
+
+test("MiniMax M2-her 不被当成已知推理家族：厂商专用参数一个都不发，temperature 照发", () => {
+  const r = buildChatRequest(
+    { provider: "deepseek", baseUrl: "https://api.minimax.cn/v1", model: "M2-her", apiKey: "k" },
+    { messages: [{ role: "user", content: "hi" }], temperature: 1 },
+  );
+  assert.equal(r.url, "https://api.minimax.cn/v1/chat/completions", "M2-her 的请求地址不对");
+  assert.match(r.headers.Authorization, /^Bearer /u, "M2-her 应使用 Bearer 鉴权");
+  assert.ok(!reasoningFamilyOf("M2-her"),
+    "M2-her 目前不应被识别为已知推理家族：认错家族会发出官方不认的 thinking / reasoning_effort，直接被 400 拒");
+  assert.equal(r.body.thinking, undefined, "M2-her 没有 thinking 参数，不该发");
+  assert.equal(r.body.reasoning_effort, undefined, "M2-her 没有 reasoning_effort，不该发");
+  assert.equal(r.body.temperature, 1, "M2-her 接受 temperature，应当照发");
+});

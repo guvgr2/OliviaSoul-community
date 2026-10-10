@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
-import { FEAPP_REVISIONS, feappRevisionAtLeast, feappRevisionRank, isKnownFeappRevision } from '../desktop/feapp-revisions.js';
+import { FEAPP_REVISIONS, feappMarkerStartsWithExpression, feappRevisionAtLeast, feappRevisionRank, isKnownFeappRevision } from '../desktop/feapp-revisions.js';
 
 const DESKTOP = new URL('../desktop/', import.meta.url);
 const TOOLS = new URL('../../tools/', import.meta.url);
@@ -45,6 +45,15 @@ test('补丁脚本的 marker 版本必须在已知版本列表内', async () => 
   assert.ok(matched, '未能从 patch-feapp-local.ps1 解析出 $patchMarker');
   const marker = matched[1];
   assert.ok(FEAPP_REVISIONS.includes(marker), `补丁 marker ${marker} 不在 feapp-revisions.js 的已知列表里 —— 新增补丁版本时要同步该列表`);
+  // 只断言「在列表里」不够：marker 从 v63 倒退成 v61 时，v61 本身也在列表里，测试照样绿，
+  // 而已经打过 v63 的客户端会被判成「没打补丁」并重打一遍（v45→v46 那次事故的同类）。
+  // 这里钉两件事：① marker 必须是列表里的最新版本（不许倒退）；② 补丁脚本与 get-feapp-status.ps1 必须认同一个当前版本。
+  const latest = FEAPP_REVISIONS[FEAPP_REVISIONS.length - 1];
+  assert.equal(marker, latest, `补丁 marker ${marker} 不是已知列表里的最新版本 ${latest} —— 补丁版本不得倒退，也不得先加脚本后加列表`);
+  const status = await read(TOOLS, 'get-feapp-status.ps1');
+  const currentMarker = /\$currentMarker\s*=\s*'\/\*OliviaSoulPatch:mail-music-(v\d{1,12})\*\/'/u.exec(status);
+  assert.ok(currentMarker, '未能从 get-feapp-status.ps1 解析出 $currentMarker');
+  assert.equal(currentMarker[1], marker, `patch-feapp-local.ps1 的 marker（${marker}）与 get-feapp-status.ps1 的 $currentMarker（${currentMarker[1]}）不一致`);
 });
 
 test('get-feapp-status.ps1 的 currentMarker 与 knownMarkers 必须覆盖已知版本', async () => {
@@ -63,14 +72,20 @@ test('get-feapp-status.ps1 的 currentMarker 与 knownMarkers 必须覆盖已知
   assert.deepEqual(missing, [], `get-feapp-status.ps1 的 knownMarkers 缺少这些版本：${missing.join('、')}`);
 });
 
-test('client-backups.js 内嵌的 marker 判定必须覆盖「会改 locale」的全部版本（v29+）', async () => {
+test('client-backups.js 的 marker 判定由 feapp-revisions.js 生成，不得再抄一份版本列表', async () => {
   const backups = await read(DESKTOP, 'client-backups.js');
-  const matched = /knownFeLocalePatch=\([\s\S]{0,2000}?\)\)\);/u.exec(backups);
-  assert.ok(matched, '未能解析内嵌 PS 的 knownFeLocalePatch 判定');
-  const covered = new Set(versionsIn(matched[0]).map(v => `v${v}`));
+  // 2026-10 client-backups.js 内嵌 PS 里那份写死的 marker 枚举已经长到 2000 字符，
+  // 再加一个版本就会撑破这条测试原来的解析窗口 —— 改成在模板字符串里插
+  // ${feappMarkerStartsWithExpression('$text')}，从此只有 feapp-revisions.js 一份列表。
+  assert.match(backups, /knownFeLocalePatch=\([\s\S]{0,400}?\$\{feappMarkerStartsWithExpression\('\$text'\)\}/u,
+    '内嵌 PS 的 knownFeLocalePatch 判定应使用 feappMarkerStartsWithExpression()');
+  const literalChains = (backups.match(/\$text\.StartsWith\('\/\*OliviaSoulPatch:mail-music-v\d+\*\/'\)/gu) ?? []).length;
+  assert.equal(literalChains, 0, '内嵌 PS 里不应再出现写死的 marker 枚举');
+  // 生成出来的表达式必须覆盖全部「会改 locale」的版本（v29+），且不含未知版本。
+  const covered = new Set(versionsIn(feappMarkerStartsWithExpression('$text')).map(v => `v${v}`));
   const required = FEAPP_REVISIONS.filter(v => feappRevisionAtLeast(v, 'v29'));
-  const missing = required.filter(v => !covered.has(v));
-  assert.deepEqual(missing, [], `内嵌 marker 判定缺少：${missing.join('、')}（新增补丁版本时要同步，或改用 feappMarkerStartsWithExpression()）`);
+  assert.deepEqual(required.filter(v => !covered.has(v)), [], '生成表达式缺少 v29+ 的版本');
+  assert.deepEqual([...covered].filter(v => !FEAPP_REVISIONS.includes(v)), [], '生成表达式含未知版本');
 });
 
 test('卸载恢复路径的 locale 放行范围与备份路径一致（同一事实不得有两个副本）', async () => {
@@ -82,15 +97,25 @@ test('卸载恢复路径的 locale 放行范围与备份路径一致（同一事
   }
 });
 
+// 刻意不打包的 desktop 文件 —— 唯一来源，两个消费方：下面的「打包清单必须覆盖全部模块」
+// 与「不得被任何生产代码 import」。改这里就等于同时改两处断言。
+//   main.js      = 上游 Electron 风格旧入口
+//   preload.cjs  = Electron preload 脚本（唯一引用者是 main.js:513，而 main.js 自己不打包）
+// 本支由 C# WebView2 宿主直接启动 server.js，两个都不需要进包。
+// 2026-10-11 第二轮复核补 preload.cjs：原先只排除 main.js，而扫描面又按 `.endsWith('.js')`
+// 过滤 ⇒ preload.cjs 既不在排除名单、也不在扫描范围，属于「恰好没被检查」，谁都没发现。
+const EXCLUDED_DESKTOP = ['main.js', 'preload.cjs'];
+
 test('打包清单必须覆盖 desktop 下的全部模块（新增文件忘了加清单 = 装出来缺模块）', async () => {
   const build = await readFile(new URL('../packaging/build-release.ps1', import.meta.url), 'utf8');
   const block = /\$desktopModules = @\(([\s\S]*?)\)/u.exec(build);
   assert.ok(block, '未能从 build-release.ps1 解析出 $desktopModules');
   const listed = new Set((block[1].match(/"([^"]+\.js)"/gu) ?? []).map(item => item.replace(/"/gu, '')));
-  // main.js 是上游 Electron 风格的旧入口；本支由 C# WebView2 宿主直接启动 server.js，
-  // 因此刻意不打包。下面另有一条测试确保它不被任何生产代码 import。
-  const intentionallyExcluded = new Set(['main.js']);
-  const actual = (await readdir(new URL('../desktop/', import.meta.url))).filter(name => name.endsWith('.js'));
+  // main.js / preload.cjs 都是上游 Electron 遗留；本支由 C# WebView2 宿主直接启动 server.js，
+  // 因此刻意不打包。下面另有一条测试确保这两个都不被任何生产代码 import。
+  const intentionallyExcluded = new Set(EXCLUDED_DESKTOP);
+  const actual = (await readdir(new URL('../desktop/', import.meta.url)))
+    .filter(name => name.endsWith('.js') || name.endsWith('.cjs'));
   const missing = actual.filter(name => !listed.has(name) && !intentionallyExcluded.has(name));
   assert.deepEqual(missing, [], `desktop 下这些模块没进打包清单，装出来会缺模块：${missing.join('、')}`);
   for (const name of intentionallyExcluded) {
@@ -98,26 +123,33 @@ test('打包清单必须覆盖 desktop 下的全部模块（新增文件忘了�
   }
 });
 
-test('刻意不打包的 desktop/main.js 不得被任何生产代码 import', async () => {
-  // 只扫生产代码：desktop/（除 main.js 自身）、midi/，以及仓库根的生产入口。
+test('刻意不打包的 desktop 文件（main.js / preload.cjs）不得被任何生产代码 import', async () => {
+  // 只扫生产代码：desktop/（除被排除的两个自身）、midi/，以及仓库根的生产入口。
   // 刻意不扫 test/ —— 测试目录里出现 "main.js" 字样（读取源码做静态断言）是正常的，
   // 之前的版本因为把 test/ 也扫进来，被自己文件里的字符串误判成「被 import」。
+  // 匹配同时覆盖 ESM（from '...'）与 CommonJS（require('...')）—— preload.cjs 是 CJS。
+  const offenderRe = excluded =>
+    new RegExp(`(?:from\\s+|require\\()\\s*["'][^"']*\\/?${excluded.replace(/[.]/gu, '\\.')}["']`, 'u');
   const offenders = [];
   for (const root of ['../desktop/', '../midi/']) {
     for (const name of await readdir(new URL(root, import.meta.url))) {
-      if (!name.endsWith('.js') || name === 'main.js') continue;
+      if (!/\.c?js$/u.test(name) || EXCLUDED_DESKTOP.includes(name)) continue;
       // 注意：base 必须是合法 URL。传 '../desktop/' 这样的字符串会在 readFile 之前就抛错，
       // 而且 .catch() 拦不到（错误发生在参数求值时）—— 这一版修掉这个写法。
       const text = await readFile(new URL(`${root}${name}`, import.meta.url), 'utf8').catch(() => '');
-      if (/from\s+["'][^"']*\/?main\.js["']/u.test(text)) offenders.push(`${root}${name}`);
+      for (const excluded of EXCLUDED_DESKTOP) {
+        if (offenderRe(excluded).test(text)) offenders.push(`${root}${name} <- ${excluded}`);
+      }
     }
   }
   for (const name of ['server.js']) {
     const text = await readFile(new URL(`../${name}`, import.meta.url), 'utf8').catch(() => '');
-    if (/from\s+["'][^"']*\/?main\.js["']/u.test(text)) offenders.push(name);
+    for (const excluded of EXCLUDED_DESKTOP) {
+      if (offenderRe(excluded).test(text)) offenders.push(`${name} <- ${excluded}`);
+    }
   }
   assert.deepEqual(offenders, [],
-    `main.js 不在打包清单里，却在这些生产文件里被 import（装出来会缺模块）：${offenders.join('、')}`);
+    `这些文件不在打包清单里，却被生产代码 import（装出来会缺模块）：${offenders.join('、')}`);
 });
 
 test('打包清单必须覆盖 midi 下的全部本支模块（上游未打包模块除外）', async () => {

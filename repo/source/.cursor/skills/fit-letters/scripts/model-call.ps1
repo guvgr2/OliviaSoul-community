@@ -39,9 +39,59 @@ function Assert-ModelSingleLine {
     return $Value.Trim()
 }
 
+function Test-MaxTokensUnsupported {
+    param([string]$Detail)
+    # 与 model-transport.js 的 unsupportedMaxTokens 对齐：只有厂商明确在说「这个参数名不认」时才换名，
+    # 普通 400（内容太长、字段非法）不能乱换，否则会把真正的错误掩盖成另一次失败。
+    if ([string]::IsNullOrWhiteSpace($Detail)) { return $false }
+    if ($Detail -match 'max_completion_tokens') { return $true }
+    if ($Detail -match 'max_tokens' -and $Detail -match 'unsupported_parameter|unsupported parameter|unknown parameter|unrecognized|not supported|不支持|无法识别|未知参数|不允许|不支援') { return $true }
+    return $false
+}
+
+function Import-ModelFamilyTable {
+    # B2（2026-10-09 复审）：家族判定的唯一真相源是 local-service/model-families.json。
+    # 以前这里和 model-config.js 各写一份正则，PS 侧只认 deepseek/glm ⇒ 探测（JS）通过、真写信却走厂商默认。
+    # 查找顺序：① 打包时复制过来的同目录副本（安装态在 UserData\.cursor\skills\fit-letters\scripts\）；
+    #           ② 仓库开发态的相对路径 repo\source\local-service\model-families.json。
+    $candidates = @(
+        (Join-Path $PSScriptRoot "model-families.json"),
+        (Join-Path $PSScriptRoot "..\..\..\..\local-service\model-families.json")
+    )
+    foreach ($candidate in $candidates) {
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        $parsed = ([IO.File]::ReadAllText((Resolve-Path $candidate).Path, [Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop)
+        $families = @($parsed.families)
+        if ($families.Count -eq 0) { throw "model-families.json 里没有 families" }
+        $script:ModelFamilies = $families
+        return
+    }
+    # TODO(B2)：正常打包一定带这份 JSON（build-release.ps1 已复制 + 门禁套件断言两边一致）。
+    # 走到这里说明是老版本升级残留：先退回 deepseek/glm 两条老规则保证写信能用，
+    # 正确做法是程序启动时把缺失的 model-families.json 补进 UserData\.cursor\skills\fit-letters\scripts\。
+    Write-Warning "model-families.json 没找到，写信将退回内置的 deepseek/glm 老规则（Kimi / 豆包会失去厂商专用参数）"
+    $script:ModelFamilies = @(
+        [pscustomobject]@{ name = "deepseek"; pattern = '(?:^|/)deepseek(?:[-/]|$)'; effort = "high"; canDisable = $true },
+        [pscustomobject]@{ name = "glm"; pattern = '(?:^|/)(?:glm|chatglm|zhipu)(?:[-/]|$)'; effort = "max"; canDisable = $false }
+    )
+}
+
+function Get-ModelFamily {
+    param([Parameter(Mandatory = $true)][string]$Model)
+    if ([string]::IsNullOrWhiteSpace($Model)) { return $null }
+    foreach ($family in $script:ModelFamilies) {
+        $pattern = [string]$family.pattern
+        if ([string]::IsNullOrWhiteSpace($pattern)) { continue }
+        # JS 的 pattern 带 u 标志（Unicode）；这些 pattern 全是 ASCII，.NET 用 IgnoreCase 等价。
+        if ([regex]::IsMatch($Model, $pattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)) { return $family }
+    }
+    return $null
+}
+
 function Import-ModelConfig {
     param([Parameter(Mandatory = $true)][string]$Root)
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Import-ModelFamilyTable
     $secrets = Join-Path $Root ".cursor\secrets"
     $config = Read-ModelEnvFile -Path (Join-Path $secrets "model.env")
     $legacy = Read-ModelEnvFile -Path (Join-Path $secrets "deepseek.env")
@@ -72,6 +122,15 @@ function Import-ModelConfig {
     $model = Get-ModelValue -Primary $config -PrimaryName ($prefix + "_MODEL") -Legacy $legacy -LegacyName $legacyModel -Default $defaultModel
     $authMode = Get-ModelValue -Primary $config -PrimaryName ($prefix + "_AUTH_MODE") -Legacy $null -LegacyName "" -Default $defaultAuth
     $apiKey = Get-ModelValue -Primary $config -PrimaryName ($prefix + "_API_KEY") -Legacy $legacy -LegacyName $legacyKey -Default ""
+    # B1（2026-10-09 复审）：写信必须自己给输出预算。智谱 / 火山方舟的「最大回答」官方默认只有 4k，
+    # 而推理 token 与正文共享这份预算 ⇒ 回信稍长就 finish_reason=length ⇒ Get-ModelFinalText 抛
+    # "model did not produce complete text"，整封回信直接失败。默认 32768 对智谱（128k）与 DeepSeek（384K）都安全；
+    # 想改可在 UserData\.cursor\secrets\model.env 里加 MODEL_DEEPSEEK_MAX_TOKENS / MODEL_LOCAL_MAX_TOKENS 覆盖。
+    # ⚠️ 只能靠默认值保守：PS 侧没有 model-transport.js 那种 max_tokens → max_completion_tokens 回退，值超限会被 400 拒。
+    $maxTokensRaw = Get-ModelValue -Primary $config -PrimaryName ($prefix + "_MAX_TOKENS") -Legacy $null -LegacyName "" -Default "32768"
+    $maxTokensRaw = Assert-ModelSingleLine -Value ([string]$maxTokensRaw) -Label "max tokens"
+    $maxTokensValue = 0
+    if (-not [int]::TryParse($maxTokensRaw, [ref]$maxTokensValue) -or $maxTokensValue -le 0) { throw "max tokens must be a positive integer" }
     $base = Assert-ModelSingleLine -Value $base -Label "model base URL"
     $model = Assert-ModelSingleLine -Value $model -Label "model name"
     $authMode = Assert-ModelSingleLine -Value $authMode -Label "auth mode"
@@ -92,7 +151,14 @@ function Import-ModelConfig {
     $script:ModelName = $model
     $script:ModelAuthMode = $authMode
     $script:ModelKey = $apiKey
-    $script:ModelThinking = $true
+    # B3（2026-10-09 复审）：写信默认开思考，推理 token 按输出单价计费。
+    # 用 model.env 的 MODEL_THINKING=on|off 控制（默认 on，保持原有行为）；原来只有 harness-4step.ps1
+    # 的 -NoThink 开关能动它，而 harness-live.ps1 从不传这个开关 ⇒ 实际上永远开着、关不掉。
+    $thinkingRaw = Get-ModelValue -Primary $config -PrimaryName "MODEL_THINKING" -Legacy $null -LegacyName "" -Default "on"
+    $thinkingRaw = (Assert-ModelSingleLine -Value ([string]$thinkingRaw) -Label "MODEL_THINKING").ToLowerInvariant()
+    if ($thinkingRaw -notin @("on", "off")) { throw "MODEL_THINKING must be on or off" }
+    $script:ModelThinking = ($thinkingRaw -eq "on")
+    $script:ModelMaxTokens = $maxTokensValue
     $script:ModelLastFinishReason = ""
     $script:ModelLastUsage = $null
 }
@@ -199,36 +265,45 @@ function Read-ModelResponseBody {
 function Invoke-ModelChatOnce {
     param(
         [Parameter(Mandatory = $true)][string]$System,
-        [Parameter(Mandatory = $true)][string]$User
+        [Parameter(Mandatory = $true)][string]$User,
+        # B1 后续：预算字段名。个别中转站 / 新版接口不认 max_tokens，会回 400 要求改用
+        # max_completion_tokens（model-transport.js 的 JS 侧早就有这条回退，PS 侧一直缺）。
+        [string]$MaxTokensField = "max_tokens"
     )
     $payload = @{
         model = $script:ModelName
         stream = $false
+        $MaxTokensField = $script:ModelMaxTokens
         messages = @(
             @{ role = "system"; content = $System }
             @{ role = "user"; content = $User }
         )
     }
-    # 与 model-config.js 的 reasoningFamilyOf 保持一致：只有认得出的模型家族才发厂商专用参数，
-    # 认不出的一律不发，避免被严格接口以 400 拒绝。
-    $reasoningFamily = ""
-    if ($script:ModelProvider -eq "deepseek") {
-        if ($script:ModelName -match '(?:^|/)deepseek(?:[-/]|$)') { $reasoningFamily = "deepseek" }
-        elseif ($script:ModelName -match '(?:^|/)(?:glm|chatglm|zhipu)(?:[-/]|$)') { $reasoningFamily = "glm" }
-    }
-    if ($reasoningFamily -eq "deepseek") {
-        if ($script:ModelThinking) {
-            $payload.reasoning_effort = "high"
-            $payload.thinking = @{ type = "enabled" }
+    # B2：家族判定读 model-families.json（与 JS 侧 model-config.js 同一份真相源），不再各写一份正则。
+    $family = $null
+    if ($script:ModelProvider -eq "deepseek") { $family = Get-ModelFamily -Model $script:ModelName }
+    if ($family) {
+        if ($family.topLevelEffort) {
+            # kimi-k3：始终推理，只认顶层 reasoning_effort，发 thinking 会被拒。
+            $payload.reasoning_effort = [string]$family.effort
+        }
+        elseif ($family.noThinkingParam) {
+            # kimi-k2.7-*：传 thinking 会报错 ⇒ 什么都不发（始终思考由厂商托管）。
         }
         else {
-            $payload.thinking = @{ type = "disabled" }
+            $thinkingEnabled = $true
+            if ($family.canDisable) { $thinkingEnabled = $script:ModelThinking }
+            if ($family.thinkingOnly) {
+                if ($thinkingEnabled) { $payload.thinking = @{ type = "enabled" } } else { $payload.thinking = @{ type = "disabled" } }
+            }
+            elseif ($thinkingEnabled) {
+                $payload.thinking = @{ type = "enabled" }
+                if (-not [string]::IsNullOrWhiteSpace([string]$family.effort)) { $payload.reasoning_effort = [string]$family.effort }
+            }
+            else {
+                $payload.thinking = @{ type = "disabled" }
+            }
         }
-    }
-    elseif ($reasoningFamily -eq "glm") {
-        # 智谱 GLM 的 thinking.type 只接受 enabled（不能发 disabled），官方推荐 reasoning_effort = max
-        $payload.reasoning_effort = "max"
-        $payload.thinking = @{ type = "enabled" }
     }
     $bytes = $script:ModelUtf8NoBom.GetBytes(($payload | ConvertTo-Json -Depth 8 -Compress))
     try {
@@ -258,7 +333,20 @@ function Invoke-ModelChatOnce {
         if ($webException.InnerException -is [Net.WebException]) { $webException = $webException.InnerException }
         if ($webException -is [Net.WebException] -and $webException.Response) {
             $status = [int]$webException.Response.StatusCode
+            $detail = ""
+            try {
+                $errorStream = $webException.Response.GetResponseStream()
+                if ($errorStream) {
+                    $reader = New-Object IO.StreamReader($errorStream, [Text.Encoding]::UTF8)
+                    $detail = $reader.ReadToEnd()
+                    $reader.Dispose()
+                }
+            }
+            catch { }
             $webException.Response.Close()
+            if ($status -eq 400 -and $MaxTokensField -ne "max_completion_tokens" -and (Test-MaxTokensUnsupported -Detail $detail)) {
+                return Invoke-ModelChatOnce -System $System -User $User -MaxTokensField "max_completion_tokens"
+            }
             throw ("{0} HTTP {1}" -f $script:ModelProvider, $status)
         }
         throw ("{0} request failed" -f $script:ModelProvider)

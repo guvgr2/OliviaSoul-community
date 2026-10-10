@@ -55,7 +55,24 @@
     // g13：后端错误响应的 code 是字符串错误码（如 TIME_OF_DAY_FOLDER_NOT_FOUND），
     // 以前只认数字型 code，字符串码被跳过 → 拿到 data:null → 面板空指针崩、还吞掉真正的提示。
     if (body && body.code !== 0 && body.code != null) throw new Error(body.message || "请求失败");
+    // 曲库目录还没设置时服务端回的是指引卡片 { needsLibrary: true, message }（code 仍是 0）：
+    // 那是给用户看的话，不是依据数据 —— 当成功返回会让 renderReport 判成「拿不到这首歌的
+    // 时段依据」，于是把指路话换成「请重试」，用户照着点只会反复失败。
+    // （本模块的无库兜底在 midi/time-of-day.js，不经过 listen-naming 的 FOREIGN 放行。）
+    if (body && body.data && body.data.needsLibrary) {
+      const error = new Error(body.data.message || "还没设置曲目存储路径");
+      error.needsLibrary = true;
+      throw error;
+    }
     return body && "data" in body ? body.data : body;
+  }
+
+  // needsLibrary 是指路话，不是「操作失败」：原样显示，不要套「××失败：」前缀
+  // （与试听台 listen-naming.js、同款群 twin-groups-panel.js 的处理方式一致）。
+  // 本文件与其他 public/*.js 一样是普通 <script>，抽公共文件要动 server.js 静态白名单与
+  // 打包清单，所以这份小工具就地各存一份 —— 与 formatMetric 同一个先例。
+  function failureText(prefix, error) {
+    return error && error.needsLibrary ? error.message : `${prefix}：${error.message}`;
   }
 
   // 当前正在试听的作品显示在「曲名与时段」页，面板本身在别的页，所以全局找
@@ -227,7 +244,7 @@
         if (result) result.textContent = receipt;
       }
     } catch (error) {
-      if (result) result.textContent = `写入失败：${error.message}`;
+      if (result) result.textContent = failureText("写入失败", error);
     } finally {
       for (const button of actions.querySelectorAll("button")) button.disabled = false;
     }
@@ -288,7 +305,7 @@
         status.textContent = "分析完成。缩略图已缓存，下次查看会快很多。";
       } catch (error) {
         out.replaceChildren();
-        status.textContent = "查看失败：" + error.message;
+        status.textContent = failureText("查看失败", error);
       } finally {
         button.disabled = false;
       }

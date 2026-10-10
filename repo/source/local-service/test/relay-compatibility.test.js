@@ -84,7 +84,14 @@ for(const [name,handler,success,provider='local'] of cases) test(`relay parity: 
   if(success)assert.equal(actual.value,'中文 OK');
   assert.ok(f.calls.every(c=>c.authorization==='Bearer synthetic-key'));
   if(name==='length parameter rename') {
-    assert.equal(f.calls.length,3);assert.equal(f.calls[1].body.max_completion_tokens,128);assert.equal(f.calls[1].body.max_tokens,undefined);
+    // 4 次调用，两条路径都做「参数名协商」= relay parity：
+    //   ① 探测（JS）发 max_tokens=128 → 桩回 400「Use max_completion_tokens instead」；
+    //   ② 探测换名重试成功（max_completion_tokens=128）；
+    //   ③ 真正写回信的 PowerShell harness 也发 max_tokens（默认 32768，见 model-call.ps1 的 B1）→ 同样 400；
+    //   ④ harness 换名重试成功（max_completion_tokens=32768）。
+    // 以前这里只数到 3 次，是因为 PS 侧压根不发 max_tokens（B1 的缺陷）也没有换名回退。
+    assert.equal(f.calls.length,4);assert.equal(f.calls[1].body.max_completion_tokens,128);assert.equal(f.calls[1].body.max_tokens,undefined);
+    assert.equal(f.calls[3].body.max_completion_tokens,32768);assert.equal(f.calls[3].body.max_tokens,undefined);
   }
 });
 test('full URL configuration works in both saved test and actual PowerShell runtime',async t=>{

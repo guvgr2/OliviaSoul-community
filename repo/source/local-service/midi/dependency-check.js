@@ -110,7 +110,7 @@ async function checkLibrary() {
     const row = db.prepare("SELECT value FROM settings WHERE key = 'midi_library_root'").get();
     db.close();
     const root = String(row?.value ?? "").trim();
-    if (!root) return { name: "曲库目录", ok: false, detail: "应用里还没设置", fix: "在 OliviaSoul 的「基础设置」里设置曲目存储路径", path: "" };
+    if (!root) return { name: "曲库目录", ok: false, detail: "应用里还没设置", fix: "到「客户端与歌词 → 客户端挂载与存储」的「数据与曲目保存位置」里设置曲目存储路径", path: "" };
     const info = await stat(root);
     return { name: "曲库目录", ok: info.isDirectory(), detail: root, fix: "", path: root };
   } catch (error) {

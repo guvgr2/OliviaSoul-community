@@ -107,10 +107,16 @@ function closeNotice(result) {
   if (resolver) resolver(result);
 }
 
-function openNotice({ title = "提示", message, confirmText = "确定", cancelText = "", details = "" }) {
+function openNotice({ title = "提示", message, html = "", confirmText = "确定", cancelText = "", details = "" }) {
   if (noticeResolver) closeNotice(false);
   $("#noticeTitle").textContent = title;
-  $("#noticeMessage").textContent = message;
+  const messageNode = $("#noticeMessage");
+  // 消息区是全站共用的一个节点：上一个弹层留下的内联样式必须每次清掉，
+  // 否则「使用前请阅读」那种可滚动长文本的样式会粘到后面的确认框上。
+  messageNode.style.cssText = "";
+  // html 只允许传本地常量（合规声明、分享同意），绝不放用户数据或服务端返回的文本。
+  if (html) messageNode.innerHTML = html;
+  else messageNode.textContent = message;
   $("#noticeDetails").hidden = !details;
   $("#noticeDetails").open = false;
   $("#noticeErrorText").textContent = details;
@@ -125,6 +131,13 @@ function openNotice({ title = "提示", message, confirmText = "确定", cancelT
 function confirmNotice(message) {
   return openNotice({ title: "请确认", message, confirmText: "确认", cancelText: "取消" });
 }
+
+// #64：通知层只有一份 DOM（index.html 的 #noticeLayer），但这个文件是 <script type="module">，
+// 面板脚本（普通脚本）拿不到这里的 openNotice/confirmNotice。它们以前各自摸 DOM + 自挂 click，
+// 于是 Esc/Enter 被下面那个全局 keydown 关层时，它们注册的 Promise 永远不兑现
+//（删除备份、清理周期备份、删除歌单、分享同意框都会静默挂起）。
+// 统一从这里暴露：谁弹的层都由这里的 resolver 兑付，键盘关层与鼠标关层走同一条路。
+window.OliviaSoulNotice = { openNotice, confirmNotice };
 
 async function api(path, options) {
   const response = await fetch(path, {
@@ -498,6 +511,16 @@ const REMOTE_MODEL_PRESETS = [
   { id: "kimi-k3", label: "kimi-k3 · Kimi 月之暗面（旗舰，1M 上下文，始终推理）", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k3" },
   { id: "kimi-k2.6", label: "kimi-k2.6 · Kimi 月之暗面（通用思考，可关闭思考）", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k2.6" },
   { id: "kimi-k2.7-code", label: "kimi-k2.7-code · Kimi 月之暗面（代码场景，始终思考）", baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k2.7-code" },
+  // 适合「聊天 / 角色扮演」的补充（2026-10-08）：
+  // 只在清单尾部追加，既有 8 项一字不动；也不会去改用户已经选好的模型
+  // （presetOf 按 model + baseUrl 反查，不看 id 与顺序）。
+  { id: "minimax-m2-her", label: "M2-her · MiniMax（角色扮演、多轮闲聊，64K）", baseUrl: "https://api.minimax.cn/v1", model: "M2-her" },
+  // 火山方舟（豆包）：接口地址不带 /chat/completions，model 直接填官方 Model ID。
+  // ⚠️ 方舟与其它几家最大的差别：拿到 Key 还不够，必须先在火山方舟控制台「开通模型」，
+  //    没开通会回 403 —— 用户很容易以为程序坏了，所以提示直接写进选项文字里。
+  { id: "doubao-seed-character-260628", label: "doubao-seed-character-260628 · 豆包（角色扮演/陪伴，128K；需先在火山方舟控制台开通模型）", baseUrl: "https://ark.cn-beijing.volces.com/api/v3", model: "doubao-seed-character-260628" },
+  { id: "doubao-seed-character-251128", label: "doubao-seed-character-251128 · 豆包（角色扮演，不支持深度思考；需先在火山方舟控制台开通模型）", baseUrl: "https://ark.cn-beijing.volces.com/api/v3", model: "doubao-seed-character-251128" },
+  { id: "doubao-seed-2-0-mini-260428", label: "doubao-seed-2-0-mini-260428 · 豆包（省钱档，256K；需先在火山方舟控制台开通模型）", baseUrl: "https://ark.cn-beijing.volces.com/api/v3", model: "doubao-seed-2-0-mini-260428" },
 ];
 const CUSTOM_MODEL_PRESET = "__custom__";
 

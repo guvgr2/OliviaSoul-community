@@ -19,6 +19,7 @@ import {
   registerMountedClientPatch,
 } from "./client-patch-registry.js";
 import { clientPathProbe, networkClosedGamePreflight } from "./client-execution.js";
+import { describeElevationFailure, elevatedProcessCommand } from "./elevation-command.js";
 
 const DEFAULT_PORT = 27149;
 const AUTO_START_TASK = "OliviaSoulAutoStart";
@@ -172,8 +173,15 @@ export class DesktopController {
       "-Arguments '--hidden'",
     ].join(" ");
     const encoded = Buffer.from(helperCommand, "utf16le").toString("base64");
-    const elevate = `$process = Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}' -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $process.ExitCode`;
-    await runProcess("powershell.exe", powershellCommand(elevate));
+    const errorFile = join(this.appData, `elevated-${randomUUID()}.txt`);
+    const elevate = elevatedProcessCommand({ encodedCommand: encoded, errorFile });
+    try {
+      await runProcess("powershell.exe", powershellCommand(elevate));
+    } catch (error) {
+      throw await this.elevationError(errorFile, error);
+    } finally {
+      await rm(errorFile, { force: true });
+    }
     return { autoStart: enabled };
   }
 
@@ -200,25 +208,33 @@ export class DesktopController {
   async runElevatedScripts(steps, executionMode = "local") {
     if (!steps.length) return;
     const errorFile = join(this.appData, `elevated-${randomUUID()}.txt`);
-    const invokes = steps
-      .map(({ script, args = [] }) => [`& ${powershellLiteral(script)}`, ...this.formatScriptArgs(args)].join(" "))
-      .join("; ");
-    const first = steps[0].args ?? [];
-    const preflight = executionMode === "network"
-      ? networkClosedGamePreflight(first[first.indexOf("-GameRoot") + 1], this.clientExePath) : "";
-    const command = `$ErrorActionPreference = 'Stop'; try { ${preflight} ${invokes} } catch { [IO.File]::WriteAllText(${powershellLiteral(errorFile)}, $_.Exception.Message, (New-Object Text.UTF8Encoding $false)); exit 1 }`;
-    const encoded = Buffer.from(command, "utf16le").toString("base64");
-    const elevate = `$process = Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}' -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $process.ExitCode`;
     try {
-      await runProcess("powershell.exe", powershellCommand(executionMode === "network" ? command : elevate));
-    } catch (error) {
-      try {
-        const detail = (await readFile(errorFile, "utf8")).trim();
-        if (detail) throw new Error(detail);
-      } catch (detailError) {
-        if (detailError.code !== "ENOENT") throw detailError;
+      const invokes = steps
+        .map(({ script, args = [] }) => [`& ${powershellLiteral(script)}`, ...this.formatScriptArgs(args)].join(" "))
+        .join("; ");
+      const first = steps[0].args ?? [];
+      const preflight = executionMode === "network"
+        ? networkClosedGamePreflight(first[first.indexOf("-GameRoot") + 1], this.clientExePath) : "";
+      const command = `$ErrorActionPreference = 'Stop'; try { ${preflight} ${invokes} } catch { [IO.File]::WriteAllText(${powershellLiteral(errorFile)}, $_.Exception.Message, (New-Object Text.UTF8Encoding $false)); exit 1 }`;
+      // 先按当前用户身份执行。玩家的游戏目录通常本来就有写权限（NTFS 默认给
+      // Authenticated Users「修改」），没必要每次都请求提权 —— 而 UAC 在部分 Windows
+      // 版本上会卡在黑屏安全桌面、既点不了也退不出（见 elevation-command.js 顶部说明）。
+      // 只有确认是「权限不足」才提权重试一次。
+      if (executionMode !== "network") {
+        try {
+          await runProcess("powershell.exe", powershellCommand(command));
+          return;
+        } catch (error) {
+          if (!(await this.needsElevation(errorFile, error))) throw await this.elevationError(errorFile, error);
+        }
       }
-      throw error;
+      const encoded = Buffer.from(command, "utf16le").toString("base64");
+      const elevate = elevatedProcessCommand({ encodedCommand: encoded, errorFile });
+      try {
+        await runProcess("powershell.exe", powershellCommand(executionMode === "network" ? command : elevate));
+      } catch (error) {
+        throw await this.elevationError(errorFile, error);
+      }
     } finally {
       await rm(errorFile, { force: true });
     }
@@ -226,6 +242,30 @@ export class DesktopController {
 
   async runElevatedScript(script, args = [], executionMode = "local") {
     return this.runElevatedScripts([{ script, args }], executionMode);
+  }
+
+  // 提权失败时优先回传内层脚本写下的真实原因；提权本身被取消则换成用户能懂的话
+  // （原因与教训见 elevation-command.js 顶部的注释）。
+  async elevationError(errorFile, error) {
+    try {
+      const detail = (await readFile(errorFile, "utf8")).trim();
+      if (detail) return new Error(describeElevationFailure(detail));
+    } catch (detailError) {
+      if (detailError.code !== "ENOENT") throw detailError;
+    }
+    return new Error(describeElevationFailure(error?.message));
+  }
+
+  // 失败原因是否属于「当前用户没有写权限」——只有这种才值得请求提权。
+  async needsElevation(errorFile, error) {
+    let detail = "";
+    try {
+      detail = (await readFile(errorFile, "utf8")).trim();
+    } catch (readError) {
+      if (readError.code !== "ENOENT") throw readError;
+    }
+    const message = `${detail} ${error?.message ?? ""}`;
+    return /拒绝访问|Access is denied|UnauthorizedAccess|Access to the path|PermissionDenied|权限不足/iu.test(message);
   }
 
 

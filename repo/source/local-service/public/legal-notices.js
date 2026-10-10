@@ -137,6 +137,34 @@
       acked = "1"; // 无痕模式下不反复弹
     }
     if (acked) return;
+    const shared = global.OliviaSoulNotice;
+    if (shared && typeof shared.openNotice === "function") {
+      // #64：走 app.js 的全局通知层（它 400ms 后才弹，那时 module 早已执行完）。
+      // 自己摸 DOM 时 Esc/Enter 会被 app.js 的全局 keydown 关层，这里的「确定」逻辑拿不到结果。
+      // 内联样式写在 html 内部，避免粘到后面的确认框上。html 是本地常量。
+      void shared.openNotice({
+        title: "使用前请阅读：重要声明",
+        html: '<div style="max-height:52vh;overflow:auto;text-align:left">'
+          + DIALOG_SUMMARY.map(line => "<p>· " + line + "</p>").join("")
+          + '<p style="color:#8b9198">完整声明见左侧「声明与合规」页。</p>'
+          + '<label id="legalAckCheckbox" style="display:flex;align-items:center;gap:8px;margin-top:10px">'
+          + '<input type="checkbox" id="legalAckInput"> <span>已阅读声明，下次启动不再提示</span></label>'
+          + "</div>",
+        confirmText: "确定",
+        cancelText: "取消",
+      }).then(ok => {
+        if (!ok) return;
+        const box = document.getElementById("legalAckInput");
+        if (box && box.checked) {
+          try {
+            global.localStorage.setItem(ACK_KEY, new Date().toISOString());
+          } catch {
+            // 无痕模式：无法记住，下次仍会提示
+          }
+        }
+      });
+      return;
+    }
     const layer = document.getElementById("noticeLayer");
     const title = document.getElementById("noticeTitle");
     const message = document.getElementById("noticeMessage");

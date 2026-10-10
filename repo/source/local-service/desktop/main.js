@@ -10,6 +10,7 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { createOliviaService } from "../server.js";
 import { prepareWorkspaceIncrementally } from "./workspace-template.js";
+import { describeElevationFailure, elevatedProcessCommand } from "./elevation-command.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const developmentRoot = resolve(here, "..", "..");
@@ -125,8 +126,15 @@ async function setAutoStart(enabled) {
     `-Arguments '${argumentsValue.replaceAll("'", "''")}'`,
   ].join(" ");
   const encoded = Buffer.from(helperCommand, "utf16le").toString("base64");
-  const elevate = `$process = Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}' -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $process.ExitCode`;
-  await runProcess("powershell.exe", ["-NoProfile", "-Command", elevate]);
+  const errorFile = join(app.getPath("temp"), `olivia-elevated-${randomUUID()}.txt`);
+  const elevate = elevatedProcessCommand({ encodedCommand: encoded, errorFile });
+  try {
+    await runProcess("powershell.exe", ["-NoProfile", "-Command", elevate]);
+  } catch (error) {
+    throw await elevationFailure(errorFile, error);
+  } finally {
+    await rm(errorFile, { force: true });
+  }
   return refreshAutoStart();
 }
 
@@ -146,23 +154,51 @@ async function runElevatedScript(script, args = []) {
     return value;
   });
   const errorFile = join(app.getPath("temp"), `olivia-elevated-${randomUUID()}.txt`);
-  const invoke = [`& ${powershellLiteral(script)}`, ...formattedArgs].join(" ");
-  const command = `try { ${invoke} } catch { [IO.File]::WriteAllText(${powershellLiteral(errorFile)}, $_.Exception.Message, (New-Object Text.UTF8Encoding $false)); exit 1 }`;
-  const encoded = Buffer.from(command, "utf16le").toString("base64");
-  const elevate = `$process = Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}' -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $process.ExitCode`;
   try {
-    await runProcess("powershell.exe", ["-NoProfile", "-Command", elevate]);
-  } catch (error) {
+    const invoke = [`& ${powershellLiteral(script)}`, ...formattedArgs].join(" ");
+    const command = `$ErrorActionPreference = 'Stop'; try { ${invoke} } catch { [IO.File]::WriteAllText(${powershellLiteral(errorFile)}, $_.Exception.Message, (New-Object Text.UTF8Encoding $false)); exit 1 }`;
+    // 与 controller.js 同策略：先按当前用户身份执行，只有确认权限不足才提权。
+    // UAC 在部分 Windows 版本上会卡在黑屏安全桌面，能不弹就绝不弹。
     try {
-      const detail = (await readFile(errorFile, "utf8")).trim();
-      if (detail) throw new Error(detail);
-    } catch (detailError) {
-      if (detailError.code !== "ENOENT") throw detailError;
+      await runProcess("powershell.exe", ["-NoProfile", "-Command", command]);
+      return;
+    } catch (error) {
+      if (!(await needsElevation(errorFile, error))) throw await elevationFailure(errorFile, error);
     }
-    throw error;
+    const encoded = Buffer.from(command, "utf16le").toString("base64");
+    const elevate = elevatedProcessCommand({ encodedCommand: encoded, errorFile });
+    try {
+      await runProcess("powershell.exe", ["-NoProfile", "-Command", elevate]);
+    } catch (error) {
+      throw await elevationFailure(errorFile, error);
+    }
   } finally {
     await rm(errorFile, { force: true });
   }
+}
+
+// 失败原因是否属于「当前用户没有写权限」——只有这种才值得请求提权。
+async function needsElevation(errorFile, error) {
+  let detail = "";
+  try {
+    detail = (await readFile(errorFile, "utf8")).trim();
+  } catch (readError) {
+    if (readError.code !== "ENOENT") throw readError;
+  }
+  const message = `${detail} ${error?.message ?? ""}`;
+  return /拒绝访问|Access is denied|UnauthorizedAccess|Access to the path|PermissionDenied|权限不足/iu.test(message);
+}
+
+// 提权失败时优先回传内层脚本写下的真实原因；提权被取消则换成用户能懂的话
+// （原因与教训见 elevation-command.js 顶部注释）。
+async function elevationFailure(errorFile, error) {
+  try {
+    const detail = (await readFile(errorFile, "utf8")).trim();
+    if (detail) return new Error(describeElevationFailure(detail));
+  } catch (detailError) {
+    if (detailError.code !== "ENOENT") throw detailError;
+  }
+  return new Error(describeElevationFailure(error?.message));
 }
 
 async function selectedClientLayout() {

@@ -59,6 +59,19 @@
   function ensureConsent() {
     const saved = readConsent();
     if (saved) return Promise.resolve(saved === "yes");
+    const shared = global.OliviaSoulNotice;
+    if (shared && typeof shared.openNotice === "function")
+      // #64：走 app.js 的全局通知层，Esc / Enter 与鼠标关层由同一个 resolver 兑付。
+      // html 传的是本地常量 CONSENT_HTML，不含任何用户数据。
+      return shared.openNotice({
+        title: "是否愿意分享你起的曲名？",
+        html: '<div style="max-height:52vh;overflow:auto;text-align:left">' + CONSENT_HTML + "</div>",
+        confirmText: "愿意分享",
+        cancelText: "暂不分享",
+      }).then(ok => {
+        writeConsent(ok ? "yes" : "no");
+        return ok;
+      });
     const ui = consentDialog();
     if (!ui) {
       const ok = global.confirm(
@@ -166,6 +179,13 @@
       envelope = await response.json();
     } catch {
       throw new Error("本地服务返回了无法解析的内容");
+    }
+    // 曲库目录还没设置时服务端回的是指引卡片 { needsLibrary: true, message }（code 仍是 0）：
+    // 这不是数据而是给用户的话，当成错误抛出去，让调用方原样显示（否则页面只是空列表）。
+    if (envelope.data && envelope.data.needsLibrary) {
+      const error = new Error(envelope.data.message || "还没设置曲目存储路径");
+      error.needsLibrary = true;
+      throw error;
     }
     if (envelope.code !== 0) throw new Error(envelope.message || "本地服务返回错误");
     return envelope.data;
@@ -1008,7 +1028,8 @@
       state.loaded = true;
       renderCard();
     } catch (error) {
-      setStatus(`读取失败：${error.message}`, "fault");
+      // 无库时 error.message 就是完整指引（服务端给的那句），别再套「读取失败：」。
+      setStatus(error && error.needsLibrary ? error.message : `读取失败：${error.message}`, "fault");
     } finally {
       state.loading = false;
     }

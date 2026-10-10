@@ -1,0 +1,44 @@
+{
+  "schema": "olivia-soul.model-families",
+  "version": 1,
+  "note": "模型家族表的单一真相源：JS 侧 model-config.js 与写信 harness 的 model-call.ps1 都读这一份，别再各写一份正则（B2，2026-10-09 复审）。pattern 用 JS 正则语法；PS 侧以 IgnoreCase 构造同样的正则（这些 pattern 全是 ASCII，不存在 .NET 与 JS 的 u 标志差异）。",
+  "families": [
+    {
+      "name": "deepseek",
+      "pattern": "(?:^|/)deepseek(?:[-/]|$)",
+      "flags": "iu",
+      "effort": "high",
+      "canDisable": true
+    },
+    {
+      "name": "glm",
+      "pattern": "(?:^|/)(?:glm|chatglm|zhipu)(?:[-/]|$)",
+      "flags": "iu",
+      "effort": "max",
+      "canDisable": false
+    },
+    {
+      "name": "kimi-k3",
+      "pattern": "^kimi-k3(?:$|[-.])",
+      "flags": "iu",
+      "topLevelEffort": true,
+      "effort": "max",
+      "noTemperature": true
+    },
+    {
+      "name": "kimi-k2.6",
+      "pattern": "^kimi-k2\\.6(?:$|[-.])",
+      "flags": "iu",
+      "thinkingOnly": true,
+      "canDisable": true,
+      "noTemperature": true
+    },
+    {
+      "name": "kimi-k2.7",
+      "pattern": "^kimi-k2\\.7(?:$|[-.])",
+      "flags": "iu",
+      "noThinkingParam": true,
+      "noTemperature": true
+    }
+  ]
+}

@@ -9,7 +9,7 @@ import test from "node:test";
 import { DesktopController } from "../desktop/controller.js";
 
 const literal = value => `'${String(value).replaceAll("'", "''")}'`;
-async function fixture(t, { driveType = 4, processes = [{ Name: "unrelated.exe", ExecutablePath: "C:\\Other\\unrelated.exe" }], available = true, probeOutput, processError = false } = {}) {
+async function fixture(t, { driveType = 4, processes = [{ Name: "unrelated.exe", ExecutablePath: "C:\\Other\\unrelated.exe" }], available = true, probeOutput, processError = false, denyDirect = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), "olivia-network-fixture-"));
   const script = join(root, "write-fixture.ps1"), marker = join(root, "arguments.json");
   await writeFile(script, `param([string]$GameRoot,[string]$Version,[string]$OriginalFile,[switch]$RefreshOriginal)
@@ -30,7 +30,17 @@ async function fixture(t, { driveType = 4, processes = [{ Name: "unrelated.exe",
       return child;
     }
     if (inner) observed.elevated++;
-    else if (outer.includes(script)) { observed.direct++; onDirect(); }
+    else if (outer.includes(script)) {
+      observed.direct++; onDirect();
+      // denyDirect：模拟「当前用户对该目录没有写权限」。runProcess 把 stderr 文本
+      // 当作 error.message，needsElevation 据此判定「只有权限不足才值得提权」。
+      if (denyDirect) {
+        const denied = new EventEmitter();
+        denied.stdout = new EventEmitter(); denied.stderr = new EventEmitter(); denied.kill = () => true;
+        setImmediate(() => { denied.stderr.emit("data", Buffer.from("拒绝访问")); denied.emit("close", 1); });
+        return denied;
+      }
+    }
     const prefix = `function Test-Path { param($LiteralPath,$PathType) return $${available} }; function Get-CimInstance { param($ClassName,$Filter,$ErrorAction,$OperationTimeoutSec) if ($ClassName -eq 'Win32_LogicalDisk') { [pscustomobject]@{DriveType=${driveType}} } elseif ($ClassName -eq 'Win32_Process') { ${processError ? "throw 'visibility unavailable'" : `ConvertFrom-Json ${literal(JSON.stringify(processes))}`} } else { throw 'Unexpected probe' } }; `;
     const code = prefix + (inner ? Buffer.from(inner, "base64").toString("utf16le") : outer);
     return original(command, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(code, "utf16le").toString("base64")], options);
@@ -50,9 +60,12 @@ test("mapped network clientWrite executes fixture directly with exact selected a
   });
 });
 
+// 固定盘（DriveType 3）在 1.2.0 起与网络盘一样「先按当前用户身份直跑」——
+// 玩家的游戏目录通常本来就有写权限，没必要每次弹 UAC（见 desktop/controller.js
+// runElevatedScripts 里的说明）。只有直跑报「权限不足」才提权重试，另有专门用例覆盖。
 for (const [name, gameRoot, options, elevated] of [
   ["UNC", "\\\\server\\share\\游戏's folder", {}, 0],
-  ["fixed disk", "D:\\Games\\Example", { driveType: 3 }, 1],
+  ["fixed disk", "D:\\Games\\Example", { driveType: 3 }, 0],
   ["known launcher outside selected directory", "N:\\Games\\Example", { processes: [{ Name: "Launcher.exe", ExecutablePath: "N:\\Games\\Example-other\\Launcher.exe" }] }, 0],
 ]) test(`${name} preserves literal arguments and switch binding`, async t => {
   const ctx = await fixture(t, options);
@@ -61,6 +74,18 @@ for (const [name, gameRoot, options, elevated] of [
   assert.equal(ctx.observed.direct, elevated ? 0 : 1);
   assert.deepEqual(JSON.parse((await readFile(ctx.marker, "utf8")).replace(/^\uFEFF/u, "")), {
     gameRoot, version: "版本 ' test", original: "原版 ' file.dat", refresh: true,
+  });
+});
+
+// 反向用例：直跑被拒绝（真实场景 = 游戏目录不可写）时必须提权重试一次，
+// 且只重试一次、参数与直跑完全一致 —— 这是 1.2.0「先不提权」改动唯一保留的提权入口。
+test("fixed disk elevates once when the direct attempt is denied", async t => {
+  const ctx = await fixture(t, { driveType: 3, denyDirect: true });
+  await ctx.controller.clientWrite(ctx.script, ["-GameRoot", "D:\\Games\\Example", "-Version", "版本 ' test", "-OriginalFile", "原版 ' file.dat", "-RefreshOriginal", true]);
+  assert.equal(ctx.observed.elevated, 1);
+  assert.equal(ctx.observed.direct, 1);
+  assert.deepEqual(JSON.parse((await readFile(ctx.marker, "utf8")).replace(/^\uFEFF/u, "")), {
+    gameRoot: "D:\\Games\\Example", version: "版本 ' test", original: "原版 ' file.dat", refresh: true,
   });
 });
 

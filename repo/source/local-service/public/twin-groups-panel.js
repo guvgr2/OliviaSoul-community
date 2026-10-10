@@ -26,6 +26,14 @@
     }, options));
     const body = await response.json().catch(() => ({}));
     if (body && body.code !== 0 && body.code != null) throw new Error(body.message || "请求失败");
+    // 曲库目录还没设置时服务端回的是指引卡片 { needsLibrary: true, message }（code 仍是 0）：
+    // 那是给用户看的话，不是数据 —— 当成功返回会让面板画出「已核验 undefined / undefined 首」。
+    // （1.2.0 把无库兜底从「7 个固定路径」改成「本模块前缀全都算」之后，groups/* 也会拿到这张卡片。）
+    if (body && body.data && body.data.needsLibrary) {
+      const error = new Error(body.data.message || "还没设置曲目存储路径");
+      error.needsLibrary = true;
+      throw error;
+    }
     return body && "data" in body ? body.data : body;
   }
 
@@ -34,6 +42,12 @@
     ui.status.textContent = message || "";
     if (kind) ui.status.dataset.kind = kind;
     else delete ui.status.dataset.kind;
+  }
+
+  // needsLibrary 是指路话，不是「操作失败」：原样显示，不要套「××失败：」前缀
+  // （与试听台 listen-naming.js、试听工具 listen-naming-tools.js 的处理方式一致）。
+  function failureText(prefix, error) {
+    return error && error.needsLibrary ? error.message : `${prefix}：${error.message}`;
   }
 
   function renderThresholds(thresholds) {
@@ -95,7 +109,7 @@
         : `已忽略这一群（${data.ignored} 首）`, "done");
       await loadStatus();
     } catch (error) {
-      say(`${what}失败：${error.message}`, "fault");
+      say(failureText(`${what}失败`, error), "fault");
     }
   }
 
@@ -126,7 +140,7 @@
     try {
       renderStatus(await api("/groups/status"));
     } catch (error) {
-      say(`读取同款群状态失败：${error.message}`, "fault");
+      say(failureText("读取同款群状态失败", error), "fault");
     }
   }
 
@@ -143,7 +157,7 @@
         data.scanned ? "done" : "warn");
       await loadStatus();
     } catch (error) {
-      say(`核验失败：${error.message}`, "fault");
+      say(failureText("核验失败", error), "fault");
     } finally {
       scanning = false;
       ui.scanButton.disabled = false;
@@ -162,7 +176,7 @@
       say(data.twinNaming ? "连带命名已开启" : "连带命名已关闭（命名只影响当前这一首）", "done");
       await loadStatus();
     } catch (error) {
-      say(`切换失败：${error.message}`, "fault");
+      say(failureText("切换失败", error), "fault");
     }
   }
 

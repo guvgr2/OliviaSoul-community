@@ -27,6 +27,13 @@
       headers: { "Content-Type": "application/json" },
     }, options));
     const body = await response.json().catch(() => ({}));
+    // 「还没设置曲目存储路径」时服务端回的是指引卡片 { needsLibrary: true, message }（code 仍是 0）：
+    // 那是给用户的话，不是数据 —— 当成功返回会让调用点拿着 { needsLibrary: true } 去当业务对象用。
+    if (body && body.data && body.data.needsLibrary) {
+      const error = new Error(body.data.message || "还没设置曲目存储路径");
+      error.needsLibrary = true;
+      throw error;
+    }
     // 失败信封是 { code: "COMMUNITY_XXX", message, data: null }：code 是字符串，不能只判数字
     const code = body && "code" in body ? body.code : 0;
     if (code !== 0 && code != null) throw new Error((body && body.message) || `请求失败（${code}）`);

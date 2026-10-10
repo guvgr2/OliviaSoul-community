@@ -46,11 +46,15 @@ $probe = Join-Path $Root "_probe"
 if (-not (Test-Path -LiteralPath $probe)) { New-Item -ItemType Directory -Path $probe | Out-Null }
 $suffix = ""
 if (-not [string]::IsNullOrWhiteSpace($Tag)) { $suffix = "_" + $Tag }
+. (Join-Path $PSScriptRoot "probe-prune.ps1")
+
 function Save-Step([string]$step, [string]$text) {
     $p = Join-Path $probe ("h4_{0}_{1}{2}_{3}.txt" -f $Person, $nn, $suffix, $step)
     Write-Utf8 $p $text
     if ($step -eq "5final" -and -not [string]::IsNullOrWhiteSpace($OutFile)) { Write-Utf8 $OutFile $text }
     if (-not $Quiet) { Write-Output ("wrote " + $p) }
+    # B7：每写完一份就回收同一人更早那几封的中间产物（默认只留最近 3 封，见 probe-prune.ps1）。
+    [void](Remove-OldProbeFiles -ProbeDir $probe -Person $Person -Keep 3)
 }
 
 if ([string]::IsNullOrWhiteSpace($HarnessDir)) { $HarnessDir = Join-Path $Root "harness" }

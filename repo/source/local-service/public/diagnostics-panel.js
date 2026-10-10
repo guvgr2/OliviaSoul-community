@@ -339,6 +339,100 @@
     return text ? text.slice(0, 19) : "—";
   }
 
+  /**
+   * C2：二次确认走全局通知层（index.html 的 #noticeLayer，与「曲名分享」同一套），
+   * 不再用裸 confirm —— 删除备份不可撤销，确认框里必须能看清删的是哪一份。
+   * #64：优先用 app.js 暴露的 window.OliviaSoulNotice。层只有一份 DOM，自己摸 DOM + 自挂 click 时，
+   * Esc / Enter 会被 app.js 的全局 keydown 直接关层，这里注册的 Promise 就没人兑现（流程静默挂起）。
+   * 下面的自建路径只在 app.js 没跑起来（拿不到 OliviaSoulNotice）时兜底 —— 那时也没有那个 keydown，不会互相抢。
+   */
+  function askNotice({ title, message, confirmText = "确定", cancelText = "取消" }) {
+    const shared = global.OliviaSoulNotice;
+    if (shared && typeof shared.openNotice === "function")
+      return shared.openNotice({ title, message, confirmText, cancelText });
+    const layer = global.document.getElementById("noticeLayer");
+    const titleNode = global.document.getElementById("noticeTitle");
+    const messageNode = global.document.getElementById("noticeMessage");
+    const confirmNode = global.document.getElementById("noticeConfirm");
+    const cancelNode = global.document.getElementById("noticeCancel");
+    if (!layer || !titleNode || !messageNode || !confirmNode || !cancelNode)
+      return Promise.resolve(global.confirm(`${title}\n\n${message}`));
+    return new Promise(resolvePromise => {
+      titleNode.textContent = title;
+      messageNode.textContent = message;
+      confirmNode.textContent = confirmText;
+      cancelNode.textContent = cancelText;
+      cancelNode.hidden = false;
+      layer.hidden = false;
+      const finish = value => {
+        layer.hidden = true;
+        confirmNode.removeEventListener("click", onYes);
+        cancelNode.removeEventListener("click", onNo);
+        resolvePromise(value);
+      };
+      const onYes = () => finish(true);
+      const onNo = () => finish(false);
+      confirmNode.addEventListener("click", onYes);
+      cancelNode.addEventListener("click", onNo);
+    });
+  }
+
+  /** C2：进度条（既有 .taskProgress + .taskProgressTrack）—— 删除/清理这类会动文件的操作显示进度与结果。 */
+  function showProgress(text, percent, state = "running") {
+    if (!ui) return;
+    const box = ui.dataProgressBox;
+    const progress = ui.dataProgress;
+    if (!box || !progress) return;
+    box.hidden = false;
+    progress.dataset.state = state;
+    const label = progress.querySelector("strong");
+    if (label) label.textContent = text;
+    const bar = progress.querySelector(".taskProgressTrack > span");
+    if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number(percent) || 0))}%`;
+  }
+
+  /** C2：备份汇总（份数 + 总占用 + 按类型拆开）。数量与字节来自后端，不受列表条数上限影响。 */
+  function backupSummaryText(data) {
+    const summary = data?.summary ?? null;
+    const count = Number(summary?.count ?? data?.total ?? 0);
+    if (!count) return "备份目录里还没有备份文件。";
+    const kinds = Array.isArray(summary?.kinds) ? summary.kinds : [];
+    const parts = kinds.map(kind => `${kind.label} ${kind.count} 份 ${bytes(kind.bytes)}`);
+    const size = bytes(Number(summary?.bytes ?? 0));
+    return parts.length
+      ? `共 ${count} 份 · ${size}（${parts.join(" / ")}）`
+      : `共 ${count} 份 · ${size}`;
+  }
+
+  /** C2：删一份备份 —— 先二次确认，再显示「删除中」并在进度条上给出结果。 */
+  async function deleteBackupFlow(item, button) {
+    if (!ui) return;
+    const ok = await askNotice({
+      title: "删除备份",
+      message: `${item.file}\n大小：${bytes(item.bytes)}\n\n此操作不可撤销。`,
+      confirmText: "删除",
+    });
+    if (!ok) return;
+    button.disabled = true;
+    button.textContent = "删除中…";
+    showProgress(`正在删除 ${item.file}…`, 30);
+    ui.dataStatus.textContent = `正在删除 ${item.file}…`;
+    try {
+      const result = await api("/data/backup/delete", {
+        method: "POST",
+        body: JSON.stringify({ file: item.file, confirm: true }),
+      });
+      showProgress(`已删除，释放 ${bytes(result.freedBytes)}`, 100, "done");
+      await loadDataSafety();
+      ui.dataStatus.textContent = `✓ 已删除 ${result.removed}，释放 ${bytes(result.freedBytes)}；还剩 ${Number(result.total) || 0} 份备份`;
+    } catch (error) {
+      showProgress(`删除失败：${error.message}`, 100, "failed");
+      ui.dataStatus.textContent = `删除失败：${error.message}`;
+      button.disabled = false;
+      button.textContent = "删除";
+    }
+  }
+
   function renderDataSafety(data) {
     if (!ui) return;
     const box = ui.dataOut;
@@ -362,34 +456,49 @@
       box.append(warn);
     }
 
+    // C2：先给汇总（份数 + 占用，按类型拆开），再逐份列出 —— 一眼知道备份占了多大、都留了什么
+    box.append(node("p", backupSummaryText(data), "fieldHint"));
+
     const items = Array.isArray(data?.items) ? data.items : [];
     if (!items.length) {
       box.append(node("p", "还没有任何备份。点上面「立即备份」存一份，以后改错了可以回到这里。", "fieldHint"));
       return;
     }
+    const pendingFile = String(data?.pending?.file ?? "");
     const table = node("table", null, "ln-diagTable");
     const head = node("tr");
-    for (const label of ["时间", "来源", "大小", "操作"]) head.append(node("th", label));
+    for (const label of ["文件名", "时间", "大小", "类型", "操作"]) head.append(node("th", label));
     table.append(head);
-    for (const item of items.slice(0, 12)) {
+    for (const item of items) {
       const tr = node("tr");
+      tr.append(node("td", item.file));
       tr.append(node("td", timeText(item.at)));
-      tr.append(node("td", item.label));
       tr.append(node("td", bytes(item.bytes)));
+      tr.append(node("td", item.label));
       const actions = node("td");
       const look = node("button", "看内容", "secondary compact");
       look.type = "button";
       look.addEventListener("click", () => { void inspectBackupRow(item.file, tr); });
-      const restore = node("button", "恢复这一个", "secondary compact");
-      restore.type = "button";
-      restore.addEventListener("click", () => { void restoreBackup(item); });
-      actions.append(look, restore);
+      if (pendingFile && item.file === pendingFile) {
+        // real-shell-notes §4 第 5 条：同一份"待恢复"在页面上只保留一处语义 ——
+        // 上面的区块负责「取消这次恢复」，这一行只表达「不能删」，不重复放取消按钮。
+        tr.className = "ln-diagPending";
+        actions.append(look, node("span", "等待重启恢复，不能删", "fieldHint"));
+      } else {
+        const restore = node("button", "恢复这一个", "secondary compact");
+        restore.type = "button";
+        restore.addEventListener("click", () => { void restoreBackup(item); });
+        const remove = node("button", "删除", "compact danger");
+        remove.type = "button";
+        remove.addEventListener("click", () => { void deleteBackupFlow(item, remove); });
+        actions.append(look, restore, remove);
+      }
       tr.append(actions);
       table.append(tr);
     }
     box.append(table);
-    if (items.length > 12)
-      box.append(node("p", `另有 ${items.length - 12} 份更早的备份，「打开备份目录」能看到全部`, "fieldHint"));
+    if (Number(data?.total) > items.length)
+      box.append(node("p", `另有 ${Number(data.total) - items.length} 份更早的备份，「打开备份目录」能看到全部`, "fieldHint"));
   }
 
   // 1.0.5：周期自动备份（默认每天一份，最多留 7 份周期备份）
@@ -412,14 +521,38 @@
     const label = select.options[select.selectedIndex]?.textContent ?? "";
     const items = Array.isArray(data?.backups) ? data.backups : [];
     const state = data?.status ?? null;
+    const keep = Number(data?.keep) || 7;
     const parts = [`当前：${label}`];
     if (items.length)
       parts.push(`已有 ${items.length} 份周期备份，最新一份 ${timeText(items[0].at)}（${bytes(items[0].bytes)}，${items[0].file}）`);
     else
       parts.push("还没有周期备份 —— 程序启动时检查一次，到了间隔就会自动留第一份");
-    parts.push(`只保留最近 ${Number(data?.keep) || 7} 份周期备份（手动备份与升级前备份不会被清理）`);
+    parts.push(`只保留最近 ${keep} 份周期备份（手动备份与升级前备份不会被清理）`);
     if (state?.lastError) parts.push(`上次没能备份：${timeText(state.lastErrorAt)} · ${state.lastError}`);
     ui.periodicHint.textContent = parts.join(" · ");
+
+    // C2：保留份数可配置。输入框上下限由后端下发（keepRange），别在前端另写一份范围
+    if (ui.keepInput) {
+      const range = data?.keepRange ?? null;
+      if (range) {
+        ui.keepInput.min = String(Number(range.min) || 1);
+        ui.keepInput.max = String(Number(range.max) || 60);
+      }
+      if (global.document.activeElement !== ui.keepInput) ui.keepInput.value = String(keep);
+    }
+    // C2：改小保留份数**不立刻删** —— 这里显示"将清理几份"，把「确认清理」亮出来（调大即可撤销）
+    const removable = Number(data?.cleanup?.removable) || 0;
+    if (ui.keepCleanup) {
+      ui.keepCleanup.hidden = removable <= 0;
+      ui.keepCleanup.dataset.pending = String(removable);
+      ui.keepCleanup.textContent = removable > 0 ? `确认清理 ${removable} 份` : "确认清理";
+    }
+    if (ui.keepStatus) {
+      if (removable > 0)
+        ui.keepStatus.textContent = `保留份数改成 ${keep} 后，将清理 ${removable} 份旧周期备份（调大即可撤销）。`;
+      else if (ui.keepStatus.textContent.startsWith("保留份数改成"))
+        ui.keepStatus.textContent = "";
+    }
   }
 
   async function loadPeriodicBackup() {
@@ -445,6 +578,56 @@
       ui.periodicStatus.textContent = `保存失败：${error.message}`;
       // 保存失败就拉回服务器上的真实值，别让下拉框停在没生效的选择上
       await loadPeriodicBackup();
+    }
+  }
+
+  /** C2：保存保留份数。后端只记设置、不删文件 —— 要真清理得再点「确认清理」。 */
+  async function saveBackupKeep() {
+    if (!ui) return;
+    const keep = Number.parseInt(String(ui.keepInput.value ?? "").trim(), 10);
+    ui.keepStatus.textContent = "正在保存…";
+    try {
+      renderPeriodicBackup(await api("/data/periodic-backup", {
+        method: "POST",
+        body: JSON.stringify({ keep }),
+      }));
+      // 必须无条件写回显：renderPeriodicBackup 只更新既有节点，「正在保存…」还留在
+      // keepStatus 里，写成 if (!textContent) 就会永远停在「正在保存…」（真实浏览器实测踩到过）。
+      ui.keepStatus.textContent = `✓ 已保存：周期备份最多留 ${keep} 份`;
+    } catch (error) {
+      ui.keepStatus.textContent = `保存失败：${error.message}`;
+      await loadPeriodicBackup();
+    }
+  }
+
+  /** C2：真的动手清理（只有用户点了「确认清理」才会走到这里）。 */
+  async function cleanupPeriodicBackups() {
+    if (!ui) return;
+    const count = Number(ui.keepCleanup?.dataset.pending) || 0;
+    const ok = await askNotice({
+      title: "清理旧周期备份",
+      message: `将删除 ${count || "若干"} 份最早的周期备份。\n手动备份、升级前备份、以及正在使用的数据库都不会被删。\n\n此操作不可撤销。`,
+      confirmText: "清理",
+    });
+    if (!ok) return;
+    ui.keepCleanup.disabled = true;
+    ui.keepStatus.textContent = "正在清理旧周期备份…";
+    showProgress("正在清理旧周期备份…", 40);
+    try {
+      const result = await api("/data/periodic-backup/cleanup", {
+        method: "POST",
+        body: JSON.stringify({ confirm: true }),
+      });
+      const removed = Array.isArray(result.removed) ? result.removed.length : 0;
+      showProgress(`已清理 ${removed} 份，保留 ${Number(result.keep) || 0} 份`, 100, "done");
+      ui.keepStatus.textContent = `✓ 已清理 ${removed} 份旧周期备份`;
+      await loadPeriodicBackup();
+      await loadDataSafety();
+    } catch (error) {
+      showProgress(`清理失败：${error.message}`, 100, "failed");
+      ui.keepStatus.textContent = `清理失败：${error.message}`;
+    } finally {
+      ui.keepCleanup.disabled = false;
     }
   }
 
@@ -691,6 +874,18 @@
     dataActions.append(backupNowButton, revealBackupsButton, refreshBackupsButton);
     const dataStatus = node("p", "", "fieldHint");
     const dataOut = node("div", null, "ln-diagOut ln-diagDataOut");
+    // C2：删除/清理的进度（复用既有 .taskProgress 结构）。放在 dataOut **外面**：刷新列表会
+    // replaceChildren，进度条不能被一起清掉，否则"删除完成/失败"的结果一闪就没了。
+    // 外层盒子是裸 div（没有 display 规则），所以 hidden 生效 —— .taskProgress 本身是 grid，hidden 会被它盖掉。
+    const dataProgressBox = node("div");
+    dataProgressBox.hidden = true;
+    const dataProgress = node("div", null, "taskProgress");
+    const progressLine = node("div");
+    progressLine.append(node("span", "备份清理"), node("strong", "准备中…"));
+    const progressTrack = node("span", null, "taskProgressTrack");
+    progressTrack.append(node("span"));
+    dataProgress.append(progressLine, progressTrack);
+    dataProgressBox.append(dataProgress);
 
     // 1.0.5：周期自动备份设置行（默认开启、每 1 天、最多留 7 份）
     const periodicRow = node("div", null, "ln-diagPeriodic");
@@ -706,7 +901,27 @@
       periodicSelect.append(option);
     }
     periodicSelect.setAttribute("aria-label", "周期自动备份间隔");
-    periodicRow.append(periodicText, periodicSelect);
+    // C2：保留份数可配置（默认 7 份）。控件与下拉框同一行；输入框的上下限由后端 keepRange 下发。
+    const keepBox = node("div");
+    keepBox.append(
+      node("strong", "保留份数"),
+      node("small", "周期自动备份最多留几份。改小不会立刻删：先告诉你将清理几份，确认后才真删（调大即可撤销）。"),
+    );
+    const keepInput = node("input");
+    keepInput.type = "number";
+    keepInput.min = "1";
+    keepInput.max = "60";
+    keepInput.step = "1";
+    keepInput.value = "7";
+    keepInput.setAttribute("aria-label", "周期备份保留份数");
+    const keepSave = node("button", "保存份数", "secondary compact");
+    keepSave.type = "button";
+    const keepCleanup = node("button", "确认清理", "compact danger");
+    keepCleanup.type = "button";
+    keepCleanup.hidden = true;
+    const keepStatus = node("p", "", "fieldHint");
+    keepBox.append(keepInput, keepSave, keepCleanup, keepStatus);
+    periodicRow.append(periodicText, periodicSelect, keepBox);
     const periodicHint = node("p", "", "fieldHint");
     const periodicStatus = node("p", "", "fieldHint");
 
@@ -729,7 +944,7 @@
     box.append(head, navBox, startupActions, startupOut, healthHead, healthActions, healthOut,
       crashHead, crashActions, crashOut,
       packHead, packActions, packOut,
-      dataHead, dataActions, dataStatus, dataOut,
+      dataHead, dataActions, dataStatus, dataProgressBox, dataOut,
       periodicRow, periodicHint, periodicStatus,
       transferHead, transferActions, transferStatus,
       status);
@@ -738,8 +953,9 @@
     ui = {
       box, startupButton, copyButton, healthButton, startupOut, healthOut, crashButton, crashOut,
       packButton, packOut, status,
-      dataOut, dataStatus, transferStatus,
+      dataOut, dataStatus, dataProgressBox, dataProgress, transferStatus,
       periodicSelect, periodicHint, periodicStatus,
+      keepInput, keepSave, keepCleanup, keepStatus,
     };
     startupButton.addEventListener("click", () => { void loadStartup(); });
     healthButton.addEventListener("click", () => { void loadHealth(); });
@@ -752,6 +968,8 @@
     revealBackupsButton.addEventListener("click", () => { void revealBackups(); });
     refreshBackupsButton.addEventListener("click", () => { void loadDataSafety(); });
     periodicSelect.addEventListener("change", () => { void savePeriodicBackup(periodicSelect.value); });
+    keepSave.addEventListener("click", () => { void saveBackupKeep(); });
+    keepCleanup.addEventListener("click", () => { void cleanupPeriodicBackups(); });
     exportDataButton.addEventListener("click", () => { void exportAllData(); });
     importDataButton.addEventListener("click", () => importDataInput.click());
     importDataInput.addEventListener("change", () => {

@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import vm from 'node:vm';
 import { createOliviaService } from '../server.js';
 
 // 这组测试守两件事：
@@ -86,6 +87,24 @@ test('一键导出：还没到点的回信按「尚未收到」处理，不剧�
   assert.match(text, /（尚未收到回信）/u);
 });
 
+// 这条是「不剧透」承诺在 **JSON 出口**的一半：上面那条只发 format:'md'、只断言 Markdown 文本，
+// 而游戏端时间线的「导入」吃的是 json —— 两个出口必须各自有断言，否则 json 侧的闸门形同虚设。
+// 实测：把 server.js 的 `reply: replied ? row.reply_text : ""` 改成无条件 `row.reply_text`，
+// 只有 md 版断言时全套 9 项仍全绿（漏网）。2026-10-11 补。
+test('一键导出：JSON 出口同样不剧透（未到解锁时间的回信正文不能出现）', async t => {
+  const { dataDir, base } = await fixture(t);
+  await fetch(base + '/toy/letter/unread_count');
+  const future = Math.floor(Date.now() / 1000) + 3600;
+  seed(dataDir, [{ content: '先写一封', reply: '这封回信还没到解锁时间', availableAt: future }]);
+  const { result } = await post(base, { format: 'json' });
+  assert.equal(result.data.repliedCount, 0);
+  const raw = await readFile(result.data.path, 'utf8');
+  const parsed = JSON.parse(raw);
+  assert.equal(parsed.letters[0].reply, '', '未解锁的回信正文必须以空串出现在 json（时间线的「导入」吃的就是它）');
+  assert.equal(parsed.letters[0].hasReplyVideo, false, '未解锁时不能带出回信视频');
+  assert.ok(!raw.includes('这封回信还没到解锁时间'), 'JSON 全文都不能出现未解锁的回信正文');
+});
+
 test('一键导出：连着点两次不会互相覆盖（旧名字只精确到分钟）', async t => {
   const { dataDir, base } = await fixture(t);
   await fetch(base + '/toy/letter/unread_count');
@@ -143,4 +162,105 @@ test('游戏侧脚本已登记进 serveStatic 白名单，且锚点仍钉着信�
   assert.match(source, /if \(styledFrom === download\) return;/u);
   // 挂上之后放慢轮询，页面切到后台再放慢一档
   assert.match(source, /document\.hidden \? 10000 : target \? 5000 : 1500/u);
+});
+
+test('一键导出：界面要同时出 markdown 与 json 两份（时间线的「导入」只吃 json）', async t => {
+  const { base } = await fixture(t);
+  const response = await fetch(base + '/admin/game-letter-export.js');
+  assert.equal(response.status, 200);
+  const source = await response.text();
+  // 1.1.1 起这里只发 format:'md'，而时间线的导入入口写着「把一键导出的 json 放回来」——
+  // 界面里没有任何 JSON 出口，导入等于走不通。这条断言就是防它退回去。
+  assert.match(source, /exportOnce\('md'\)/u, '要导出 markdown（给人看 / 直接分享）');
+  assert.match(source, /exportOnce\('json'\)/u, '要导出 json（换电脑时用时间线的「导入」放回来）');
+  assert.match(source, /Promise\.allSettled\(\[exportOnce\('md'\), exportOnce\('json'\)\]\)/u,
+    '两份要一起要；一份失败不能让另一份白导');
+  // 只导一份的实现方式（单次 fetch 写死 format）不许再回来
+  assert.doesNotMatch(source, /body: JSON\.stringify\(\{ format: 'md' \}\)\s*\}\)/u,
+    '不能再出现「只发一次 format: md」的老写法');
+});
+
+// 上面那条只钉源码字面量；这一条真把脚本跑起来：搭一个最小 DOM，注入真实脚本、点一下按钮，
+// 数它到底发了几次导出请求、提示里写了什么。服务端是真实的（临时库 + 真 HTTP）。
+async function runExportScript(t, base, { failFormat = null } = {}) {
+  const source = await (await fetch(base + '/admin/game-letter-export.js')).text();
+  const created = [];
+  const makeEl = tag => {
+    const el = {
+      tagName: tag, id: '', className: '', textContent: '', type: '', children: [], listeners: {},
+      parentNode: null, disabled: false, style: { cssText: '', opacity: '' },
+      appendChild(child) { child.parentNode = el; el.children.push(child); return child; },
+      replaceChildren(...nodes) { el.children = []; nodes.forEach(node => { node.parentNode = el; el.children.push(node); }); },
+      remove() { if (el.parentNode) el.parentNode.children = el.parentNode.children.filter(c => c !== el); },
+      addEventListener(type, fn) { (el.listeners[type] ||= []).push(fn); },
+      cloneNode() { return { ...el, children: [...el.children] }; },
+      querySelector(sel) { return el.children.find(c => c.tagName === sel) || null; },
+      querySelectorAll(sel) { return el.children.filter(c => c.tagName === sel); }
+    };
+    created.push(el);
+    return el;
+  };
+  const box = makeEl('div');
+  const download = makeEl('button');
+  download.textContent = '下载';
+  const share = makeEl('button');
+  share.textContent = '分享信件';
+  box.appendChild(download);
+  box.appendChild(share);
+  const body = makeEl('body');
+  const documentStub = {
+    currentScript: { src: `${base}/admin/game-letter-export.js` },
+    hidden: false,
+    body,
+    createElement: makeEl,
+    createTextNode: text => ({ nodeType: 3, textContent: text }),
+    getElementById: id => created.find(el => el.id === id) || null,
+    querySelectorAll: sel => (sel === 'div.flex.items-center.gap-2.flex-shrink-0' ? [box] : [])
+  };
+  const formats = [];
+  const fetchStub = async (url, init) => {
+    const format = JSON.parse(init.body).format;
+    formats.push(format);
+    if (format === failFormat) throw new Error('模拟这一份导出失败');
+    return fetch(url, init);
+  };
+  const context = vm.createContext({ window: { addEventListener() {} }, document: documentStub,
+    fetch: fetchStub, URL, setTimeout: () => 1, clearTimeout: () => {}, console });
+  t.after(() => { /* vm 里没有真定时器，无需清理 */ });
+  new vm.Script(source, { filename: 'game-letter-export.js' }).runInContext(context);
+  const button = created.find(el => el.textContent === '一键导出');
+  assert.ok(button, '脚本应当把「一键导出」按钮挂到原生按钮组里');
+  assert.equal(button.parentNode, box, '按钮要挂在「下载 / 分享信件」那一组里');
+  const click = (button.listeners.click || [])[0];
+  assert.ok(click, '按钮要绑 click');
+  click();
+  for (let i = 0; i < 60 && formats.length < 2; i += 1) await new Promise(resolve => setTimeout(resolve, 20));
+  for (let i = 0; i < 20; i += 1) await new Promise(resolve => setTimeout(resolve, 20));
+  const toastNode = created.find(el => el.id === 'olivia-letter-export-toast');
+  return { formats, toast: toastNode ? toastNode.textContent : '' };
+}
+
+test('一键导出：点一下真的发两次请求（md + json），提示里两份路径都写出来', async t => {
+  const { dataDir, base } = await fixture(t);
+  await fetch(base + '/toy/letter/unread_count');
+  seed(dataDir, [{ content: '内容 A', reply: '回信 A' }]);
+  const { formats, toast } = await runExportScript(t, base);
+  assert.deepEqual(formats.slice().sort(), ['json', 'md'], `应当恰好发一次 md、一次 json，实际 ${JSON.stringify(formats)}`);
+  assert.match(toast, /已导出 1 封信（共 1 封已回信）/u);
+  assert.match(toast, /Markdown（给人看 \/ 直接分享）：.*\.md/u);
+  assert.match(toast, /JSON（换电脑后在「时间线 → 导入」里放回来）：.*\.json/u);
+  const paths = toast.match(/[A-Za-z]:\\[^\n]+\.(?:md|json)/gu) || [];
+  assert.equal(paths.length, 2, '两份路径都要在提示里');
+  for (const file of paths) assert.ok(await readFile(file, 'utf8'), `导出的文件应当真的落盘：${file}`);
+});
+
+test('一键导出：一份失败时另一份照旧落盘，并说清是哪一份失败', async t => {
+  const { dataDir, base } = await fixture(t);
+  await fetch(base + '/toy/letter/unread_count');
+  seed(dataDir, [{ content: '内容 B', reply: '回信 B' }]);
+  const { formats, toast } = await runExportScript(t, base, { failFormat: 'json' });
+  assert.deepEqual(formats.slice().sort(), ['json', 'md']);
+  assert.match(toast, /已导出 1 封信（共 1 封已回信）/u);
+  assert.match(toast, /Markdown（给人看 \/ 直接分享）：.*\.md/u);
+  assert.match(toast, /JSON 没导出成功：模拟这一份导出失败/u);
 });

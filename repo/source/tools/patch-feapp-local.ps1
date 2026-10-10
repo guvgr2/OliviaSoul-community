@@ -39,7 +39,7 @@ if ($mainFiles.Count -ne 1) { throw "expected one main-*.js, got $($mainFiles.Co
 $utf8 = New-Object System.Text.UTF8Encoding $false
 $mainPath = $mainFiles[0].FullName
 $text = [IO.File]::ReadAllText($mainPath, $utf8)
-$patchMarker = '/*OliviaSoulPatch:mail-music-v61*/'
+$patchMarker = '/*OliviaSoulPatch:mail-music-v63*/'
 if ($text.Contains($patchMarker)) { throw "original feapp already contains current patch" }
 $text = $patchMarker + $text
 $playerCommandUrl = $ServiceUrl.TrimEnd("/") + "/toy/player-command"
@@ -50,7 +50,7 @@ if (-not (Test-Path -LiteralPath $songEditorSourcePath -PathType Leaf)) { throw 
 $songEditorSource = [IO.File]::ReadAllText($songEditorSourcePath, $utf8)
 $songEditorBase = $ServiceUrl.TrimEnd("/") + "/toy"
 $songEditorBridge = @'
-(()=>{const s=document.createElement("script");s.charset="utf-8";s.src="__OLIVIA_SONG_EDITOR_BASE__/../admin/game-lyrics.js";document.head.appendChild(s);const t=document.createElement("script");t.charset="utf-8";t.src="__OLIVIA_SONG_EDITOR_BASE__/../admin/game-letter-export.js";document.head.appendChild(t)})();
+(()=>{const s=document.createElement("script");s.charset="utf-8";s.src="__OLIVIA_SONG_EDITOR_BASE__/../admin/game-lyrics.js";document.head.appendChild(s);const t=document.createElement("script");t.charset="utf-8";t.src="__OLIVIA_SONG_EDITOR_BASE__/../admin/game-letter-export.js";document.head.appendChild(t);const f=document.createElement("script");f.charset="utf-8";f.src="__OLIVIA_SONG_EDITOR_BASE__/../admin/game-favorites.js";document.head.appendChild(f);const g=document.createElement("script");g.charset="utf-8";g.src="__OLIVIA_SONG_EDITOR_BASE__/../admin/game-letter-timeline.js";document.head.appendChild(g)})();
 function OliviaSoulEditSong(song){
   if(!String(song&&song.videoUrl||"").includes("/toy/midi/songs/"))return;
   return window.OliviaSoulSongEditor.open({baseUrl:"__OLIVIA_SONG_EDITOR_BASE__",songId:window.OliviaSoulSongEditor.stableId(song)});
@@ -59,6 +59,17 @@ function OliviaSoulRemoveSong(song){
   if(!String(song&&song.videoUrl||'').includes('/toy/midi/songs/'))return;
   return window.OliviaSoulSongEditor.remove({baseUrl:'__OLIVIA_SONG_EDITOR_BASE__',ids:[window.OliviaSoulSongEditor.stableId(song)],names:[song.name]});
 }
+function OliviaSoulPlayFolder(items,startIndex){
+  const list=(items||[]).filter(item=>String(item&&item.videoUrl||"").includes("/toy/midi/songs/"));
+  if(!list.length)return false;
+  x.value=list;
+  p.value=ot.Repeat;
+  if(t.value===Se.LITE)Ct({cmd:"setPlayMode",mode:p.value});
+  const at=Math.min(Math.max(0,Number(startIndex)||0),list.length-1);
+  M(x.value[at]);
+  return true;
+}
+window.OliviaSoulPlayFolder=OliviaSoulPlayFolder;
 '@
 $songEditorBridge = $songEditorBridge.Replace('__OLIVIA_SONG_EDITOR_BASE__', $songEditorBase)
 $songTitleSync = @'
@@ -640,6 +651,24 @@ $songShareMenuCount = ([regex]::Matches($text, [regex]::Escape($songShareMenuSho
 if ($songShareMenuCount -ne 1) { throw "expected one song share menu action, got $songShareMenuCount" }
 $text = $text.Replace($songShareMenuShown, $songShareMenuHidden)
 
+# 歌曲行的「加播单」交给本地服务的新歌单界面（勾选加入歌单 / 管理歌单 / 夹内循环）。
+# 只改这一个调用点：它同时是 hover 动作条与右键菜单里的「加播单」，全 bundle 里也正好只出现一次。
+# 客户端脚本没装载（或曲目不是本地曲目）时 openPicker 返回假值，行为完全回退到原生。
+# 第三个参数把游戏原生的「加进音乐桌面」回调交给客户端：用户不想建歌单时，下拉里那一行直接走原功能。
+$songFavoritesAddFrom = 'O=()=>{c("addPlaylist",a.song)}'
+$songFavoritesAddTo = 'O=(...OliviaSoulFavArgs)=>{if(window.OliviaSoulFavorites&&window.OliviaSoulFavorites.openPicker(a.song,OliviaSoulFavArgs[0],()=>c("addPlaylist",a.song)))return;c("addPlaylist",a.song)}'
+$songFavoritesAddCount = ([regex]::Matches($text, [regex]::Escape($songFavoritesAddFrom))).Count
+if ($songFavoritesAddCount -ne 1) { throw "expected one song add-to-playlist action, got $songFavoritesAddCount" }
+$text = $text.Replace($songFavoritesAddFrom, $songFavoritesAddTo)
+
+# 给曲库/作品列表的每一行打上歌曲 id：客户端靠它把「已在 N 个歌单」标到对应行上。
+# Vue 会把没声明成 prop 的属性透传到根元素（class 就是这么透传的，行上本来就有 .song-item）。
+$songRowIdFrom = 'class:"song-item","column-config":y'
+$songRowIdTo = 'class:"song-item","data-olivia-song":at.id,"column-config":y'
+$songRowIdCount = ([regex]::Matches($text, [regex]::Escape($songRowIdFrom))).Count
+if ($songRowIdCount -ne 1) { throw "expected one song row id attribute site, got $songRowIdCount" }
+$text = $text.Replace($songRowIdFrom, $songRowIdTo)
+
 $collectionShareShown = 'n("div",ub,[k(x,{class:"text-title-m m-1 text-info",type:"share",onClick:w[2]||(w[2]=P=>g.$emit("share",g.song))})])'
 $collectionShareHidden = 'n("div",ub,[])'
 $collectionShareCount = ([regex]::Matches($text, [regex]::Escape($collectionShareShown))).Count
@@ -807,6 +836,10 @@ foreach ($endpoint in $endpoints) {
 }
 if (-not $verifyText.StartsWith($patchMarker)) { throw "patched archive missing revision marker" }
 if (-not $verifyText.Contains($songEditorSource) -or -not $verifyText.Contains($songEditorRowTo) -or -not $verifyText.Contains($songTitleSync)) { throw "patched archive missing shared song editor or title synchronization" }
+if (-not $verifyText.Contains($songFavoritesAddTo)) { throw "patched archive missing the favorites add-to-playlist hook" }
+if (-not $verifyText.Contains($songRowIdTo)) { throw "patched archive missing the song row id attribute" }
+if (-not $verifyText.Contains('window.OliviaSoulPlayFolder=OliviaSoulPlayFolder')) { throw "patched archive missing the favorites play bridge" }
+if (-not $verifyText.Contains('admin/game-letter-timeline.js')) { throw "patched archive missing the letter timeline script" }
 if (-not $verifyText.Contains($offlineWidgetsEnabled)) { throw "patched archive still disables offline desktop widgets" }
 if (-not $verifyText.Contains($settingsInitTo)) { throw "patched archive still accepts hidden desktop widget settings" }
 if (-not $verifyText.Contains($offlineWidgetResyncTo)) { throw "patched archive missing post-start desktop widget resync" }

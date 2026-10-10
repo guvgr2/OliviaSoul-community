@@ -1,6 +1,6 @@
 # API 配置使用说明
 
-适用：本支 `2008.2.7-linli9-1.1.2`（程序版本 2008.2.7），2026-10-01；包含上游 R10.7 的中转 API 兼容更新。上游 linli.9 及更早的公开安装包不包含本支新增的模型选择、整理、备份与崩溃排查功能。
+适用：本支 `2008.2.7-linli9-1.2.0`（程序版本 2008.2.7），2026-10-01；包含上游 R10.7 的中转 API 兼容更新。上游 linli.9 及更早的公开安装包不包含本支新增的模型选择、整理、备份与崩溃排查功能。
 
 说明修订日期：2026-09-28。统一称为“中转站”，以用户使用的 seekai.cc 为配置示例。
 
@@ -59,6 +59,10 @@
 | `kimi-k3` | `https://api.moonshot.cn/v1` | `kimi-k3` | Kimi 月之暗面，旗舰，1M 上下文，始终推理 |
 | `kimi-k2.6` | `https://api.moonshot.cn/v1` | `kimi-k2.6` | Kimi 月之暗面，通用思考，可关闭 |
 | `kimi-k2.7-code` | `https://api.moonshot.cn/v1` | `kimi-k2.7-code` | Kimi 月之暗面，代码场景，始终思考 |
+| `M2-her` | `https://api.minimax.cn/v1` | `M2-her` | MiniMax，专为角色扮演与多轮闲聊调过，64K 上下文 |
+| `doubao-seed-character-260628` | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-character-260628` | 豆包（火山方舟），角色扮演/陪伴，128K，支持深度思考 |
+| `doubao-seed-character-251128` | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-character-251128` | 豆包（火山方舟），角色扮演，不支持深度思考 |
+| `doubao-seed-2-0-mini-260428` | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-2-0-mini-260428` | 豆包（火山方舟），省钱档，256K |
 | 自定义 | 你自己填 | 你自己填 | 自己的中转站或本地服务，见第四节 |
 
 程序不会替你自动换模型，也不会在失败时偷偷切到另一家。要换随时回来改，改完点「保存并测试远程模型」，再点「检测并设为当前模型」才真正启用。
@@ -70,6 +74,8 @@
 - DeepSeek **没有** `deepseek-v4.1-flash` 之类的 ID，名字写错会直接 404；
 - 智谱的模型 ID 是 `glm-5.3-flash` 这种形式，不是官网标题里的 `GLM-5.3-Flash`；同一系列还有 `glm-5.3-flashx`（更快）与 `glm-5.3`（旗舰），别混填。
 - Kimi 的模型 ID 是 `kimi-k3` / `kimi-k2.6` / `kimi-k2.7-code`（旧的 `kimi-k2-0905-preview`、`kimi-latest`、`kimi-k2-thinking` 已下线）。Kimi 的 `temperature` 不可修改，程序不会发送它；`kimi-k3` 只认顶层 `reasoning_effort`，`kimi-k2.7-code` 始终思考且不接受 `thinking` 参数 —— 这些差异由程序按模型名自动处理。
+- MiniMax 的模型 ID **固定写 `M2-her`**，国内站接口地址是 `https://api.minimax.cn/v1`（国际站是 `https://api.minimaxi.com/v1`，别混用）。它按官方文档只支持通用参数（`temperature` 默认 1.0、单次回复上限 2048 token），程序认不出它的「家族」，因此不会向它发送任何厂商专用推理参数 —— 正好符合官方要求。
+- 豆包（火山方舟）的模型 ID 填官方 Model ID（`doubao-seed-character-260628` / `doubao-seed-character-251128` / `doubao-seed-2-0-mini-260428`），接口地址 `https://ark.cn-beijing.volces.com/api/v3`，**末尾不要再自己加 `/chat/completions`**（程序会拼）。**别填 `doubao-seed-2-0-mini-260215`**：官方已标注「即将下线」。⚠️ 方舟与其它几家最大的差别是 **拿到 API Key 还不够 —— 必须先在火山方舟控制台「开通模型」**，没开通会返回 403（分诊里会提示你先去开通）。方舟也允许把「接入点 ID」（`ep-…`）当 model 填，程序不做限制；豆包不属于程序已知的推理家族，因此不会收到厂商专用推理参数（方舟默认自己开深度思考，属于它自己的行为）。
 
 程序只对**认得出家族**的模型附带厂商专用推理参数：DeepSeek 用 `thinking` + `reasoning_effort: high`；智谱 GLM 用 `thinking: enabled`（GLM 只接受 enabled） + `reasoning_effort: max`（智谱官方推荐值）。认不出家族的模型**一个厂商专用参数都不发**，避免被严格接口以 400 拒绝；「通用兼容 API（本地 / 中转）」档案则始终不发。
 

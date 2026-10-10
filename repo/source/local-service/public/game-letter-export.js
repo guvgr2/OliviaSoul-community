@@ -49,18 +49,39 @@
     toastTimer = setTimeout(() => { node.style.opacity = '0'; }, ok ? 8000 : 4000);
   }
 
+  async function exportOnce(format) {
+    const response = await fetch(base + '/toy/letter/export', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ format })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.code !== 0) throw new Error(result.message || result.error || '导出失败');
+    return result.data || {};
+  }
+
+  function reasonOf(settled) {
+    const reason = settled && settled.reason;
+    return reason && reason.message ? reason.message : String(reason || '未知原因');
+  }
+
+  // 一次点出两份：markdown 给人看 / 直接分享，json 用来在「时间线 → 导入」里把信搬回来。
+  // 这里原来只发 format:'md'，而时间线的导入入口写的却是「把一键导出的 json 放回来」——
+  // 界面里没有任何 JSON 出口，导入等于走不通（1.1.1 起直到 v63 才修）。
   async function run() {
     if (busy || stopped) return;
     busy = true; button.disabled = true; button.style.opacity = '0.6';
     try {
-      const response = await fetch(base + '/toy/letter/export', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ format: 'md' })
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || result.code !== 0) throw new Error(result.message || result.error || '导出失败');
-      const data = result.data || {};
-      toast(`已导出 ${data.count} 封信（共 ${data.repliedCount} 封已回信）\n${data.path}`, true);
+      const [markdown, json] = await Promise.allSettled([exportOnce('md'), exportOnce('json')]);
+      const any = markdown.status === 'fulfilled' ? markdown.value : json.status === 'fulfilled' ? json.value : null;
+      if (!any) throw (markdown.reason || json.reason || new Error('导出失败'));
+      const lines = [`已导出 ${any.count} 封信（共 ${any.repliedCount} 封已回信）`];
+      lines.push(markdown.status === 'fulfilled'
+        ? `Markdown（给人看 / 直接分享）：${markdown.value.path}`
+        : `Markdown 没导出成功：${reasonOf(markdown)}`);
+      lines.push(json.status === 'fulfilled'
+        ? `JSON（换电脑后在「时间线 → 导入」里放回来）：${json.value.path}`
+        : `JSON 没导出成功：${reasonOf(json)}`);
+      toast(lines.join('\n'), true);
     } catch (error) {
       toast(`一键导出失败：${error && error.message ? error.message : error}`, false);
     } finally {

@@ -24,7 +24,7 @@ function Step-Mark([string]$Name) {
 }
 
 $baseVersion = "2008.2.7"
-$version = "2008.2.7-linli9-1.1.2"
+$version = "2008.2.7-linli9-1.2.0"
 $packagePath = Join-Path $project "package.json"
 $packageText = [IO.File]::ReadAllText($packagePath, $utf8NoBom)
 $package = $packageText | ConvertFrom-Json
@@ -367,7 +367,7 @@ Copy-PublicFile (Join-Path $ffmpegRoot.FullName "bin\ffprobe.exe") (Join-Path $s
 Copy-PublicFile (Join-Path $ffmpegRoot.FullName "LICENSE.txt") (Join-Path $stage "runtime\ffmpeg\LICENSE.txt")
 
 foreach ($name in @(
-    "server.js", "transcription.js", "remote-memory.js", "soul-bundle.js", "model-config.js", "model-transport.js",
+    "server.js", "transcription.js", "remote-memory.js", "soul-bundle.js", "model-config.js", "model-transport.js", "model-families.json",
     "data-migration.js", "storage-paths.js", "storage-migration.js", "update-download.js", "update-network.js"
 )) {
     Copy-PublicFile (Join-Path $project $name) (Join-Path $stage "app\$name")
@@ -410,6 +410,8 @@ $desktopModules = @(
     "workspace-template.js",
     "client-backups.js",
     "client-execution.js",
+    # --- 1.2.0 新增：提权命令构造（先不提权、只有权限不足才提权，避免无谓的 UAC）---
+    "elevation-command.js",
     "client-patch-registry.js",
     "uninstall-restore.js",
     # --- g26 新增：FE 补丁版本序列的唯一权威来源（漏了它，desktop 侧 import 会直接失败）---
@@ -429,9 +431,27 @@ if ($desktopMissing.Count -gt 0) { Write-Warning "desktop 目录里有未列入�
 # The release intentionally excludes Godot, FluidSynth, SoundFont and MIDI rendering bootstrap files.
 
 $scriptTarget = Join-Path $stage "resources\workspace-template\.cursor\skills\fit-letters\scripts"
-foreach ($name in @("deepseek-reply.ps1", "harness-live.ps1", "harness-4step.ps1", "history-retrieval.ps1", "refresh-live-memory.ps1", "memory-lib.ps1", "ds-call.ps1", "model-call.ps1", "score-temp.ps1", "sqlite-memory-load.cjs")) {
+foreach ($name in @("deepseek-reply.ps1", "harness-live.ps1", "harness-4step.ps1", "history-retrieval.ps1", "refresh-live-memory.ps1", "memory-lib.ps1", "ds-call.ps1", "model-call.ps1", "probe-prune.ps1", "score-temp.ps1", "sqlite-memory-load.cjs")) {
     Copy-PublicFile (Join-Path $repository ".cursor\skills\fit-letters\scripts\$name") (Join-Path $scriptTarget $name)
 }
+# B2：家族表的单一真相源，必须和 harness 脚本一起进 UserData（model-call.ps1 读同目录这份）。
+Copy-PublicFile (Join-Path $project "model-families.json") (Join-Path $scriptTarget "model-families.json")
+# 阻断式反向检查（2026-10-10 复核 P0）：scripts 目录里有文件没进上面的清单 ⇒ 产物里不会有它。
+# 后果不是"少个文件"：harness-4step.ps1 在顶层 dot-source probe-prune.ps1，而它开头是
+# $ErrorActionPreference = "Stop" ⇒ 缺文件 = 写回信启动即退出码 1。第十四轮就是漏了 probe-prune.ps1，
+# 当时只有单元护栏，要等门禁跑完才发现；这里在打包当下就 throw。
+# 清单从本文件自己抽（与 test/harness-package-manifest.test.js 同一套提取思路），不另抄一份名单。
+$selfText = [IO.File]::ReadAllText($PSCommandPath, [Text.Encoding]::UTF8)
+$selfMatch = [regex]::Match($selfText, '\$scriptTarget\s*=\s*Join-Path[^\r\n]*\r?\n\s*foreach \(\$name in @\(([\s\S]*?)\)\)\s*\{')
+if (-not $selfMatch.Success) { throw "打包脚本里找不到 harness 脚本清单（结构变了：同步更新本反向检查的提取正则）" }
+$scriptFiles = @([regex]::Matches($selfMatch.Groups[1].Value, '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+$scriptStrays = @(Get-ChildItem -LiteralPath (Join-Path $repository ".cursor\skills\fit-letters\scripts") -File |
+  Where-Object { $scriptFiles -notcontains $_.Name } | ForEach-Object { $_.Name })
+if ($scriptStrays.Count -gt 0) { throw ("harness 脚本目录里有文件没进打包清单：{0}（产物里不会有它 ⇒ 写回信可能启动即失败）" -f ($scriptStrays -join "、")) }
+foreach ($extraName in @("model-families.json")) {
+  if (-not (Test-Path -LiteralPath (Join-Path $project $extraName))) { throw ("harness 脚本要单独复制的 $extraName 不存在：{0}" -f (Join-Path $project $extraName)) }
+}
+
 Copy-PublicFile (Join-Path $repository "林离人设.md") (Join-Path $stage "resources\workspace-template\林离人设.md")
 foreach ($name in @("VERSION", "00-栏目.md", "01-预检.md", "01-初始化账本.md", "02-历史检索.md", "02-账本校正.md", "03-中段生成.md", "04-尾端检查.md", "05-反馈重写.md", "开信.md", "写法.md")) {
     Copy-PublicFile (Join-Path $repository "harness\$name") (Join-Path $stage "resources\workspace-template\harness\$name")

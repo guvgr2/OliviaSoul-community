@@ -42,6 +42,13 @@
       headers: { "Content-Type": "application/json" },
     }, options));
     const body = await response.json().catch(() => ({}));
+    // 曲库目录还没设置时服务端回的是指引卡片 { needsLibrary: true, message }（code 仍是 0）：
+    // 当成错误抛出去，让调用方把这句话原样显示给用户，别渲染成「0 首」。
+    if (body && body.data && body.data.needsLibrary) {
+      const error = new Error(body.data.message || "还没设置曲目存储路径");
+      error.needsLibrary = true;
+      throw error;
+    }
     if (body && body.code !== 0 && body.code != null) throw new Error(body.message || "请求失败");
     return body && "data" in body ? body.data : body;
   }
@@ -222,7 +229,8 @@
           tagList.append(line);
         }
       } catch (error) {
-        tagLine.textContent = `读取标签失败：${error.message}`;
+        // 无库时 error.message 就是完整指引（服务端给的那句），别再套「读取标签失败：」。
+        tagLine.textContent = error && error.needsLibrary ? error.message : `读取标签失败：${error.message}`;
       }
     };
 

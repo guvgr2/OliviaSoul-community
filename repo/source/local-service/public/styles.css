@@ -687,3 +687,40 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ln-diagPeriodic strong { display: block; margin-bottom: 4px; }
 .ln-diagPeriodic small { color: #9a9ba3; line-height: 1.5; }
 .ln-diagPeriodic select { min-width: 200px; }
+
+/* 1.2.0 歌单与收藏（程序端页签）：两栏布局、可拖拽的曲目行、二维码。
+   配色与圆角全部沿用既有值（面板 #1b1c20 / 描边 #292a2f / 次要字 #77777d / 正文 #b9bac1），
+   不新增色值、字体、渐变、阴影。 */
+.fm-nameInput { flex: 1 1 260px; max-width: 360px; }
+.fm-paste { width: 100%; margin-top: 12px; box-sizing: border-box; font: inherit; resize: vertical; min-height: 110px; }
+.fm-fileInput { display: none; }
+/* .actions 是 flex，[hidden] 的默认 display:none 压不过它，必须显式声明（与 .noticeLayer[hidden] 同一写法）。 */
+.fm-renameRow[hidden] { display: none; }
+.fm-layout { display: grid; grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); gap: 12px; margin-top: 12px; align-items: start; }
+.fm-listBlock, .fm-detailBlock { margin: 0; }
+.fm-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.fm-listRow { margin: 0; }
+.fm-listButton { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; text-align: left; }
+.fm-listRow.active .fm-listButton { border-color: #776859; }
+.fm-listName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-listCount { color: #77777d; font-size: 12px; font-variant-numeric: tabular-nums; flex: none; }
+.fm-detailHead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.fm-detailHead h3 { margin: 0; }
+.fm-detailActions { display: flex; flex-wrap: wrap; gap: 9px; }
+.fm-hint { color: #77777d; font-size: 12px; margin: 8px 0 0; }
+.fm-renameRow { margin-top: 10px; }
+.fm-rows { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.fm-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid #292a2f; border-radius: 9px; background: #1b1c20; }
+.fm-row.dragging { opacity: .55; }
+.fm-row.dropTarget { border-color: #776859; }
+.fm-handle { color: #77777d; cursor: grab; user-select: none; letter-spacing: -1px; }
+.fm-cover { width: 28px; height: 28px; border-radius: 6px; object-fit: cover; flex: none; }
+.fm-rowText { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.fm-rowText > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-renamed { color: #77777d; font-size: 12px; }
+.fm-duration { color: #77777d; font-size: 12px; font-variant-numeric: tabular-nums; }
+.fm-mini { padding: 4px 8px; font-size: 12px; flex: none; }
+.fm-exportBlock { margin-top: 12px; }
+.fm-qrBox { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 12px; }
+.fm-qr { width: 220px; height: 220px; max-width: 60vw; border: 1px solid #292a2f; border-radius: 9px; background: #fff; }
+.fm-exportText { width: 100%; margin-top: 12px; box-sizing: border-box; font: inherit; resize: vertical; }

@@ -741,8 +741,12 @@ test("build-release 在 PowerShell 5.1 拒绝未知参数且不创建最终输�
   ], { encoding: "utf8" });
 
   assert.notEqual(result.status, 0, "unknown build parameter was accepted");
-  assert.match(result.stdout + result.stderr, /DefinitelyUnknownParameter|named parameter/u);
-  assert.doesNotMatch(result.stdout + result.stderr, /\{"buildTools"/u);
+  // PowerShell 5.1 按控制台宽度折行（约 80 列），会把 DefinitelyUnknownParameter 断成
+  // "DefinitelyUnknown\r\nParameter"：直接 match 会在窄控制台（Git Bash / 本机 PowerShell）下假红，
+  // 而在门禁的宽控制台里是绿的。这类「环境敏感」的假红会被下一位复核者当成真回归，先去掉换行再匹配。
+  const buildOutput = (result.stdout + result.stderr).replace(/\r?\n/gu, "");
+  assert.match(buildOutput, /DefinitelyUnknownParameter|named parameter/u);
+  assert.doesNotMatch(buildOutput, /\{"buildTools"/u);
   await assert.rejects(access(output));
 });
 

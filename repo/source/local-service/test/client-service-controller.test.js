@@ -271,8 +271,9 @@ test("elevated RefreshOriginal uses PowerShell switch binding without a position
   // Execute only the already-formatted inner command against an isolated
   // literal parameter fixture; never invoke elevation or a game script.
   childProcess.spawn = (command, args, options) => {
-    const outer = Buffer.from(args.at(-1), "base64").toString("utf16le");
-    const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/u.exec(outer)?.[1];
+    // 两条路径都经 -EncodedCommand 传内层命令：先按当前用户身份直跑时它在
+    // args 末尾；只有确认权限不足才会改走 -Verb RunAs，那时它被包在外层命令里。
+    const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/u.exec(args.join(" "))?.[1];
     assert.ok(encoded);
     const child = original(command, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], options);
     child.stdout.on("data", chunk => { output += chunk.toString(); });

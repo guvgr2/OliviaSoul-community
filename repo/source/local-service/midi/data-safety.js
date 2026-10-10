@@ -11,7 +11,7 @@
 //   3. 导出包一律脱敏（清空 API Key 等凭据）：备份留完整是给本机回滚用的，导出包是可能被分享出去的。
 import { copyFile, mkdir, readdir, rename, stat, unlink, readFile, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, basename } from "node:path";
+import { dirname, join, basename, resolve, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { inflateRawSync } from "node:zlib";
@@ -63,9 +63,10 @@ async function exists(path) { try { await stat(path); return true; } catch { ret
 const BACKUP_KINDS = [
   ["backup-tod-", "改时段前的自动备份"],
   ["backup-listen-", "写曲名前（命名）的自动备份"],
+  ["backup-letter-import-", "导入信件前的自动备份"],
   ["backup-community-", "社区名单比对前的自动备份"],
   ["backup-before-migrate-", "数据搬家前的自动备份"],
-  ["backup-manual-", "你手动备份的"],
+  ["backup-manual-", "手动备份"],
   ["backup-periodic-", "周期自动备份"],
   ["upgrade-backup-", "程序升级前的自动备份"],
   ["before-restore-", "恢复前留的当前库"],
@@ -107,9 +108,22 @@ export async function listBackups(databasePath, { limit = 60 } = {}) {
   }
   items.sort((a, b) => b.at.localeCompare(a.at));
 
+  // 界面要「按类型汇总占用」：份数与字节必须按**全部**备份算，不能只看 items（它被 limit 截断）。
+  const summary = { count: items.length, bytes: 0, kinds: [] };
+  const byLabel = new Map();
+  for (const item of items) {
+    summary.bytes += item.bytes;
+    const entry = byLabel.get(item.label) ?? { label: item.label, count: 0, bytes: 0 };
+    entry.count += 1;
+    entry.bytes += item.bytes;
+    byLabel.set(item.label, entry);
+  }
+  summary.kinds = [...byLabel.values()];
+
   const currentInfo = await stat(databasePath).catch(() => null);
   return {
     dir,
+    summary,
     database: currentInfo
       ? { file: basename(databasePath), bytes: currentInfo.size, at: currentInfo.mtime.toISOString() }
       : null,
@@ -117,6 +131,42 @@ export async function listBackups(databasePath, { limit = 60 } = {}) {
     items: items.slice(0, limit),
     pending: await readPendingRestore(databasePath),
   };
+}
+
+/**
+ * 删掉备份目录里的某一份 .sqlite（C2）。
+ * 校验顺序就是防线顺序，缺一不可：
+ *   ① 只接受**文件名本身**（basename 后必须与入参完全一致）：带路径分隔符、带 ".." 的一律拒绝；
+ *   ② 解析成绝对路径后必须仍落在备份目录之内 —— 用 path.relative 判定，不靠字符串前缀或后缀
+ *      （`..\..\olivia-local.sqlite` 这类写法必须被挡住）；
+ *   ③ 正在使用的库、以及「等待重启恢复」的那一份不许删（它们各有用途，删了就是事故）。
+ * 删完顺手清 WAL/SHM 伴生文件 —— 与 inspectBackup 的收尾同一套（cleanSidecars 对不存在的文件是安全的）。
+ */
+export async function deleteBackup(databasePath, name) {
+  const dir = backupDirOf(databasePath);
+  const raw = String(name ?? "").trim();
+  const clean = basename(raw);
+  if (!clean || clean !== raw || !clean.endsWith(".sqlite"))
+    throw httpError(400, "备份文件名无效", "BACKUP_NAME_INVALID");
+  const target = resolve(dir, clean);
+  const inside = relative(dir, target);
+  if (!inside || inside.startsWith("..") || isAbsolute(inside))
+    throw httpError(400, "备份文件名无效", "BACKUP_NAME_INVALID");
+  if (clean === basename(databasePath))
+    throw httpError(400, "这一份是正在使用的数据库，不能删", "BACKUP_IS_LIVE_DATABASE");
+  const pending = await readPendingRestore(databasePath);
+  if (pending && basename(String(pending.file ?? "")) === clean)
+    throw httpError(400, "这一份正在等待重启恢复，不能删", "BACKUP_PENDING_RESTORE");
+  const info = await stat(target).catch(() => null);
+  if (!info || !info.isFile()) throw httpError(404, "找不到这个备份文件", "BACKUP_NOT_FOUND");
+  // #70（第四轮 · 审-1 §2.1）：份数在删除**之前**数好，删完直接用 before - 1。
+  // 原来是删完再 listBackups() 一次；那一步万一抛错，调用方收到的是「删除失败」——
+  // 可文件已经删掉了，用户会以为没删成、再点一次只会得到「找不到这个备份文件」。
+  // 改成「报失败」一定意味着「没删成」。
+  const before = await listBackups(databasePath);
+  await unlink(target);
+  await cleanSidecars(target);
+  return { removed: clean, freedBytes: info.size, total: Math.max(0, before.total - 1) };
 }
 
 /** 某个备份里有什么 —— 恢复之前先让人看清楚，别恢复错。 */
@@ -177,6 +227,13 @@ export const PERIODIC_BACKUP_DAYS_SETTING = "periodic_backup_interval_days";
 export const PERIODIC_BACKUP_PREFIX = "backup-periodic-";
 export const DEFAULT_PERIODIC_BACKUP_DAYS = 1;
 export const DEFAULT_PERIODIC_BACKUP_KEEP = 7;
+/**
+ * 保留份数可配置（C2）：下限 1（至少留一条退路，prunePeriodicBackups 里有同样的下限保护），
+ * 上限 60（再多就不是"留退路"而是撑磁盘；上限同时挡掉界面误填的大数）。
+ */
+export const MIN_PERIODIC_BACKUP_KEEP = 1;
+export const MAX_PERIODIC_BACKUP_KEEP = 60;
+export const PERIODIC_BACKUP_KEEP_SETTING = "periodic_backup_keep";
 /** 常驻兜底检查的间隔：30 分钟（取舍见 startPeriodicBackup 的注释）。 */
 export const PERIODIC_BACKUP_TICK_MS = 30 * 60 * 1000;
 const MAX_PERIODIC_BACKUP_DAYS = 30;
@@ -196,7 +253,11 @@ export function readPeriodicBackupConfig(readSetting = () => undefined) {
   const intervalDays = Number.isInteger(days) && days >= 1 && days <= MAX_PERIODIC_BACKUP_DAYS
     ? days
     : DEFAULT_PERIODIC_BACKUP_DAYS;
-  return { enabled, intervalDays, keep: DEFAULT_PERIODIC_BACKUP_KEEP };
+  const keepValue = Number.parseInt(String(read(PERIODIC_BACKUP_KEEP_SETTING) ?? "").trim(), 10);
+  const keep = Number.isInteger(keepValue) && keepValue >= MIN_PERIODIC_BACKUP_KEEP && keepValue <= MAX_PERIODIC_BACKUP_KEEP
+    ? keepValue
+    : DEFAULT_PERIODIC_BACKUP_KEEP;
+  return { enabled, intervalDays, keep };
 }
 
 /** 校验界面传来的设置（POST /listen-naming/data/periodic-backup）；缺省字段 = 不改这一项。 */
@@ -213,7 +274,15 @@ export function parsePeriodicBackupInput(body = {}) {
       throw httpError(400, `间隔天数只能是 1~${MAX_PERIODIC_BACKUP_DAYS} 之间的整数（1 表示每天）`, "PERIODIC_BACKUP_BODY_INVALID");
     patch.intervalDays = days;
   }
-  if (patch.enabled === undefined && patch.intervalDays === undefined)
+  if (body && body.keep !== undefined) {
+    // 只收数字：字符串会被 Number() 悄悄转成数字（"3" → 3、"" → 0），前端写错也看不出来。
+    // 界面本来就是按数字发的（diagnostics-panel.js 用 parseInt 后再 JSON 序列化）。
+    const keep = typeof body.keep === "number" ? body.keep : Number.NaN;
+    if (!Number.isInteger(keep) || keep < MIN_PERIODIC_BACKUP_KEEP || keep > MAX_PERIODIC_BACKUP_KEEP)
+      throw httpError(400, `保留份数只能是 ${MIN_PERIODIC_BACKUP_KEEP}~${MAX_PERIODIC_BACKUP_KEEP} 之间的整数`, "PERIODIC_BACKUP_BODY_INVALID");
+    patch.keep = keep;
+  }
+  if (patch.enabled === undefined && patch.intervalDays === undefined && patch.keep === undefined)
     throw httpError(400, "没有要修改的设置项", "PERIODIC_BACKUP_BODY_INVALID");
   return patch;
 }
@@ -772,6 +841,8 @@ export async function createDataSafetyRoutes({ databasePath, getSetting, setSett
   /** 周期备份设置 + 现状（界面一次请求就能把开关和"上次什么时候备的"都画出来）。 */
   const periodicReport = async () => ({
     ...readPeriodicBackupConfig(readSetting),
+    // 界面输入框的上下限由这里下发 —— 避免前端硬编码一份、后端改范围时两边漂移
+    keepRange: { min: MIN_PERIODIC_BACKUP_KEEP, max: MAX_PERIODIC_BACKUP_KEEP },
     backups: await listPeriodicBackups(dbPath()),
     status: periodicBackupStatus(dbPath()),
   });
@@ -802,11 +873,33 @@ export async function createDataSafetyRoutes({ databasePath, getSetting, setSett
       const patch = parsePeriodicBackupInput(await readJsonBody(req));
       if (patch.enabled !== undefined) writeSetting(PERIODIC_BACKUP_ENABLED_SETTING, patch.enabled ? "1" : "0");
       if (patch.intervalDays !== undefined) writeSetting(PERIODIC_BACKUP_DAYS_SETTING, String(patch.intervalDays));
-      return await periodicReport();
+      if (patch.keep !== undefined) writeSetting(PERIODIC_BACKUP_KEEP_SETTING, String(patch.keep));
+      const report = await periodicReport();
+      // 改小保留份数**不立刻删**：先把"将会清理几份"带回界面，用户点「确认清理」才真删（调大即可撤销）
+      return { ...report, cleanup: { keep: report.keep, removable: Math.max(0, report.backups.length - report.keep) } };
+    }
+
+    // C2：按当前保留份数清理旧周期备份 —— 只有界面点了「确认清理」才会走到这里
+    if (req.method === "POST" && path === "/listen-naming/data/periodic-backup/cleanup") {
+      const body = await readJsonBody(req);
+      if (body.confirm !== true)
+        throw httpError(400, "请先确认要清理旧备份", "PERIODIC_BACKUP_CLEANUP_NOT_CONFIRMED");
+      const config = readPeriodicBackupConfig(readSetting);
+      const removed = await prunePeriodicBackups(dbPath(), { keep: config.keep, log });
+      const after = await listBackups(dbPath());
+      return { removed, keep: config.keep, total: after.total };
     }
 
     if (req.method === "GET" && path === "/listen-naming/data/inspect")
       return await inspectBackup(backupPath(url.searchParams.get("file")));
+
+    // C2：删掉一份备份（只接受备份目录里的 .sqlite；防护见 deleteBackup 的注释）
+    if (req.method === "POST" && path === "/listen-naming/data/backup/delete") {
+      const body = await readJsonBody(req);
+      if (body.confirm !== true)
+        throw httpError(400, "请先确认要删除这一份备份", "BACKUP_DELETE_NOT_CONFIRMED");
+      return await deleteBackup(dbPath(), body.file);
+    }
 
     if (req.method === "POST" && path === "/listen-naming/data/restore") {
       const body = await readJsonBody(req);

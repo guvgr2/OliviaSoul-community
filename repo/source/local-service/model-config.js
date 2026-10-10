@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -197,50 +198,19 @@ export function activeModelProfile(config) {
 }
 
 /**
- * 各家的推理参数并不统一，所以按“模型家族”决定发什么：
- *   · DeepSeek：thinking {type: enabled|disabled} + reasoning_effort: low|medium|high
- *   · 智谱 GLM：thinking.type 只接受 enabled（不能发 disabled）+ 官方推荐 reasoning_effort: max
- * 认不出的模型一律不发厂商专用参数，避免被严格接口以 400 拒绝。
+ * 家族表的**单一真相源**是 `model-families.json`（B2，2026-10-09 复审）：
+ * 以前 JS 与写信 harness（`repo/source/.cursor/skills/fit-letters/scripts/model-call.ps1`）各写一份正则，
+ * 结果 PS 侧只认 deepseek/glm，Kimi 三条全缺 ⇒「点保存并测试」通过、真写回信却走厂商默认参数。
+ * 现在两边都读这一份文件（打包脚本会把它复制到 harness 脚本目录旁边），改动只改 JSON。
  */
-const REASONING_FAMILIES = Object.freeze([
-  Object.freeze({
-    name: "deepseek",
-    pattern: /(?:^|\/)deepseek(?:[-/]|$)/iu,
-    effort: "high",
-    canDisable: true,
-  }),
-  Object.freeze({
-    name: "glm",
-    pattern: /(?:^|\/)(?:glm|chatglm|zhipu)(?:[-/]|$)/iu,
-    effort: "max",
-    canDisable: false,
-  }),
-  // Kimi（月之暗面）三家参数互不相同，按官方文档分别处理（2026-10 核实）：
-  //   kimi-k3      始终推理且保留式思考始终开启，**不支持 thinking**，只用顶层 reasoning_effort（low/high/max，默认 max）
-  //   kimi-k2.6    通用思考模型，用 thinking.type（默认 enabled，可传 disabled）控制
-  //   kimi-k2.7-*  代码场景，始终思考；**传 thinking 会报错**，所以什么都不发
-  // 三者的 temperature 都**不可修改**，官方明确写「请勿传入」——发了会被拒。
-  Object.freeze({
-    name: "kimi-k3",
-    pattern: /^kimi-k3(?:$|[-.])/iu,
-    topLevelEffort: true,
-    effort: "max",
-    noTemperature: true,
-  }),
-  Object.freeze({
-    name: "kimi-k2.6",
-    pattern: /^kimi-k2\.6(?:$|[-.])/iu,
-    thinkingOnly: true,
-    canDisable: true,
-    noTemperature: true,
-  }),
-  Object.freeze({
-    name: "kimi-k2.7",
-    pattern: /^kimi-k2\.7(?:$|[-.])/iu,
-    noThinkingParam: true,
-    noTemperature: true,
-  }),
-]);
+const REASONING_FAMILIES = Object.freeze(
+  JSON.parse(readFileSync(new URL("./model-families.json", import.meta.url), "utf8")).families.map(family =>
+    Object.freeze({
+      ...family,
+      pattern: new RegExp(family.pattern, family.flags ?? "u"),
+    }),
+  ),
+);
 
 /** 按模型名判断家族；认不出返回 null。 */
 export function reasoningFamilyOf(model) {
@@ -282,6 +252,48 @@ export function buildChatRequest(profile, payload = {}) {
     headers,
     body,
   };
+}
+
+/**
+ * 连通性自测要不要放大 max_tokens：推理 token 与正文共享这个输出预算，
+ * 128 会被思考链吃光 ⇒ finish_reason=length ⇒ extractModelText() 抛「模型正文未完整生成」，
+ * 用户看到的是假失败（Key 与模型名其实都对）。
+ * 判断只看官方参数形态，不猜模型名（猜名字漏过一次，别再犯）：
+ *   · body.reasoning_effort 存在            → kimi-k3 这类顶层 effort，始终推理 ⇒ 放大
+ *   · body.thinking.type = "enabled"        → deepseek / 智谱 / kimi-k2.6 ⇒ 放大
+ *   · body.thinking.type = "disabled"       → 用户明确关掉了思考 ⇒ 不放大
+ *   · 家族 noThinkingParam（kimi-k2.7-*）   → 始终思考但发了会报错所以不发 ⇒ 放大
+ *   · 家族认不出的远程档案（豆包等）        → 厂商可能默认开深度思考（火山方舟就是）⇒ 放大
+ * 本地档案（provider=local）不放大：那是用户自己的推理服务，探测不受厂商默认影响。
+ */
+export function probeNeedsReasoningBudget(profile, call = {}) {
+  const body = call?.body ?? {};
+  if (body.reasoning_effort !== undefined) return true;
+  if (body.thinking?.type === "enabled") return true;
+  if (body.thinking?.type === "disabled") return false;
+  const selected = normalizeProfile(profile?.provider, profile ?? {}, { requireBearerKey: true });
+  if (selected.provider !== "deepseek") return false;
+  // 走到这里说明 body 里没有任何推理参数，只有两种可能：家族标记了「发了会被拒」
+  // （kimi-k2.7-*），或家族压根认不出（豆包等）。两种都可能始终推理 —— 放大最多多花
+  // 几个 token，不放大却会让用户以为 Key / 模型名填错了。
+  return true;
+}
+
+/**
+ * 长文本任务的输出预算（AI 信件识别这类「一次要吐很多 JSON」的接口）。
+ * 不传 max_tokens 就等于把输出上限交给厂商默认值，而智谱 GLM 与火山方舟官方默认都只给 4k
+ * ⇒ 往来一多必然 finish_reason=length ⇒ extractModelText() 抛「模型正文未完整生成」，
+ * 用户看到的是「识别失败」，而不是「识别了一部分」。
+ * 取的是「保守的显式预算」，不是模型上限：宁可写小一点也不要用超限值换回 400
+ * （model-transport.js 的 max_tokens → max_completion_tokens 回退只处理参数名不支持，不处理值超限）。
+ * ⚠️ 连通性自测那条不要改用这里：它的 4096 被 test/model-probe-budget.test.js 与
+ * test/relay-compatibility.test.js 逐字钉住，改这里会让两个套件当场变红。
+ */
+export function outputBudgetFor(model) {
+  const family = reasoningFamilyOf(model);
+  if (family?.name === "deepseek") return 65536; // DeepSeek 输出上限 384K，取保守值
+  if (family?.name === "glm") return 32768;      // 智谱「最大回答 128k」，取保守值
+  return 8192;                                    // 认不出的厂商（方舟 / Kimi / MiniMax）取更小值
 }
 
 export function buildModelListRequest(profile) {

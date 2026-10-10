@@ -71,9 +71,11 @@ function unsupportedMaxTokens(raw) {
   let error;
   try { error = JSON.parse(raw)?.error; } catch { return false; }
   if (!error || typeof error !== 'object') return false;
+  // 中文提示同样要认：厂商回「不支持的参数 max_tokens」时，只认英文的旧写法会让回退
+  // （max_tokens → max_completion_tokens）不触发，用户看到的仍是同一句失败。
   return (error.param === 'max_tokens' && error.code === 'unsupported_parameter')
     || (/\bmax_tokens\b/iu.test(String(error.message ?? ''))
-      && /unsupported|not supported|not allowed|unrecognized|unknown parameter/iu.test(String(error.message ?? '')));
+      && /unsupported|not supported|not allowed|unrecognized|unknown parameter|不支持|无法识别|未知参数|不允许|不支援/iu.test(String(error.message ?? '')));
 }
 export async function executeChatRequest(call, { fetchImpl = fetch, signal } = {}) {
   let body = { ...call.body };

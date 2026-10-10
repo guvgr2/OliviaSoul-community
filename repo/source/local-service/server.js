@@ -7,11 +7,14 @@ import { createDependencyCheckRoutes } from "./midi/dependency-check.js";
 import { createDiagnosticRoutes } from "./midi/diagnostic-package.js";
 import { createCrashRoutes } from "./midi/crash-report.js";
 import { createGameLogRoutes } from "./midi/game-log.js";
-import { createDataSafetyRoutes, prepareDatabaseBeforeOpen, startPeriodicBackup } from "./midi/data-safety.js";
+import { backupSqlite, createDataSafetyRoutes, prepareDatabaseBeforeOpen, stamp, startPeriodicBackup } from "./midi/data-safety.js";
 import { createGameStabilityRoutes } from "./midi/game-stability.js";
 import { createLogRoutes, logError } from "./midi/logs.js";
 import { createCommunityRoutes } from "./midi/community-catalog.js";
 import { createTimeOfDayRoutes } from "./midi/time-of-day.js";
+// 歌单二维码：纯 JS 的 QR 编码库（MIT，无原生扩展、无子依赖）。
+// 只用来「生成」不负责扫码；出的是模块矩阵，前端用极小的绘制函数画成 SVG。
+import qrcode from "qrcode-generator";
 
 let listenNamingRoutesPromise = null;
 let listenNamingRoutesRoot = "";
@@ -19,7 +22,7 @@ let dependencyCheckRoutesPromise = null;
 let diagnosticRoutesPromise = null;
 let crashRoutesPromise = null;
 let gameLogRoutesPromise = null;
-let dataSafetyRoutesPromise = null;
+const dataSafetyRoutesByPath = new Map();
 let gameStabilityRoutesPromise = null;
 let logRoutesPromise = null;
 let communityCatalogRoutesPromise = null;
@@ -71,6 +74,8 @@ import {
   buildChatRequest,
   buildModelListRequest,
   DEFAULT_DEEPSEEK_PROFILE,
+  outputBudgetFor,
+  probeNeedsReasoningBudget,
   readModelConfig,
   resetModelConfig,
   setActiveProvider,
@@ -95,6 +100,11 @@ const DEFAULT_DAILY_LETTER_LIMIT = 3;
 const MIDI_LIBRARY_ROOT_SETTING = "midi_library_root";
 const MIDI_LIBRARY_MODE_SETTING = "midi_library_mode";
 const MAX_DAILY_LETTER_LIMIT = 999;
+// B4（2026-10-09 复审）：信件导入预览的 payload_json 里存着信件正文（明文），而以前只有「确认导入」
+// 才会删它 ⇒ 没点确认的预览会永久留在库里（含正文），用户完全察觉不到。
+// 策略：过期即删 + 同一用户最多留最近 N 条（未确认的预览没人会再回来点确认）。
+const LETTER_IMPORT_PREVIEW_TTL_SECONDS = 7 * 24 * 60 * 60;
+const LETTER_IMPORT_PREVIEW_KEEP = 20;
 const GENERATION_TIMEOUT_MS = 60 * 60 * 1000;
 const MEMORY_EXPORT_SCHEMA = "olivia-soul.memory";
 const MEMORY_EXPORT_VERSION = 2;
@@ -209,7 +219,7 @@ function diagnoseModelFailure(error) {
   const text = String(error?.message ?? error);
   const status = Number(/\b(4\d{2}|5\d{2})\b/u.exec(text)?.[1] ?? 0);
   if (status === 401) return "〔分诊〕Key 无效或未授权：确认 Key 复制完整、属于这家服务商、末尾没有多余空格。";
-  if (status === 403) return "〔分诊〕账号没有这个模型的权限：常见于该模型未开通或额度不足（智谱尤其常见），先去服务商控制台确认你的账号能调用哪个模型 ID。";
+  if (status === 403) return "〔分诊〕账号没有这个模型的权限：常见于该模型未开通或额度不足（智谱、火山方舟都常见 —— 方舟还要先在控制台「开通模型」，拿到 Key 不等于能调），先去服务商控制台确认你的账号能调用哪个模型 ID。";
   if (status === 404) return "〔分诊〕地址或模型名不对：检查接口地址（很多服务需要以 /v1 结尾）和模型 ID 拼写 —— 模型名写错会直接返回 404。";
   if (status === 429) return "〔分诊〕被限流或额度用尽：稍后再试，或检查账户余额。";
   if (status >= 500) return "〔分诊〕对方服务异常：稍后再试即可，不是你这边配置错了。";
@@ -353,6 +363,47 @@ function httpError(status, message, code = -1) {
   error.status = status;
   error.code = code;
   return error;
+}
+
+// 写操作来源闸门。
+// /toy/* 为了游戏端补丁页面必须反射任意 Origin，/admin/* 又只要同源就放行 ——
+// 两者都挡不住「用户浏览器里打开的任意网页」：它可以直接对 http://127.0.0.1:27149
+// 发一个写请求（Cookie/IP 都自动带上），读不到响应也照样把数据写进本地库（CSRF）。
+// 所以写方法（POST/PUT/PATCH/DELETE）一律先过这道来源校验：
+//   1. 完全没有 Origin / Referer → 认为是本机脚本、node 测试、Electron 主进程这类非浏览器客户端，放行；
+//   2. 有来源 → 只认服务自身源、环回地址、以及游戏页面自己的源；
+//   3. 其余（含 Origin: null，"null" 来源）一律拒绝。
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+// 单机模式下游戏前端跑在 https://olivia.local 这个虚拟源上（未打补丁的真机是
+// https://toy-<环境>.olivia.miyoushe.com），这两种源都要放行，否则游戏里加歌会失败。
+const GAME_ORIGIN_PATTERNS = [
+  /^https:\/\/olivia\.local(?::\d+)?$/u,
+  /^https:\/\/toy-[a-z0-9-]+\.olivia\.miyoushe\.com$/u,
+];
+
+function originOf(value) {
+  if (!value) return "";
+  try {
+    const origin = new URL(value).origin;
+    return origin === "null" ? "" : origin;
+  } catch {
+    return "";
+  }
+}
+
+function isLoopbackOrigin(origin) {
+  return /^http:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/u.test(origin);
+}
+
+function writeSourceAllowed(req) {
+  const rawOrigin = String(req.headers.origin ?? "").trim();
+  const referer = String(req.headers.referer ?? "").trim();
+  if (!rawOrigin && !referer) return true;
+  const origin = rawOrigin && rawOrigin !== "null" ? originOf(rawOrigin) : originOf(referer);
+  if (!origin) return false;
+  if (origin === `http://${req.headers.host ?? ""}`) return true;
+  if (isLoopbackOrigin(origin)) return true;
+  return GAME_ORIGIN_PATTERNS.some(pattern => pattern.test(origin));
 }
 
 function normalizeMaterial(material) {
@@ -557,6 +608,14 @@ function initDatabase(path) {
       findings_json TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS letter_import_previews (
+      id TEXT PRIMARY KEY,
+      payload_json TEXT NOT NULL,
+      added_count INTEGER NOT NULL,
+      skipped_count INTEGER NOT NULL,
+      conflict_count INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS letter_summaries (
       letter_id TEXT PRIMARY KEY REFERENCES letters(id) ON DELETE CASCADE,
       content_md5 TEXT NOT NULL,
@@ -596,6 +655,31 @@ function initDatabase(path) {
       UNIQUE(user_id, item_type, item_id)
     );
     CREATE INDEX IF NOT EXISTS playlist_items_user_created ON playlist_items(user_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS song_folders (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS song_folders_user_order ON song_folders(user_id, sort_order, created_at);
+    CREATE TABLE IF NOT EXISTS song_folder_items (
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      folder_id TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      item_type INTEGER,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      added_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, folder_id, item_id)
+    );
+    CREATE INDEX IF NOT EXISTS song_folder_items_order ON song_folder_items(user_id, folder_id, sort_order, added_at);
+    -- A8（2026-10-09 复审）：folder_id / item_id 都没有外键，以前也没有孤儿清理 —— 删歌单之外
+    -- （曲目消失、旧版本遗留）的行会一直留着，而列表把 item_id 当曲名显示（见 playlistItemPayload 的 name 兜底）。
+    -- 每次建表时清一次「挂在不存在的歌单下」的孤儿行；item_id 的孤儿**不清**：歌单允许放不在
+    -- playlist_items 里的曲目（游戏内直接加播单就是这种）。⛔ 真正加外键要「建新表→拷数据→删孤儿→改名」的迁移，
+    -- 且 test/song-folders.test.js:63-66 钉死了现状，留到下一个专门做迁移的版本，别夹在 1.2.0 收尾里。
+    DELETE FROM song_folder_items WHERE folder_id NOT IN (SELECT id FROM song_folders);
   `);
   const letterColumns = db.prepare("PRAGMA table_info(letters)").all();
   if (!letterColumns.some(column => column.name === "source"))
@@ -634,6 +718,17 @@ function initDatabase(path) {
     db.exec("ALTER TABLE playlist_items ADD COLUMN performance_type TEXT NOT NULL DEFAULT ''");
   if (!playlistColumns.some(column => column.name === "video_by_tod_view"))
     db.exec("ALTER TABLE playlist_items ADD COLUMN video_by_tod_view TEXT NOT NULL DEFAULT ''");
+  // 歌单/收藏夹：扁平歌单表，通过 PRAGMA 逐列迁移补齐，不动 playlist_items。
+  const songFolderColumns = db.prepare("PRAGMA table_info(song_folders)").all();
+  if (!songFolderColumns.some(column => column.name === "sort_order"))
+    db.exec("ALTER TABLE song_folders ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0");
+  if (!songFolderColumns.some(column => column.name === "updated_at"))
+    db.exec("ALTER TABLE song_folders ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
+  const songFolderItemColumns = db.prepare("PRAGMA table_info(song_folder_items)").all();
+  if (!songFolderItemColumns.some(column => column.name === "item_type"))
+    db.exec("ALTER TABLE song_folder_items ADD COLUMN item_type INTEGER");
+  if (!songFolderItemColumns.some(column => column.name === "sort_order"))
+    db.exec("ALTER TABLE song_folder_items ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0");
   db.prepare(`
     INSERT INTO settings(key, value) VALUES(?, ?)
     ON CONFLICT(key) DO NOTHING
@@ -1094,8 +1189,11 @@ export async function createOliviaService(options = {}) {
       messages: [{ role: "system", content: "只输出最终回答，不要解释" }, { role: "user", content: "只回复 OK，不要解释" }],
       maxTokens: 128,
     });
-    // Reasoning tokens share the output budget; 128 can be consumed before any answer.
-    if (call.body.thinking?.type === "enabled") call.body.max_tokens = 4096;
+    // Reasoning tokens share the output budget; 128 can be consumed before any answer
+    // (finish_reason=length ⇒ 探测误报「模型正文未完整生成」)。放大条件由 model-config.js
+    // 统一判断：kimi-k3（顶层 reasoning_effort）、kimi-k2.7-*（发了会报错所以不发）
+    // 与认不出家族的远程档案（豆包等，厂商可能默认开深度思考）都要算进来。
+    if (probeNeedsReasoningBudget(profile, call)) call.body.max_tokens = 4096;
     call.body.stream = false;
     return call;
   }
@@ -2078,6 +2176,218 @@ export async function createOliviaService(options = {}) {
         };
       }),
     }, null, 2)}\n`;
+  }
+
+  // ------------------------------------------------------------ 信件时间线（B1）
+
+  /**
+   * 时间线的「已回信 / 待回信 / 回信失败」与 letterExportReplied **同一口径**：
+   * 未到 available_at 的回信一律算「还没收到」，绝不提前剧透。
+   */
+  function letterTimelineState(row, at) {
+    if (letterExportReplied(row, at)) return "replied";
+    if (row.status === STATUS.FAILED) return "failed";
+    return "pending";
+  }
+
+  const LETTER_TIMELINE_STATES = Object.freeze(["replied", "pending", "failed"]);
+  const LETTER_TIMELINE_LIMIT_MAX = 200;
+
+  /** 游标用 `<created_at>_<rowid>`：与 ORDER BY created_at DESC, rowid DESC 同序，新信进来自动插到最前，不会重复或漏。 */
+  function letterTimelineCursor(row) {
+    return `${row.created_at}_${row.rowid}`;
+  }
+
+  function letterTimelineBefore(raw) {
+    const match = /^(\d{1,12})_(\d{1,12})$/u.exec(String(raw ?? "").trim());
+    if (!match) return null;
+    return { createdAt: Number(match[1]), rowid: Number(match[2]) };
+  }
+
+  /** 筛选**全部在 SQL 里做**，不把行拉回来再前端过滤（2453 封信时那样会白烧内存）。 */
+  function letterTimelineWhere(userId, params) {
+    const at = nowSeconds();
+    const where = ["user_id = ?"];
+    const values = [userId];
+    if (params.before) {
+      where.push("(created_at < ? OR (created_at = ? AND rowid < ?))");
+      values.push(params.before.createdAt, params.before.createdAt, params.before.rowid);
+    }
+    if (params.archived === "archived") where.push("memory_order IS NOT NULL");
+    else if (params.archived === "unarchived") where.push("memory_order IS NULL");
+    if (params.person) { where.push("person = ?"); values.push(params.person); }
+    if (params.q) { where.push("content LIKE ?"); values.push(`%${params.q}%`); }
+    const repliedCondition = `(status = ${STATUS.REPLIED} AND reply_text IS NOT NULL AND reply_text <> '' AND available_at <= ?)`;
+    if (params.status === "replied") {
+      where.push(repliedCondition);
+      values.push(at);
+    } else if (params.status === "pending") {
+      where.push(`NOT ${repliedCondition} AND status <> ${STATUS.FAILED}`);
+      values.push(at);
+    } else if (params.status === "failed") {
+      where.push("status = ?");
+      values.push(STATUS.FAILED);
+    }
+    return { at, text: where.join(" AND "), values };
+  }
+
+  /** 统计独立算全量，别让前端拿「这一页几条」当总数。 */
+  function letterTimelineStats(userId, at) {
+    const repliedCondition = `(status = ${STATUS.REPLIED} AND reply_text IS NOT NULL AND reply_text <> '' AND available_at <= ?)`;
+    const row = db.prepare(`
+      SELECT COUNT(*) AS total,
+             COALESCE(SUM(CASE WHEN ${repliedCondition} THEN 1 ELSE 0 END), 0) AS replied,
+             COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS failed,
+             MIN(created_at) AS firstAt,
+             MAX(created_at) AS lastAt
+      FROM letters WHERE user_id = ?
+    `).get(at, STATUS.FAILED, userId);
+    const total = Number(row.total) || 0;
+    const replied = Number(row.replied) || 0;
+    const failed = Number(row.failed) || 0;
+    return {
+      total,
+      replied,
+      pending: Math.max(0, total - replied - failed),
+      failed,
+      firstAt: row.firstAt ?? null,
+      lastAt: row.lastAt ?? null,
+    };
+  }
+
+  /** 时间线一项：visibleLetter 负责「不剧透」，这里只补时间线与归档字段。 */
+  function letterTimelineItem(row, req, at) {
+    return {
+      ...visibleLetter(row, req, at),
+      person: row.person,
+      timelineState: letterTimelineState(row, at),
+      archived: row.memory_order === null || row.memory_order === undefined ? 0 : 1,
+      memoryOrder: row.memory_order ?? null,
+      letterDate: row.letter_date || localDate(row.created_at),
+      letterTime: row.letter_time || localTime(row.created_at),
+      replyLabel: row.reply_label || "回信",
+      cursor: letterTimelineCursor(row),
+    };
+  }
+
+  function letterTimelineParams(url, defaultLimit) {
+    const rawLimit = url.searchParams.get("limit") ?? url.searchParams.get("pageSize") ?? url.searchParams.get("page_size");
+    const parsedLimit = Math.floor(Number(rawLimit ?? defaultLimit));
+    const limit = Math.min(LETTER_TIMELINE_LIMIT_MAX, Math.max(1, Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : defaultLimit));
+    const params = {
+      before: letterTimelineBefore(url.searchParams.get("before")),
+      status: String(url.searchParams.get("status") ?? "").trim().toLowerCase(),
+      archived: String(url.searchParams.get("archived") ?? "").trim().toLowerCase(),
+      person: String(url.searchParams.get("person") ?? "").trim(),
+      q: String(url.searchParams.get("q") ?? "").trim(),
+    };
+    if (params.status && !LETTER_TIMELINE_STATES.includes(params.status))
+      throw httpError(400, `status 只能是 ${LETTER_TIMELINE_STATES.join(" / ")}`);
+    if (params.archived && !["archived", "unarchived", "all"].includes(params.archived))
+      throw httpError(400, "archived 只能是 archived / unarchived / all");
+    if (params.archived === "all") params.archived = "";
+    return { params, limit };
+  }
+
+  function letterTimelinePage(userId, url, req, mapper, defaultLimit) {
+    const { params, limit } = letterTimelineParams(url, defaultLimit);
+    const query = letterTimelineWhere(userId, params);
+    const rows = db.prepare(
+      `SELECT rowid AS rowid, * FROM letters WHERE ${query.text} ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+    ).all(...query.values, limit + 1);
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const stats = letterTimelineStats(userId, query.at);
+    // total 是**当前筛选命中**的总数（前端「共 N 封」与「还有更早的」都按它算）；
+    // stats 是**全库概览**（筛选器上的数字），两者在带筛选时必须能不一样。
+    const matched = Number(
+      db.prepare(`SELECT COUNT(*) AS count FROM letters WHERE ${query.text}`).get(...query.values).count,
+    ) || 0;
+    return {
+      list: page.map(row => mapper(row, req, query.at)),
+      hasMore,
+      nextBefore: hasMore && page.length ? letterTimelineCursor(page[page.length - 1]) : "",
+      stats,
+      total: matched,
+      persons: db.prepare(
+        "SELECT person, COUNT(*) AS count FROM letters WHERE user_id = ? GROUP BY person ORDER BY person",
+      ).all(userId).map(row => ({ person: row.person, count: Number(row.count) || 0 })),
+    };
+  }
+
+  // ------------------------------------------------------------ 信件 JSON 导入（B1）
+
+  const LETTER_IMPORT_SCHEMA = "olivia-soul-letters";
+  const LETTER_IMPORT_VERSION = 1;
+
+  /**
+   * 严格校验导出文件：不是 olivia-soul-letters v1 就直接拒绝并说明原因，
+   * **不半截写进去**（宁可让用户看到「格式不对」，也不要写进一堆残信）。
+   */
+  function parseLetterImport(text) {
+    const raw = String(text ?? "");
+    if (!raw.trim()) throw httpError(400, "导入内容为空，请选择游戏里「一键导出」生成的 json 信件文件");
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw httpError(400, "不是有效的 JSON 文件（解析失败），请选择游戏里「一键导出」生成的 json 信件文件");
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      throw httpError(400, "文件顶层不是对象，不是 OliviaSoul 的信件导出格式");
+    if (parsed.schema !== LETTER_IMPORT_SCHEMA)
+      throw httpError(400, `不是 OliviaSoul 的信件导出文件（schema 应为 ${LETTER_IMPORT_SCHEMA}，实际为 ${JSON.stringify(parsed.schema ?? null)}）`);
+    if (Number(parsed.version) !== LETTER_IMPORT_VERSION)
+      throw httpError(400, `不支持的信件导出格式版本 ${JSON.stringify(parsed.version ?? null)}（当前只支持 v${LETTER_IMPORT_VERSION}）`);
+    if (!Array.isArray(parsed.letters)) throw httpError(400, "文件里没有 letters 列表");
+    if (!parsed.letters.length) throw httpError(400, "文件里没有信件（letters 是空的）");
+    const letters = parsed.letters.map((entry, index) => {
+      const position = index + 1;
+      if (!entry || typeof entry !== "object" || Array.isArray(entry))
+        throw httpError(400, `第 ${position} 封信不是对象`);
+      const letterId = String(entry.letterId ?? "").trim();
+      if (!letterId) throw httpError(400, `第 ${position} 封信缺少 letterId`);
+      if (letterId.length > 128) throw httpError(400, `第 ${position} 封信的 letterId 过长`);
+      const incoming = typeof entry.incoming === "string" ? entry.incoming : "";
+      if (!incoming.trim()) throw httpError(400, `第 ${position} 封信（${letterId}）的正文是空的`);
+      const date = typeof entry.date === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(entry.date) ? entry.date : "";
+      const time = typeof entry.time === "string" && /^\d{2}:\d{2}$/u.test(entry.time) ? entry.time : "";
+      return {
+        letterId,
+        incoming,
+        date,
+        time,
+        reply: typeof entry.reply === "string" ? entry.reply : "",
+        replyLabel: String(entry.replyLabel ?? "").trim() || "回信",
+        contentMd5: typeof entry.contentMd5 === "string" && entry.contentMd5 ? entry.contentMd5 : "",
+      };
+    });
+    return { person: String(parsed.person ?? "").trim(), letters, exportedAt: String(parsed.exportedAt ?? "") };
+  }
+
+  /** 计划：已存在的按 letterId 跳过（不覆盖本地回信），同一份文件里重复的算冲突。 */
+  function letterImportPlan(userId, parsed) {
+    const known = new Set(db.prepare("SELECT id FROM letters WHERE user_id = ?").all(userId).map(row => row.id));
+    const seen = new Set();
+    const added = [];
+    const skipped = [];
+    const conflicts = [];
+    for (const letter of parsed.letters) {
+      // 「文件内重复」先判：它描述的是文件本身的问题，与库里有没有无关，
+      // 所以第二次导入同一份文件时仍然报「冲突 1」，不会漂移成「跳过 3」。
+      if (seen.has(letter.letterId)) { conflicts.push(letter.letterId); continue; }
+      seen.add(letter.letterId);
+      if (known.has(letter.letterId)) { skipped.push(letter.letterId); continue; }
+      added.push(letter);
+    }
+    return { added, skipped, conflicts };
+  }
+
+  /** 导入前先留一份库副本（与「写曲名 / 改时段前自动备份」同一习惯）。 */
+  async function backupBeforeLetterImport() {
+    const directory = dirname(databasePath);
+    await mkdir(directory, { recursive: true });
+    return await backupSqlite(databasePath, join(directory, `backup-letter-import-${stamp()}.sqlite`));
   }
 
   function memorySourceMd5(userId) {
@@ -3115,7 +3425,7 @@ export async function createOliviaService(options = {}) {
     // 正确做法：serveStatic 启动时扫描 publicRoot（只留必要的排除项），或把清单抽成单一常量
     //   并补一条「与 public/ 实际文件比对」的测试，让漏登记在测试期就暴露。
     // 何时回来收拾：下一次新增/删除 public/ 前端文件时，或静态服务改为目录扫描的那一版。
-    if (!["index.html", "app.js", "game-lyrics.js", "game-letter-export.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "update-download-ui.js", "tab-notices.js", "patch-loss-notice.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "diagnostics-panel.js", "twin-groups-panel.js", "game-log-panel.js", "getting-started.js", "game-stability-panel.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
+    if (!["index.html", "app.js", "game-lyrics.js", "game-letter-export.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "folder-manager.js", "library-health-panel.js", "game-favorites.js", "game-letter-timeline.js", "update-download-ui.js", "tab-notices.js", "patch-loss-notice.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "diagnostics-panel.js", "twin-groups-panel.js", "game-log-panel.js", "getting-started.js", "game-stability-panel.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
       throw httpError(404, "文件不存在");
     const file = join(publicRoot, relative);
     const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".png": "image/png" };
@@ -3136,6 +3446,11 @@ export async function createOliviaService(options = {}) {
     if (req.method === "OPTIONS") {
       res.writeHead(204, corsHeaders(req));
       return res.end();
+    }
+    if (WRITE_METHODS.has(req.method) && !writeSourceAllowed(req)) {
+      const source = String(req.headers.origin ?? req.headers.referer ?? "");
+      console.error(`[write-guard] 拒绝来源 ${source || "(空)"} 的写请求：${req.method} ${path}`);
+      throw httpError(403, "请求来源不被信任");
     }
     if (path.startsWith("/toy/")) lastClientAt = nowSeconds();
     if (req.method === 'GET' && path === '/toy/command-events')
@@ -3255,9 +3570,12 @@ export async function createOliviaService(options = {}) {
     }
 
     // 「数据安全（备份 / 恢复 / 导出迁移）」：独立模块，路由前缀 /toy/listen-naming/data/*
-    dataSafetyRoutesPromise ??= createDataSafetyRoutes({ databasePath, getSetting, setSetting });
+    // 按数据库路径缓存路由：同一个进程里可能先后服务多个数据目录（测试、便携版异位数据目录），
+    // 模块级单例会让第二个实例复用第一个实例闭包里的 getSetting/setSetting（那时连接已关）→ "database is not open"。
+    if (!dataSafetyRoutesByPath.has(databasePath))
+      dataSafetyRoutesByPath.set(databasePath, await createDataSafetyRoutes({ databasePath, getSetting, setSetting }));
     {
-      const routes = await dataSafetyRoutesPromise;
+      const routes = dataSafetyRoutesByPath.get(databasePath);
       const result = await routes(req, new URL(req.url ?? "/", "http://127.0.0.1"));
       if (result && result.mediaResponse) return;
       if (result !== null && result !== undefined) return ok(req, res, result, { "Cache-Control": "no-store" });
@@ -3801,6 +4119,113 @@ export async function createOliviaService(options = {}) {
       });
     }
 
+    // 信件时间线（游戏端注入界面用）：只读、游标分页、不剧透。
+    // 接口刻意放 /toy/ 侧：游戏页面（https://olivia.local）同源直连，不用碰 externalLinkAllowed 白名单。
+    if (req.method === "GET" && path === "/toy/mail/timeline") {
+      const user = getLocalUser();
+      return ok(req, res, letterTimelinePage(user.id, url, req, letterTimelineItem, 50));
+    }
+
+    if (req.method === "POST" && path === "/toy/letter/import/preview") {
+      const user = getLocalUser();
+      const body = await readJson(req);
+      const parsed = parseLetterImport(body.content ?? body.text ?? "");
+      const plan = letterImportPlan(user.id, parsed);
+      // B4：先回收旧预览（过期 + 超过保留条数的），它们同样存着信件正文，不能只靠「确认」时那一次删除。
+      db.prepare("DELETE FROM letter_import_previews WHERE created_at < ?").run(nowSeconds() - LETTER_IMPORT_PREVIEW_TTL_SECONDS);
+      const stalePreviews = db.prepare(
+        "SELECT id FROM letter_import_previews ORDER BY created_at DESC LIMIT -1 OFFSET ?",
+      ).all(LETTER_IMPORT_PREVIEW_KEEP);
+      const dropPreview = db.prepare("DELETE FROM letter_import_previews WHERE id = ?");
+      for (const stale of stalePreviews) dropPreview.run(stale.id);
+      const previewId = randomUUID();
+      db.prepare(
+        "INSERT INTO letter_import_previews(id, payload_json, added_count, skipped_count, conflict_count, created_at) VALUES(?, ?, ?, ?, ?, ?)",
+      ).run(
+        previewId,
+        JSON.stringify({ person: parsed.person, letters: plan.added }),
+        plan.added.length, plan.skipped.length, plan.conflicts.length, nowSeconds(),
+      );
+      return ok(req, res, {
+        previewId,
+        person: parsed.person || user.person || "",
+        fileCount: parsed.letters.length,
+        addCount: plan.added.length,
+        skipCount: plan.skipped.length,
+        conflictCount: plan.conflicts.length,
+        addSample: plan.added.slice(0, 20).map(letter => ({ letterId: letter.letterId, date: letter.date, time: letter.time })),
+        skippedSample: plan.skipped.slice(0, 20),
+        conflictSample: plan.conflicts.slice(0, 20),
+        backupHint: plan.added.length ? "确认导入前会自动备份一次数据库" : "没有可导入的新信件，不需要写库",
+      });
+    }
+
+    if (req.method === "POST" && path === "/toy/letter/import/confirm") {
+      const user = getLocalUser();
+      const body = await readJson(req);
+      const preview = db.prepare("SELECT * FROM letter_import_previews WHERE id = ?").get(String(body.previewId ?? ""));
+      if (!preview) throw httpError(404, "导入预览不存在或已经用过了，请重新选择文件");
+      let stored = {};
+      try {
+        stored = JSON.parse(preview.payload_json) ?? {};
+      } catch {
+        stored = {};
+      }
+      const letters = Array.isArray(stored.letters) ? stored.letters : [];
+      const person = assertPerson(stored.person || user.person);
+      const at = nowSeconds();
+      let backupFile = "";
+      if (letters.length) backupFile = await backupBeforeLetterImport();
+      const exists = new Set(db.prepare("SELECT id FROM letters WHERE user_id = ?").all(user.id).map(row => row.id));
+      const insert = db.prepare(`
+        INSERT INTO letters(
+          id, user_id, person, content, status, reply_type, reply_text,
+          created_at, available_at, replied_at, is_read, source,
+          letter_date, letter_time, reply_label, content_md5
+        ) VALUES(?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 1, 'import', ?, ?, ?, ?)
+      `);
+      let added = 0;
+      let skipped = Number(preview.skipped_count) || 0;
+      const failed = [];
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        letters.forEach((letter, index) => {
+          // 幂等：preview 之后本地又导过同一批，这里再判一次，绝不覆盖已有信件。
+          if (exists.has(letter.letterId)) { skipped += 1; return; }
+          try {
+            const timestamp = exchangeTimestamp({ date: letter.date, time: letter.time }, at - letters.length + index);
+            const replyText = String(letter.reply ?? "");
+            const contentMd5 = letter.contentMd5 || exchangeContentMd5({ incoming: letter.incoming, reply: replyText });
+            insert.run(
+              letter.letterId, user.id, person, letter.incoming, STATUS.REPLIED, replyText,
+              timestamp, timestamp, timestamp,
+              letter.date || localDate(timestamp), letter.time || localTime(timestamp),
+              letter.replyLabel || "回信", contentMd5,
+            );
+            exists.add(letter.letterId);
+            added += 1;
+          } catch (error) {
+            failed.push({ letterId: letter.letterId, message: String(error?.message ?? error) });
+          }
+        });
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      // preview 用掉即删：再点一次确认只会拿到 404，不会重复写。
+      db.prepare("DELETE FROM letter_import_previews WHERE id = ?").run(preview.id);
+      console.log(`[letter-import] added=${added} skipped=${skipped} failed=${failed.length} backup=${backupFile ? basename(backupFile) : "none"}`);
+      return ok(req, res, {
+        added,
+        skipped,
+        failed: failed.length,
+        failedItems: failed.slice(0, 20),
+        total: added + skipped + failed.length,
+        backupFile: backupFile ? basename(backupFile) : "",
+      });
+    }
+
     function playlistDuration(value) {
       const n = Number(value);
       return Number.isFinite(n) && n > 0 ? n : 0;
@@ -3852,7 +4277,7 @@ export async function createOliviaService(options = {}) {
         itemType: row.item_type,
         itemId: row.item_id,
         id: row.item_id,
-        name: localMedia?.name || row.name || row.item_id,
+        name: localMedia?.name || row.name || "（曲目已移除）",
         nameKey: row.name_key || "",
         iconUrl: row.icon_url || "",
         coverUrl: row.icon_url || "",
@@ -3949,6 +4374,406 @@ export async function createOliviaService(options = {}) {
       if (!Number.isInteger(itemType) || !itemId) throw httpError(400, "播单条目不完整");
       db.prepare("DELETE FROM playlist_items WHERE user_id = ? AND item_type = ? AND item_id = ?").run(user.id, itemType, itemId);
       return ok(req, res, { itemType, itemId });
+    }
+
+    // ---- 歌单 / 收藏夹（A 部分）----
+    // 游戏端与程序端共用同一份数据、同一套接口：游戏端做日常操作，
+    // 程序端做「一次灌入整个曲库 / 排序 / 大二维码 / 批量导入导出」这类重活。
+    const FOLDER_NAME_MAX = 40;
+    // 二维码容量口径：≤30 首给单张二维码，再多直接给 .osfolder 文件（不做分片）。
+    const FOLDER_QR_MAX_ITEMS = 30;
+    // 占位名（个人上传 · midi_xxx）自带编号、互不相同，不算重名。
+    const FOLDER_PLACEHOLDER_NAME = /^个人上传\s*·/u;
+    // 与游戏端/程序端约定的交换格式：OSF1|歌单名|itemId1,itemId2,…
+    const FOLDER_EXPORT_TAG = "OSF1";
+
+    function folderNameOf(value) {
+      const name = String(value ?? "").replace(/[\r\n\t]+/gu, " ").trim();
+      if (!name) throw httpError(400, "歌单名不能为空");
+      if ([...name].length > FOLDER_NAME_MAX) throw httpError(400, `歌单名最多 ${FOLDER_NAME_MAX} 个字`);
+      // #68（第四轮 · 审-5 §7.3）：与用户名同口径 —— 原来只挡零宽 / bidi，
+      // NUL、BEL、ESC、DEL 能存进 song_folders.name，还会跟着进导出的 .osfolder 文件名。
+      if (/[\x00-\x1F\x7F]/u.test(name) || CONTROL_CHARS.test(name)) throw httpError(400, "歌单名包含不可用字符");
+      return name;
+    }
+
+    function folderNameKey(value) {
+      return String(value ?? "").trim().replace(/\s+/gu, " ").normalize("NFKC").toLocaleLowerCase();
+    }
+
+    function folderRows(userId) {
+      return db.prepare("SELECT * FROM song_folders WHERE user_id = ? ORDER BY sort_order, created_at, rowid").all(userId);
+    }
+
+    // 名字唯一：撞名自动加后缀 (2)、(3)…，不拿弹窗打扰用户。
+    function folderUniqueName(userId, desired, ignoreId = "") {
+      const base = folderNameOf(desired);
+      const taken = new Set(folderRows(userId).filter(row => row.id !== ignoreId).map(row => folderNameKey(row.name)));
+      if (!taken.has(folderNameKey(base))) return base;
+      for (let index = 2; index <= 999; index += 1) {
+        const candidate = `${base} (${index})`;
+        if (!taken.has(folderNameKey(candidate))) return candidate;
+      }
+      throw httpError(409, "同名歌单太多，换个名字吧");
+    }
+
+    function folderPayload(row, itemCount = null) {
+      const count = itemCount ?? Number(db.prepare("SELECT COUNT(*) count FROM song_folder_items WHERE user_id = ? AND folder_id = ?").get(row.user_id, row.id).count);
+      return {
+        id: row.id,
+        name: row.name,
+        itemCount: count,
+        sortOrder: row.sort_order,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    }
+
+    function folderItemRows(userId, folderId) {
+      return db.prepare("SELECT * FROM song_folder_items WHERE user_id = ? AND folder_id = ? ORDER BY sort_order, added_at, rowid").all(userId, folderId);
+    }
+
+    // 歌单曲目借播放列表镜像行补媒体字段。整单一次查完再按 item_id 建索引，不要逐条查：
+    // 「一键灌入整个曲库」会出现两千多首的歌单，逐条 prepare+get 实测约 1.9 秒，
+    // 而一次查询建索引只要几毫秒（同一条 item_id 只认最早的一行，与原来 ORDER BY rowid LIMIT 1 一致）。
+    function folderMirrorIndex(userId) {
+      const index = new Map();
+      for (const mirror of db.prepare("SELECT * FROM playlist_items WHERE user_id = ? ORDER BY rowid").all(userId)) {
+        if (!index.has(mirror.item_id)) index.set(mirror.item_id, mirror);
+      }
+      return index;
+    }
+
+    function folderItemPayload(row, mirrorIndex) {
+      // 曲名不存快照：这里现查曲库（改名 / 纠正名自动跟上）。
+      // 媒体字段借用播放列表镜像行（没有镜像也能显示，只是没有封面/时长）。
+      const mirror = mirrorIndex?.get(row.item_id) ?? {};
+      const base = playlistItemPayload({
+        item_type: row.item_type || mirror.item_type || 3,
+        item_id: row.item_id,
+        name: mirror.name ?? "",
+        name_key: mirror.name_key ?? "",
+        icon_url: mirror.icon_url ?? "",
+        song_id: mirror.song_id ?? "",
+        performance_id: mirror.performance_id ?? "",
+        duration: mirror.duration ?? 0,
+        video_duration: mirror.video_duration ?? 0,
+        video_url: mirror.video_url ?? "",
+        performance_type: mirror.performance_type ?? "",
+        video_by_tod_view: mirror.video_by_tod_view ?? "",
+      });
+      return { ...base, folderId: row.folder_id, sortOrder: row.sort_order, addedAt: row.added_at };
+    }
+
+    // 歌曲行要显示「已在 N 个歌单」：按一批 item_id 一次问出每个 id 落在哪些歌单里。
+    // 一次 IN 查询就够，不要按行循环（曲库列表页一屏两百行）；上限 500 个 id，
+    // 再多就分批由调用方自己切（避免撞上 SQLite 的变量个数上限）。
+    function folderMembership(userId, itemIds = []) {
+      const wanted = [...new Set(itemIds.map(itemId => String(itemId ?? "").trim()).filter(Boolean))].slice(0, 500);
+      const members = {};
+      if (wanted.length) {
+        const placeholders = wanted.map(() => "?").join(", ");
+        const rows = db
+          .prepare(`SELECT item_id, folder_id FROM song_folder_items WHERE user_id = ? AND item_id IN (${placeholders}) ORDER BY rowid`)
+          .all(userId, ...wanted);
+        for (const row of rows) {
+          if (!members[row.item_id]) members[row.item_id] = [];
+          members[row.item_id].push(row.folder_id);
+        }
+      }
+      const counts = {};
+      // LEFT JOIN 而不是 GROUP BY song_folder_items：空歌单也要回 0，
+      // 免得调用方自己补默认值（两个消费端都按「缺省=0」写过一次了）。
+      const countRows = db
+        .prepare(
+          "SELECT f.id folder_id, COUNT(i.item_id) count FROM song_folders f LEFT JOIN song_folder_items i ON i.folder_id = f.id AND i.user_id = f.user_id WHERE f.user_id = ? GROUP BY f.id",
+        )
+        .all(userId);
+      for (const row of countRows) counts[row.folder_id] = Number(row.count);
+      return { itemIds: wanted, members, counts };
+    }
+
+    // 同一歌单里同名但不同曲目 → 只在显示层给后进来的加 (2)、(3)…，曲库真名一个字都不动。
+    function folderItemsPayload(userId, folderId) {
+      const mirrorIndex = folderMirrorIndex(userId);
+      const items = folderItemRows(userId, folderId).map(row => folderItemPayload(row, mirrorIndex));
+      const seen = new Map();
+      for (const item of items) {
+        const key = folderNameKey(item.name);
+        const index = (seen.get(key) ?? 0) + 1;
+        seen.set(key, index);
+        item.originalName = item.name;
+        item.renamed = index > 1 && !FOLDER_PLACEHOLDER_NAME.test(item.name);
+        if (item.renamed) item.name = `${item.originalName} (${index})`;
+      }
+      return items;
+    }
+
+    function folderItemTypeOf(value) {
+      const type = Number(value);
+      return Number.isInteger(type) && type > 0 ? type : 3;   // 3 = UGC_SONG（本地曲库）
+    }
+
+    function folderNextOrder(userId, folderId) {
+      return Number(db.prepare("SELECT COALESCE(MAX(sort_order), -1) + 1 next FROM song_folder_items WHERE user_id = ? AND folder_id = ?").get(userId, folderId).next);
+    }
+
+    // 加入曲目：去重靠主键，重复的只回报、不当错误。
+    function folderAddItems(userId, folderId, entries) {
+      const existing = new Set(folderItemRows(userId, folderId).map(row => row.item_id));
+      const insert = db.prepare(`
+        INSERT INTO song_folder_items(user_id, folder_id, item_id, item_type, sort_order, added_at)
+        VALUES(?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, folder_id, item_id) DO NOTHING
+      `);
+      const added = [];
+      const skipped = [];
+      let order = folderNextOrder(userId, folderId);
+      for (const entry of entries) {
+        const itemId = String(entry.itemId ?? "").trim();
+        if (!itemId) continue;
+        if (existing.has(itemId)) {
+          skipped.push(itemId);
+          continue;
+        }
+        insert.run(userId, folderId, itemId, folderItemTypeOf(entry.itemType), order, nowSeconds());
+        existing.add(itemId);
+        added.push(itemId);
+        order += 1;
+      }
+      if (added.length) db.prepare("UPDATE song_folders SET updated_at = ? WHERE user_id = ? AND id = ?").run(nowSeconds(), userId, folderId);
+      return { added, skipped };
+    }
+
+    // 请求体里的曲目列表：支持单条 {itemId,itemType}、批量 {itemIds}、对象数组 {items:[{itemId}]}。
+    function folderEntriesFrom(body = {}) {
+      const raw = Array.isArray(body.items) ? body.items
+        : Array.isArray(body.itemIds ?? body.item_ids) ? (body.itemIds ?? body.item_ids)
+          : [body.itemId ?? body.item_id ?? body.id];
+      return raw.filter(value => value != null).map(value => value && typeof value === "object"
+        ? { itemId: value.itemId ?? value.item_id ?? value.id, itemType: value.itemType ?? value.item_type }
+        : { itemId: value, itemType: body.itemType ?? body.item_type });
+    }
+
+    function folderExportText(name, itemIds) {
+      const safeName = String(name ?? "").replace(/[|\r\n]/gu, " ").trim();
+      return [FOLDER_EXPORT_TAG, safeName, itemIds.join(",")].join("|");
+    }
+
+    // 二维码矩阵：只回模块黑白，不画图（前端两端各有一个 20 行的绘制函数，
+    // 这样游戏端页面不用加载任何第三方脚本，也就不会把库字节带进游戏）。
+    function folderQrMatrix(text) {
+      const qr = qrcode(0, "M");
+      qr.addData(text);
+      qr.make();
+      const size = qr.getModuleCount();
+      const rows = [];
+      for (let row = 0; row < size; row += 1) {
+        let line = "";
+        for (let column = 0; column < size; column += 1) line += qr.isDark(row, column) ? "1" : "0";
+        rows.push(line);
+      }
+      return { size, rows };
+    }
+
+    function folderParseExport(text) {
+      const raw = String(text ?? "").trim();
+      const first = raw.indexOf("|");
+      const last = raw.lastIndexOf("|");
+      if (first < 0 || last <= first) throw httpError(400, "导入内容不是歌单二维码/文件");
+      if (raw.slice(0, first).trim().toUpperCase() !== FOLDER_EXPORT_TAG) throw httpError(400, "导入内容的格式版本不认识");
+      const name = raw.slice(first + 1, last).trim() || "导入的歌单";
+      const seen = new Set();
+      const itemIds = [];
+      for (const part of raw.slice(last + 1).split(",")) {
+        const itemId = part.trim();
+        if (!itemId || seen.has(itemId)) continue;
+        seen.add(itemId);
+        itemIds.push(itemId);
+      }
+      if (!itemIds.length) throw httpError(400, "导入内容里没有曲目");
+      return { name, itemIds };
+    }
+
+    // 曲库索引：只认「已发布、未移除」的曲目（与 /toy/midi 列表同一口径）。
+    function folderLibrary() {
+      const songs = midiStore.listPublishedUserSongs("");
+      const playable = new Map();
+      let noMedia = 0;
+      for (const song of songs) {
+        if (song.videoPath || songVariants(song).length) playable.set(song.id, song);
+        else noMedia += 1;
+      }
+      return { playable, noMedia };
+    }
+
+    function folderCreate(userId, name, items = []) {
+      const now = nowSeconds();
+      const row = {
+        id: randomUUID(),
+        user_id: userId,
+        name: folderUniqueName(userId, name),
+        sort_order: Number(db.prepare("SELECT COALESCE(MAX(sort_order), -1) + 1 next FROM song_folders WHERE user_id = ?").get(userId).next),
+        created_at: now,
+        updated_at: now,
+      };
+      db.prepare("INSERT INTO song_folders(id, user_id, name, sort_order, created_at, updated_at) VALUES(@id, @user_id, @name, @sort_order, @created_at, @updated_at)").run(row);
+      const result = items.length ? folderAddItems(userId, row.id, items) : { added: [], skipped: [] };
+      return { row, added: result.added, skipped: result.skipped };
+    }
+
+    const folderApiMatch = /^\/(?:toy|admin\/api)\/folders(?:\/(.*))?$/u.exec(path);
+    if (folderApiMatch) {
+      const user = getLocalUser();
+      const rest = String(folderApiMatch[1] ?? "").replace(/\/+$/u, "");
+      const parts = rest ? rest.split("/").map(part => decodeURIComponent(part)) : [];
+
+      if (!parts.length) {
+        if (req.method === "GET") {
+          const counts = new Map(db.prepare("SELECT folder_id, COUNT(*) count FROM song_folder_items WHERE user_id = ? GROUP BY folder_id").all(user.id).map(row => [row.folder_id, Number(row.count)]));
+          const list = folderRows(user.id).map(row => folderPayload(row, counts.get(row.id) ?? 0));
+          return ok(req, res, { list, total: list.length });
+        }
+        if (req.method === "POST") {
+          const body = await readJson(req);
+          const created = folderCreate(user.id, body.name ?? body.folderName ?? body.folder_name);
+          return ok(req, res, { ...folderPayload(created.row, created.added.length), items: [] });
+        }
+        throw httpError(405, "歌单接口不支持这个方法");
+      }
+
+      // 整单导入（扫二维码 / 选 .osfolder 文件）：撞名自动加后缀；
+      // 对不上的曲目必须原样列出来，绝不悄悄丢掉。
+      if (parts.length === 1 && parts[0] === "import" && req.method === "POST") {
+        const body = await readJson(req);
+        const parsed = folderParseExport(body.text ?? body.content ?? body.code ?? "");
+        const { playable } = folderLibrary();
+        const matched = parsed.itemIds.filter(itemId => playable.has(itemId)).map(itemId => ({ itemId, itemType: 3 }));
+        const missing = parsed.itemIds.filter(itemId => !playable.has(itemId));
+        const created = folderCreate(user.id, parsed.name, matched);
+        return ok(req, res, {
+          folder: folderPayload(created.row, created.added.length),
+          added: created.added.length,
+          skipped: created.skipped.length,
+          missing,
+          missingCount: missing.length,
+          total: parsed.itemIds.length,
+        });
+      }
+
+      // 歌曲行状态：一批 item_id 分别落在哪些歌单里（游戏端「已在 N 个歌单」/ 勾选态）。
+      // 只读、不传 ids 就只回计数；放在 :id 查询之前，否则 "membership" 会被当成歌单 id。
+      if (parts.length === 1 && parts[0] === "membership" && req.method === "GET") {
+        const raw = url.searchParams.get("ids") ?? "";
+        return ok(req, res, folderMembership(user.id, raw.split(",")));
+      }
+
+      const folder = db.prepare("SELECT * FROM song_folders WHERE user_id = ? AND id = ?").get(user.id, parts[0]);
+      if (!folder) throw httpError(404, "歌单不存在");
+      const tail = parts.slice(1);
+
+      if (!tail.length) {
+        if (req.method === "GET")
+          return ok(req, res, { ...folderPayload(folder), items: folderItemsPayload(user.id, folder.id) });
+        if (req.method === "PATCH" || req.method === "PUT") {
+          const body = await readJson(req);
+          const name = folderUniqueName(user.id, body.name ?? body.folderName ?? body.folder_name, folder.id);
+          db.prepare("UPDATE song_folders SET name = ?, updated_at = ? WHERE user_id = ? AND id = ?").run(name, nowSeconds(), user.id, folder.id);
+          return ok(req, res, { ...folderPayload({ ...folder, name }), items: folderItemsPayload(user.id, folder.id) });
+        }
+        if (req.method === "DELETE") {
+          const removedItems = Number(db.prepare("DELETE FROM song_folder_items WHERE user_id = ? AND folder_id = ?").run(user.id, folder.id).changes);
+          db.prepare("DELETE FROM song_folders WHERE user_id = ? AND id = ?").run(user.id, folder.id);
+          return ok(req, res, { id: folder.id, removedItems });
+        }
+        throw httpError(405, "歌单接口不支持这个方法");
+      }
+
+      // 一键导入曲库全部：把曲库里能播的曲子整批灌进来（不能播的只计数，不静默丢）。
+      if (tail.length === 1 && tail[0] === "import-library" && req.method === "POST") {
+        const { playable, noMedia } = folderLibrary();
+        const entries = [...playable.keys()].map(itemId => ({ itemId, itemType: 3 }));
+        const { added, skipped } = folderAddItems(user.id, folder.id, entries);
+        return ok(req, res, {
+          folderId: folder.id,
+          added: added.length,
+          skipped: skipped.length,
+          noMedia,
+          items: folderItemsPayload(user.id, folder.id),
+        });
+      }
+
+      // 导出：≤30 首给二维码文本，再多就给 .osfolder 文件（不做分片）。
+      if (tail.length === 1 && tail[0] === "export" && (req.method === "GET" || req.method === "POST")) {
+        const itemIds = folderItemRows(user.id, folder.id).map(row => row.item_id);
+        const text = folderExportText(folder.name, itemIds);
+        const mode = itemIds.length <= FOLDER_QR_MAX_ITEMS ? "qr" : "file";
+        return ok(req, res, {
+          folderId: folder.id,
+          name: folder.name,
+          count: itemIds.length,
+          itemIds,
+          text,
+          mode,
+          qr: mode === "qr" && itemIds.length ? folderQrMatrix(text) : null,
+          fileName: `${folder.name.replace(/[\\/:*?"<>|]/gu, "_")}.osfolder`,
+        });
+      }
+
+      if (tail.length === 2 && tail[0] === "items" && tail[1] === "order" && req.method === "POST") {
+        const body = await readJson(req);
+        const rows = folderItemRows(user.id, folder.id).map(row => row.item_id);
+        let order = rows;
+        // #69（第四轮 · 审-5 §7.4）：direction 传错字（sideways / 数字 / 大小写拼错）原来是静默
+        // 走全量重排分支、拿空 itemIds 重排 = 原样不动，调用方以为生效了。现在明确报错；
+        //「没传 / 传空串」仍是合法的「按 itemIds 整表重排」调用方式。
+        const direction = body.direction;
+        if (direction !== undefined && direction !== null && direction !== ""
+          && direction !== "up" && direction !== "down")
+          throw httpError(400, "direction 只能填 up 或 down");
+        if (direction === "up" || direction === "down") {
+          const at = rows.indexOf(String(body.itemId ?? body.item_id ?? "").trim());
+          if (at < 0) throw httpError(404, "这首歌不在这个歌单里");
+          const to = direction === "up" ? at - 1 : at + 1;
+          if (to >= 0 && to < rows.length) {
+            order = [...rows];
+            [order[at], order[to]] = [order[to], order[at]];
+          }
+        } else {
+          const wanted = folderEntriesFrom(body)
+            .map(entry => String(entry.itemId ?? "").trim())
+            .filter(itemId => rows.includes(itemId));
+          order = [...new Set(wanted), ...rows.filter(itemId => !wanted.includes(itemId))];
+        }
+        const update = db.prepare("UPDATE song_folder_items SET sort_order = ? WHERE user_id = ? AND folder_id = ? AND item_id = ?");
+        order.forEach((itemId, index) => update.run(index, user.id, folder.id, itemId));
+        db.prepare("UPDATE song_folders SET updated_at = ? WHERE user_id = ? AND id = ?").run(nowSeconds(), user.id, folder.id);
+        return ok(req, res, { folderId: folder.id, order, items: folderItemsPayload(user.id, folder.id) });
+      }
+
+      if (tail.length === 1 && tail[0] === "items") {
+        if (req.method === "GET")
+          return ok(req, res, { folderId: folder.id, total: folderItemRows(user.id, folder.id).length, items: folderItemsPayload(user.id, folder.id) });
+        if (req.method === "POST") {
+          const body = await readJson(req);
+          const { added, skipped } = folderAddItems(user.id, folder.id, folderEntriesFrom(body));
+          return ok(req, res, { folderId: folder.id, added, skipped, items: folderItemsPayload(user.id, folder.id) });
+        }
+        if (req.method === "DELETE") {
+          const body = await readJson(req);
+          const remove = db.prepare("DELETE FROM song_folder_items WHERE user_id = ? AND folder_id = ? AND item_id = ?");
+          const removed = [];
+          for (const entry of folderEntriesFrom(body)) {
+            const itemId = String(entry.itemId ?? "").trim();
+            if (itemId && Number(remove.run(user.id, folder.id, itemId).changes) > 0) removed.push(itemId);
+          }
+          if (removed.length) db.prepare("UPDATE song_folders SET updated_at = ? WHERE user_id = ? AND id = ?").run(nowSeconds(), user.id, folder.id);
+          return ok(req, res, { folderId: folder.id, removed, items: folderItemsPayload(user.id, folder.id) });
+        }
+        throw httpError(405, "歌单接口不支持这个方法");
+      }
+
+      throw httpError(404, "接口不存在");
     }
 
     const videoManageMatch = /^\/admin\/api\/letters\/([^/]+)\/video$/u.exec(path);
@@ -4472,6 +5297,10 @@ export async function createOliviaService(options = {}) {
             },
             { role: "user", content },
           ],
+          // A1：这个接口放行最多 300 组往来，而智谱 GLM / 火山方舟的默认输出上限只有 4k
+          // ⇒ 往来一多必然 finish_reason=length ⇒ extractModelText() 抛「模型正文未完整生成」。
+          // 显式给预算，别再依赖厂商默认值（探测那条的 4096 是另一回事，不要动）。
+          maxTokens: outputBudgetFor(profile.model),
         });
       } catch (error) {
         throw httpError(400, `${config.activeProvider} 模型配置不可用：${safeModelError(error)}`);
@@ -4642,8 +5471,20 @@ export async function createOliviaService(options = {}) {
 
     if (req.method === "GET" && path === "/admin/api/letters") {
       const user = getLocalUser();
-      const rows = db.prepare("SELECT * FROM letters WHERE user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 100").all(user.id);
-      return ok(req, res, rows.map(row => ({ ...visibleLetter(row, req), error: row.error, memoryError: row.memory_error, person: row.person })));
+      // 不传任何查询参数时保持老行为（最近 100 条、直接返回数组）：程序端「信件」页的老代码一个字都不用改。
+      // 只有显式带 before / limit / status / archived / person / q 才走游标分页对象。
+      const paged = ["before", "limit", "pageSize", "page_size", "status", "archived", "person", "q"]
+        .some(key => url.searchParams.has(key));
+      if (!paged) {
+        const rows = db.prepare("SELECT * FROM letters WHERE user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 100").all(user.id);
+        return ok(req, res, rows.map(row => ({ ...visibleLetter(row, req), error: row.error, memoryError: row.memory_error, person: row.person })));
+      }
+      const page = letterTimelinePage(
+        user.id, url, req,
+        (row, request) => ({ ...visibleLetter(row, request), error: row.error, memoryError: row.memory_error, person: row.person }),
+        100,
+      );
+      return ok(req, res, page);
     }
 
     if (req.method === "GET" && path === "/admin/api/midi") {
@@ -4793,6 +5634,8 @@ export async function createOliviaService(options = {}) {
           noteSqliteCorruption(error);
         if (req.url.includes("/toy/addToPlaylist") || req.url.includes("/toy/delFromPlaylist") || req.url.includes("/toy/searchPlaylist"))
           console.error(`[playlist-error] ${req.method} ${req.url} code=${error.code ?? -1} message=${error.message}`);
+        if (req.url.includes("/toy/folders") || req.url.includes("/admin/api/folders"))
+          console.error(`[folder-error] ${req.method} ${req.url} code=${error.code ?? -1} message=${error.message}`);
         // 只把"真出错"写进运行日志：404（浏览器常常自己来要 /favicon.ico）属于噪音，
         // 记进去会让用户在「运行日志」页看到一堆红色 [ERROR]，以为程序坏了。
         const noisy = status === 404 || String(error.message ?? "").includes("接口不存在")

@@ -3,7 +3,7 @@ import { createReadStream, existsSync } from "node:fs";
 import { copyFile, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { activeModelProfile, buildChatRequest } from "./model-config.js";
+import { activeModelProfile, buildChatRequest, outputBudgetFor } from "./model-config.js";
 import { executeChatRequest } from "./model-transport.js";
 
 const MODEL_NAME = "ggml-small.bin";
@@ -230,6 +230,9 @@ export class TranscriptionEngine {
           },
           { role: "user", content: chunks[index] },
         ],
+        // A2：逐字稿整理是「输出 ≈ 输入」的活儿，但不显式给预算就等于用厂商默认值（智谱 / 方舟只有 4k），
+        // 长段落会被 finish_reason=length 截断。用与 AI 信件识别同一份预算表（model-config.js 的单一真相源）。
+        maxTokens: outputBudgetFor(profile.model),
       });
       call.body.stream = false;
       const { content } = await executeChatRequest(call, { fetchImpl: this.fetch, signal });
