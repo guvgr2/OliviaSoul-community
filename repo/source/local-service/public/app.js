@@ -1,6 +1,16 @@
 import { createUpdateDownloadUI } from './update-download-ui.js';
 import { createTabNotices } from './tab-notices.js';
 import { createPatchLossNotice } from './patch-loss-notice.js';
+import { lightForFilePicker, pickFile } from './file-picker-guard.js';
+// 统一的文件选择器触发口（理由见 public/file-picker-guard.js 顶部注释）。
+// 其它普通 script 通过 window.pickFile(...) 用 —— 它们是普通脚本，
+// 拿不到本模块的作用域（app.js 是 <script type="module">，声明不外泄）。
+// 用 typeof 守卫挂载：几处假 DOM 夹具（node:vm）会把 import 行整行剥掉再跑本文件
+//（例：test/update-channel.test.js:489 的 .replace(/^import .*\r?\n/gmu, "")），
+// 那种环境下这两个标识符根本不存在，直接赋值会抛 ReferenceError 把整套测试打红。
+// 浏览器里 app.js 是 module、import 正常，两个分支都会走到，行为不变。
+if (typeof pickFile === "function") window.pickFile = pickFile;
+if (typeof lightForFilePicker === "function") window.lightForFilePicker = lightForFilePicker;
 const $ = selector => document.querySelector(selector);
 let noticeStorage;
 try { noticeStorage = window.localStorage; } catch { /* Storage may be disabled. */ }
@@ -1336,7 +1346,7 @@ document.querySelectorAll(".memoryTab").forEach(button => {
 });
 $("#selectTranscriptionMedia").addEventListener("click", safely(async () => {
   if (!window.oliviaDesktop?.selectMediaFile) {
-    $("#transcriptionMediaFile").click();
+    pickFile($("#transcriptionMediaFile"));
     return;
   }
   const selected = await window.oliviaDesktop.selectMediaFile();
@@ -1809,7 +1819,7 @@ $("#confirmImport").addEventListener("click", safely(async () => {
     stopLoading("#aiImportResult");
   }
 }));
-$("#selectSoul").addEventListener("click", () => $("#soulFile").click());
+$("#selectSoul").addEventListener("click", () => pickFile($("#soulFile")));
 $("#soulFile").addEventListener("change", safely(async event => {
   const file = event.target.files[0];
   if (!file) return;
@@ -1894,6 +1904,12 @@ $("#memoryList").addEventListener("input", event => {
   memoryExchanges[index].summary = "";
   memoryExchanges[index].contentMd5 = "";
   event.target.closest(".exchangeCard").querySelector('[data-action="save"]').hidden = false;
+});
+// 「加入视频」那个 input 是用 <label> 包住的 —— 点击由 label 代理到 input 本身，
+// 所以这里只切浅色、不重复触发（再调一次 click() 会弹两个对话框）。
+$("#memoryList").addEventListener("click", event => {
+  if (event.target.dataset.action !== "video-file") return;
+  lightForFilePicker(event.target);
 });
 $("#memoryList").addEventListener("change", safely(async event => {
   if (event.target.dataset.action !== "video-file") return;

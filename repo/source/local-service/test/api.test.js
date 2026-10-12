@@ -872,11 +872,23 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
     readFile(new URL("../../tools/upgrade-webplayer-v6-v7.ps1", import.meta.url), "utf8"),
     readFile(new URL("../desktop/controller.js", import.meta.url), "utf8"),
   ]);
-  // 当前补丁标记是 v63（v62 挂了 game-favorites.js 并把歌曲行的「加播单」接到本地服务的歌单界面；
+  // 当前补丁标记是 v67（v62 挂了 game-favorites.js 并把歌曲行的「加播单」接到本地服务的歌单界面；
   // v63 又把这个调用点的「原功能回调」一并传下去，让下拉里能保留「加入音乐桌面」；
-  // 仍是 FE v59 那套注入，文档里写「FE v59 或更高」依然成立）；
+  // v64 只改了脚本内容 —— 文件选择器不再画成深色、歌单面板空歌单也能打开并当场新建、
+  // 游戏内加了常驻「歌单」入口；
+  // v65 把随机牌堆与「播放这个歌单」桥从 bundle 顶部搬进播放器工厂内部 —— 它们引用工厂局部变量
+  // x/p/t/Se/ot/M/Ct，注入在顶层必然抛 ReferenceError: x is not defined（第二十五轮复核实锤）；
+  // v66 只改脚本内容 —— 游戏端歌单面板里的二维码不再渲染（分享码只留文本那一份），注入点与替换锚点没动；
+  // v67 也只改脚本内容 —— 游戏端面板彻底撤下分享码区块（含复制按钮与取分享码的接口调用），
+  // 并给每个歌单片加 ▶ 一键切播 + 「播放中」标记、把播放按钮提到整行主按钮位（第二十八轮）；
+  // v68 只改脚本内容并新增两个桥（同一个工厂锚点，理由与 v65 完全相同）—— OliviaSoulPlayerState
+  // 读 h/m/x/u/f 让面板按播放器真实状态显示「正在播放」，OliviaSoulStopPlayback 供「再点即停」；
+  // 同时在 game-favorites.js 里新增「音乐桌面」面板标题行右侧的切换键（第三十轮）；
+  // v69 只改脚本内容：mountDeskTab() 取不到标题行时提前返回（原写法 `if (!row || row.querySelector(…))
+  // return row.querySelector(…)` 在 row 为 null 时自己抛 TypeError）；
+  // 脚本内容变了就升 marker（理由见下面那条 v64 注释），仍是 FE v59 那套注入、文档里写「FE v59 或更高」依然成立）；
   // 这里钉住它，改补丁版本时测试会提醒你同步文档
-  assert.match(patchScript, /OliviaSoulPatch:mail-music-v63/u);
+  assert.match(patchScript, /OliviaSoulPatch:mail-music-v69/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v32/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v30/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v29/u);
@@ -4251,12 +4263,24 @@ test("管理前端包含视频维护、上方插入和本地服务状态", async
   assert.doesNotMatch(patch, /\$listWaitingCondition|\$listWaitingReply|\$waitingCondition/u);
   assert.match(patch, /\$pollingStateTo/u);
   assert.match(patch, /\$processingIconTo/u);
-  assert.match(patch, /OliviaSoulPatch:mail-music-v63/u);
+  assert.match(patch, /OliviaSoulPatch:mail-music-v69/u);
   assert.match(patch, /admin\/game-letter-export\.js/u);
   assert.match(patch, /admin\/game-favorites\.js/u);
   assert.match(patch, /window\.OliviaSoulPlayFolder=OliviaSoulPlayFolder/u);
+  assert.match(patch, /window\.OliviaSoulPlayerState=OliviaSoulPlayerState/u);
+  assert.match(patch, /window\.OliviaSoulStopPlayback=OliviaSoulStopPlayback/u);
   assert.match(patch, /data-olivia-song/u);
   // v63：把游戏原生的「加播单」回调作为第三个参数交给客户端下拉，用户不建歌单也能加进音乐桌面。
+  // v64：只改注入脚本的内容（文件选择器不再被画成深色、歌单面板空歌单也能当场新建、游戏内加常驻「歌单」入口），
+  // 注入点与替换锚点没动。
+  // v65：随机牌堆与「播放这个歌单」桥的注入点从 bundle 顶部搬进播放器工厂内部（内容与注入位置都变了）。
+  // v66：游戏端歌单面板里的二维码不再渲染（分享码只留文本那一份）—— 仍只改脚本内容，注入点没动。
+  // v67：游戏端面板彻底撤下分享码区块，并加了「▶ 一键切播 / 播放中标记 / 整行播放按钮」—— 仍只改脚本内容。
+  // v68：新增 OliviaSoulPlayerState（读原生播放器状态）与 OliviaSoulStopPlayback（再点即停）两个桥，
+  // 并在 game-favorites.js 里把入口挂到「音乐桌面」标题行右侧（第三十轮）。
+  // v69：mountDeskTab() 在取不到标题行时提前返回（原写法在 row 为 null 时抛 TypeError）。
+  // 内容变了仍必须升 marker —— marker 是「游戏里那份补丁要不要重打」的唯一判据
+  // （那四个脚本虽然由本地服务动态下发，但状态徽章、补丁备份与卸载恢复全都按 marker 判定）。
   assert.match(patch, /openPicker\(a\.song,OliviaSoulFavArgs\[0\],\(\)=>c\("addPlaylist",a\.song\)\)/u);
   // B（信件时间线）：v62 同一批里还给游戏端挂了时间线脚本；漏了它游戏里就没有「时间线」按钮。
   assert.match(patch, /admin\/game-letter-timeline\.js/u);

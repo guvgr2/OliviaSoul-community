@@ -180,13 +180,13 @@ node "$env:TEMP\api-table.mjs"
 | --- | --- | --- | --- |
 | 4609 | GET | `/folders` | 歌单列表：`{list, total}`，每项带成员数（`song_folder_items` 按 `folder_id` 计数） |
 | 4614 | POST | `/folders` | 新建歌单：body `name` / `folderName` / `folder_name`（撞名自动加后缀） |
-| 4624 | POST | `/folders/import` | 整单导入（扫二维码文本或 `.osfolder` 内容）：body `text` / `content` / `code`；返回 `folder`、`added`、`skipped`、`missing`（曲库里没有的 itemId **原样列出，绝不静默丢**）、`missingCount`、`total` |
+| 4624 | POST | `/folders/import` | 整单导入（分享码文本或 `.osfolder` 内容）：body `text` / `content` / `code`；返回 `folder`、`added`、`skipped`、`missing`（曲库里没有的 itemId **原样列出，绝不静默丢**）、`missingCount`、`total` |
 | 4643 | GET | `/folders/membership?ids=a,b,c` | 一批曲子分别落在哪些歌单里（游戏端「已在 N 个歌单」/勾选态）。只读；不传 `ids` 只回计数。**必须在 `:id` 之前匹配**，否则 `membership` 会被当成歌单 id。一次最多 500 个 id（`server.js:4449` 截断，更多要调用方自己分批） |
 | 4653 | GET | `/folders/:id` | 歌单详情：`folderPayload` + `items` |
 | 4655 | PATCH\|PUT | `/folders/:id` | 改名（撞名自动加后缀） |
 | 4661 | DELETE | `/folders/:id` | 删歌单（连同成员）：`{id, removedItems}` |
 | 4670 | POST | `/folders/:id/import-library` | 一键把曲库里能播的全部灌进来：`{folderId, added, skipped, noMedia, items}`（不能播的只计数，不静默丢） |
-| 4684 | GET\|POST | `/folders/:id/export` | 导出：成员 ≤ 30 首给二维码矩阵，再多就给 `.osfolder` 文件内容；返回 `itemIds`、`text`、`mode`（`qr`/`file`）、`qr`、`fileName` |
+| 4684 | GET\|POST | `/folders/:id/export` | 导出：成员 ≤ 30 首给二维码矩阵，再多就给 `.osfolder` 文件内容；返回 `itemIds`、`text`、`mode`（`qr`/`file`）、`qr`、`fileName`。**注**：前端自 1.2.1 起不再渲染这个矩阵（界面上没有二维码），游戏端歌单面板自 1.2.1 第二十八轮起连「分享码（文本）」区块都整块撤下（含「复制分享码」按钮），导出统一由程序端「歌单与收藏 → 导出歌单」承接；接口与字段原样保留 |
 | 4700 | POST | `/folders/:id/items/order` | 排序：`{direction:"up"\|"down", itemId}` 相邻换位，或 `{itemIds:[…]}` 整表重排；`direction` 传了非 up/down 的值 → 400 `direction 只能填 up 或 down`（第四轮 #69 之前是静默不生效） |
 | 4731 | GET | `/folders/:id/items` | 成员列表：`{folderId, total, items}` |
 | 4734 | POST | `/folders/:id/items` | 加成员：body 由 `folderEntriesFrom()` 解释（`itemId` / `itemIds` / `items`），返回 `added` / `skipped` |
@@ -194,7 +194,7 @@ node "$env:TEMP\api-table.mjs"
 
 **交换格式**：`OSF1|歌单名|itemId1,itemId2,…`（标签常量 `server.js:4365`，导出 `folderExportText()` :4535，导入 `folderParseExport()` :4556）。
 
-**二维码 / 文件切换口径**：`FOLDER_QR_MAX_ITEMS = 30`（`server.js:4361`）—— 成员 ≤ 30 首走二维码，超过 30 首走 `.osfolder` 文件，**不做分片**。
+**二维码 / 文件切换口径**：`FOLDER_QR_MAX_ITEMS = 30`（`server.js:4361`）—— 成员 ≤ 30 首走二维码、超过 30 首走 `.osfolder` 文件，**不做分片**。后端口径 1.2.1 未变；只是前端自 1.2.1 起不再把 `qr` 矩阵画出来。
 
 **游戏端注入**：游戏内歌单下拉与「合集」由 `public/game-favorites.js` 接管（补丁 marker v62，见 `docs/客户端补丁与挂载.md`）。
 

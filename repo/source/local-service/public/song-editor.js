@@ -140,7 +140,7 @@
       file.type = 'file'; file.accept = '.lrc'; file.setAttribute('aria-label', '选择 LRC 歌词');
       file.hidden = true; file.style.display = 'none';
       const filePicker = node('div', null, 'ose-lyrics-buttons'), chooseFile = node('button', '选择歌词文件'), fileName = node('span', '未选择文件');
-      chooseFile.type = 'button'; chooseFile.addEventListener('click', () => file.click());
+      chooseFile.type = 'button'; chooseFile.addEventListener('click', () => window.pickFile(file));
       fileName.setAttribute('role', 'status');
       filePicker.append(chooseFile, fileName, file);
       offset.type = 'number'; offset.min = '-600000'; offset.max = '600000'; offset.step = '100'; offset.value = '0';

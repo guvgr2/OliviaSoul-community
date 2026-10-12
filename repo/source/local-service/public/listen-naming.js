@@ -445,7 +445,7 @@
     ui.nameInput.addEventListener("blur", () => { state.focusInput = false; });
     // g12：批量命名表导出 / 导入
     ui.exportButton?.addEventListener("click", () => { void exportNameTable(); });
-    ui.importButton?.addEventListener("click", () => ui.importInput?.click());
+    ui.importButton?.addEventListener("click", () => window.pickFile(ui.importInput));
     ui.importInput?.addEventListener("change", () => { void importNameTable(); });
     // g12：引导卡片
     ui.guideExport?.addEventListener("click", () => { void exportNameTable(); });

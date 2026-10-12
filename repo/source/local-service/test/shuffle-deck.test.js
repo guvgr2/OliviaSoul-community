@@ -39,6 +39,10 @@ const callSites=['shuffleNext','shufflePrev','shufflePlay','shuffleMode'].map(na
 
 // ── 牌堆沙箱 ────────────────────────────────────────────────────────────────
 // 只提供牌堆真正引用的东西：曲目列表 x.value、可用性 a()、当前曲 u/f、window.OliviaSoulSongEditor。
+// ⚠️ 这个沙箱是「自造绑定」：它自己把 x/a/u/f 塞进 context，所以只能证明牌堆**算法**对不对，
+// 证明不了「注入到游戏 bundle 的哪个作用域」—— 1.2.1 就是在这里漏掉一个必现 ReferenceError
+// （牌堆被前置到模块顶层，运行时的 x/a/u/f 根本不存在）。作用域由下面那条注入位置断言 +
+// 补丁脚本里的 g30b 运行时自检（真机打补丁时会当场 throw）一起守。
 function memoryStorage(){
  const map=new Map();
  return {
@@ -272,11 +276,38 @@ test('$shuffleSites 块排在四个 $shuffleXxxFrom 之后（否则变量未定�
  assert.equal(patch.split('$shuffleSites = @(').length-1,1,'$shuffleSites 只应该定义一次');
 });
 
-test('牌堆会注入到 bundle 顶部并在打包后复核（注入 + 解包复核都跟着 $shuffleDeckApplied 走）',()=>{
- assert.ok(patch.includes('$shuffleInjection = if ($shuffleDeckApplied) { $shuffleDeckSource + "`n" } else { "" }'),
-  '整块跳过时没有把牌堆从注入内容里去掉');
- assert.ok(patch.includes('$text = $patchMarker + "`n" + $songEditorSource + "`n" + $shuffleInjection + $songEditorBridge + "`n" +'),
-  '拼接注入时没有带上 $shuffleInjection');
+test('牌堆与播放桥注入到播放器工厂内部，且打包后复核都跟着 $shuffleDeckApplied 走',()=>{
+ // 注入位置（2026-10-12 第二十五轮复核）：牌堆与播放桥必须拼进工厂内注入串（$insidePlayerFactory）。
+ // 历史：1.1.1~1.2.1 它们被前置到 bundle 模块顶层，而 x/a/u/f 与 p/t/Se/ot/M/Ct 只是播放器工厂的
+ // 局部变量 —— 结果是「播放这个歌单」与随机播放必抛 ReferenceError，而且沙箱测试全绿也照不出来。
+ const topLine=patch.match(/\$text = \$patchMarker \+ "`n" \+ ([^\r\n]+)/u);
+ assert.ok(topLine,'定位失败：找不到顶部拼接行');
+ assert.ok(!/shuffle/iu.test(topLine[1]),`顶部拼接里又出现了随机牌堆：${topLine[1]}`);
+ assert.ok(!topLine[1].includes('playFolderBridge'),`顶部拼接里又出现了播放歌单桥：${topLine[1]}`);
+ assert.ok(topLine[1].includes('$songEditorBridge'),'顶部必须仍带上 $songEditorBridge（编辑/移除桥按名字被游戏组件调用）');
+ assert.match(patch,/\$insidePlayerFactory \+= \$shuffleDeckSource/u,'牌堆没有拼进工厂内注入串');
+ assert.match(patch,/\$insidePlayerFactory \+= \$songTitleSync \+ "`n" \+ \$playFolderBridge/u,'播放桥没有拼进工厂内注入串');
+ assert.match(patch,/\$text = \$text\.Replace\(\$playerFactoryFrom, \(\$insidePlayerFactory \+ \$playerFactoryFrom\)\)/u,'工厂内注入没有落到锚点上');
+ // 运行时作用域自检（g30b）必须在：注入完还要回头验证这些函数确实落在锚点之前的注入区里。
+ assert.match(patch,/g30b/u,'缺少 g30b 作用域自检');
+ assert.match(patch,/\$factoryAnchorAt - \$factorySymbolAt\) -gt 60000/u,'g30b 没有距离判据（落到 bundle 顶部时应变红）');
+ // 逐符号核对 g30b 盯的工厂符号白名单。1.2.1 第三十轮把 OliviaSoulFolderItemId / OliviaSoulPlayerState /
+ // OliviaSoulStopPlayback 也注入了同一个工厂锚点，白名单随之从 4 个扩到 7 个；这里改成「逐个必须在名单里」
+ // 而不是钉整串字面量 —— 顺序变了或插了符号都不该让护栏失效，漏掉任一符号才该变红。
+ const g30bList = patch.match(/foreach \(\$factorySymbol in @\(([^\r\n]*)\)\) \{/u);
+ assert.ok(g30bList, '找不到 g30b 的工厂符号白名单');
+ for (const symbol of [
+   'function OliviaSoulPlayFolder',
+   'function OliviaSoulFolderItemId',
+   'function OliviaSoulPlayerState',
+   'function OliviaSoulStopPlayback',
+   'function OliviaSoulShuffleNextIndex',
+   'function OliviaSoulShuffleUsable',
+   'function OliviaSoulShuffleRestart'
+ ]) {
+   assert.ok(g30bList[1].includes(`"${symbol}"`), `g30b 盯的符号不全：缺 ${symbol}`);
+ }
+ // 解包复核仍跟着 $shuffleDeckApplied 走（整块跳过时不能把可选功能缺失升级成补丁失败）
  assert.match(patch,/if \(\$shuffleDeckApplied\) \{\r?\n\s+if \(-not \$verifyText\.Contains\(\$shuffleDeckSource\)\) \{ throw "patched archive missing the shuffle deck" \}/u,
   '解包复核没有跟着 $shuffleDeckApplied 走（跳过时会把可选功能缺失升级成补丁失败）');
  assert.ok(patch.includes('if (-not $verifyText.Contains($shuffleSite.To)) { throw "patched archive missing the $($shuffleSite.Name)" }'));

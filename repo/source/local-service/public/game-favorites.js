@@ -3,14 +3,19 @@
  * 注入方式：补丁脚本在 bundle 顶部插入一个 <script src="…/admin/game-favorites.js">，
  * 并把歌曲行的「加播单」按钮接管到 window.OliviaSoulFavorites.openPicker()。
  *
- * 本文件只做三件事：
+ * 本文件只做四件事：
  *   ①「加入歌单」下拉：接管歌曲行的「加播单」，勾选即写入，取消就什么都不做；
- *   ②「歌单管理」弹层：改名 / 排序 / 移除 / 分享码（二维码 + 文本）/ 删除 / 播放（夹内循环）；
- *   ③ 歌曲行上的「已在 N 个歌单」小标签：靠 data-olivia-song 认行，批量问 membership。
+ *   ②「歌单管理」弹层：一键切播（正在放的那一夹再点即停）/ 改名 / 排序 / 移除 / 删除
+ *      （分享码整块自 1.2.1 第二十八轮起从界面上撤下 —— 搬歌单改在程序端
+ *      「歌单与收藏 → 导出歌单」，服务端接口未删）；
+ *   ③ 歌曲行上的「已在 N 个歌单」小标签：靠 data-olivia-song 认行，批量问 membership；
+ *   ④ 游戏「音乐桌面」面板标题行右侧的「歌单」切换键（1.2.1 第三十轮）。
  *
  * 红线：只用游戏自己的 class（tp-el-*）与 --tp-* 设计令牌，不写死颜色、不引第三方库、
  * 不碰播放逻辑 —— 夹内循环＝把歌单曲目交给注入桥 OliviaSoulPlayFolder()，由它在
- * 游戏自己的作用域里「把歌单变成当前列表 + 设成 ot.Repeat + 播放第一首」。
+ * 游戏自己的作用域里「把歌单变成当前列表 + 设成 ot.Repeat + 播放第一首」；
+ * 「正在播放」与「停止」同样只读/只调桥（OliviaSoulPlayerState / OliviaSoulStopPlayback），
+ * 不直接改游戏状态。
  */
 (() => {
   if (window.__oliviaGameFavorites) return;
@@ -19,16 +24,30 @@
   const CHIP_CLASS = 'olivia-fav-chip';
   /* 管理弹层一次最多画这么多行：整份排序是程序端的活，游戏端只管日常操作 */
   const ROW_LIMIT = 300;
-  /* 分享码超过这个长度就不往输入框里塞（几千首时正文近 10 万字符，塞进去只会卡） */
-  const SHARE_INLINE_LIMIT = 4000;
   let stopped = false;
   let folders = [];
   let foldersAt = 0;
   let pickerState = null;
   let managerState = null;
+  /* 「正在播放」不再靠我们自己记账 —— 1.2.1 第三十轮起直接读游戏播放器的真实状态。
+     桥 window.OliviaSoulPlayerState()（注入在播放器工厂内，看得见 h/m/x/u/f）返回
+     { playing, source, ids, cursor }；与「点播那一刻记下的曲目指纹」比对，一致才算这一夹在放。
+     用处：用户在游戏原生界面停止播放、或把当前列表换成别的，面板上的「播放中」会跟着消失，
+     不再停留在「点过一次就永远亮着」的陈旧态（用户反馈：要接游戏的原生播放器）。
+     放在模块级（而不是 managerState 里）是为了关掉面板再打开时仍认得出哪一夹在放。 */
+  let playingFolderId = '';
+  /* 点播那一刻的曲目 id 指纹：播放器现在的列表跟它一致，才认这一夹还在放 */
+  let playingIdsKey = '';
+  /* 面板开着时的巡检定时器：捕获「在原生界面停止 / 切走」这类发生在面板外的变化 */
+  let playingTimer = null;
   let chipTimer = null;
   let toastTimer = null;
   const chipSeen = new Map();
+  /* 常驻「歌单」入口按钮的 id（见 ensureEntryButton 的说明） */
+  const ENTRY_ID = 'olivia-fav-entry';
+  /* 「音乐桌面」面板标题行右侧那个切换键（见 mountDeskTab） */
+  const DESK_TAB_CLASS = 'olivia-desk-tab';
+  const DESK_TITLE = '音乐桌面';
 
   /* ---------- 基础设施 ---------- */
 
@@ -73,6 +92,8 @@
   const PLUS_GLYPH = 'M8 3.1v9.8M3.1 8h9.8';
   /* 桌面：屏幕 + 底座，用在「加入音乐桌面（不建歌单）」那一行 */
   const DESKTOP_GLYPH = 'M2.4 3.6h11.2v6.4H2.4zM6 12.4h4';
+  /* 暂停：两条竖线。正在放的那一夹，▶ 换成它 —— 再点一下就是停 */
+  const PAUSE_GLYPH = 'M5.8 3.6v8.8M10.2 3.6v8.8';
 
   async function api(path, init) {
     const response = await fetch(base + path, {
@@ -112,6 +133,95 @@
     const matched = /\/toy\/midi\/songs\/([^/?#]+)/u.exec(url);
     if (matched) return decodeURIComponent(matched[1]);
     return String(song.itemId ?? song.songId ?? song.id ?? '');
+  }
+
+  /* 首次建成歌单的那一刻，把「以后去哪儿切换」直接说给他听。
+     比任何时候都管用 —— 这时他刚理解这个功能，也刚发现入口不好找。 */
+  const ENTRY_HINT_KEY = 'olivia-fav-entry-hint-v1';
+  let entryHinted = false;
+  try { entryHinted = window.localStorage.getItem(ENTRY_HINT_KEY) === '1'; } catch { /* 存储被禁用：本次会话仍提示一次 */ }
+  function hintEntryOnce() {
+    if (entryHinted) return;
+    entryHinted = true;
+    try { window.localStorage.setItem(ENTRY_HINT_KEY, '1'); } catch { /* 存不下就算了，不影响功能 */ }
+    setTimeout(() => {
+      toast('以后想切换歌单：点右下角「歌单」按钮，或任意一首歌的「加播单」→ 右上角「管理歌单」', true);
+    }, 1200);
+  }
+
+  /* 常驻入口。
+     为什么不塞进游戏右上工具栏：那是游戏自己的 DOM，类名随版本变，找不到就是静默失效；
+     固定在右下角只依赖「页面上有没有歌曲行」，游戏改版也吃不掉它（也才敢写进文档当固定入口）。 */
+  /* 1.2.1 第二十八轮：用户反馈「这个歌单不太明显」⇒ 从灰底描边小胶囊改成游戏自己的主色按钮
+     （class 用 tp-el-button--primary，颜色全部来自游戏令牌，不写死色值），并带一个 ▶ 图标。 */
+  /* 1.2.1 第三十轮：用户仍觉得不明显，要求「在音乐桌面旁边加一个切换键」。⇒ 主入口搬到
+     游戏「音乐桌面」面板的标题行右侧（见 mountDeskTab），这个右下角按钮退为兜底：
+     只在页面上没有「音乐桌面」面板时才显示，两者不会同时出现。 */
+  function ensureEntryButton() {
+    if (!document.body || document.getElementById(ENTRY_ID)) return;
+    document.body.append(h('button', {
+      id: ENTRY_ID,
+      type: 'button',
+      class: 'tp-el-button tp-el-button--primary',
+      title: '打开歌单管理（一键切播 / 新建 / 改名 / 排序）',
+      style: {
+        position: 'fixed', right: '20px', bottom: '20px', zIndex: '2147482998',
+        display: 'none', alignItems: 'center', gap: '6px', height: '40px', padding: '0 18px',
+        borderRadius: '20px', cursor: 'pointer', fontSize: '14px', fontWeight: '600',
+        boxShadow: '0 8px 24px rgba(0,0,0,.45)', fontFamily: 'inherit',
+      },
+      onclick: () => { void openManager(); },
+    }, [h('span', { text: '▶' }), h('span', { text: '歌单' })]));
+  }
+
+  function syncEntryButton() {
+    const button = document.getElementById(ENTRY_ID);
+    if (!button) return;
+    /* 页面上有「音乐桌面」面板时，主入口是面板标题行右侧那个切换键（mountDeskTab），
+       右下角这个就不出现 —— 免得同一件事有两个按钮，用户还得想「这两个有什么不一样」。 */
+    const hasRows = Boolean(document.querySelector('[data-olivia-song]'));
+    const hasDeskTab = Boolean(document.querySelector(`.${DESK_TAB_CLASS}`));
+    button.style.display = (hasRows && !hasDeskTab) ? 'inline-flex' : 'none';
+  }
+
+  /* 「音乐桌面」旁边的歌单切换键（1.2.1 第三十轮，用户要求）。
+   *
+   * 为什么挂这儿：游戏音乐面板（组件 SongPlayList）的标题行是
+   *   <div class="flex items-center justify-between p-4"><h2 class="…">音乐桌面 <span>N</span></h2></div>
+   * —— justify-between 的右侧本来就空着，那个空位就是「音乐桌面旁边」，不用挤任何东西就能放。
+   *
+   * 认元素只认 h2 的文字前缀（「音乐桌面」是游戏语言包 playlist_my_songs 渲染出来的），
+   * 不写游戏内部的组件名/类名 —— 那些随版本变，而文案要变就得连着语言包一起变，改动面小得多。
+   * 找不到就什么都不做，右下角那个常驻按钮仍然在（syncEntryButton 的兜底分支）。
+   *
+   * 注意：游戏是 Vue 渲染的，重新挂载会把我们的按钮冲掉 ⇒ 由既有的 MutationObserver
+   * （refreshAllChips → mountDeskTab）反复补挂；这里有 id 判重，重复调用是安全的。 */
+  function mountDeskTab() {
+    if (stopped || !document.body) return null;
+    const heading = [...document.querySelectorAll('h2')]
+      .find(node => (node.textContent || '').trim().startsWith(DESK_TITLE));
+    if (!heading) return null;
+    const row = heading.parentElement;
+    if (!row) return null;
+    const existing = row.querySelector(`.${DESK_TAB_CLASS}`);
+    if (existing) return existing;
+    const button = h('button', {
+      type: 'button',
+      class: DESK_TAB_CLASS,
+      title: '打开歌单（一键切播 / 新建 / 改名 / 排序）',
+      style: {
+        display: 'inline-flex', alignItems: 'center', gap: '4px', flexShrink: '0',
+        height: '28px', padding: '0 12px', borderRadius: '9999px', cursor: 'pointer',
+        border: '1px solid var(--tp-primary-2)', background: 'transparent',
+        color: 'var(--tp-primary-2)', fontSize: '13px', fontWeight: '600', fontFamily: 'inherit',
+      },
+      onmouseenter: event => { event.currentTarget.style.background = 'var(--tp-primary-4)'; },
+      onmouseleave: event => { event.currentTarget.style.background = 'transparent'; },
+      onclick: event => { event.stopPropagation(); void openManager(); },
+    }, [h('span', { text: '▶' }), h('span', { text: '歌单' })]);
+    row.append(button);
+    syncEntryButton();
+    return button;
   }
 
   function closePanels() {
@@ -363,11 +473,40 @@
       state.newName = '';
       state.checked.add(created.id);
       toast(`已新建《${created.name}》`, true);
+      hintEntryOnce();
     } catch (error) {
       toast(`新建失败：${error.message}`, false);
     } finally {
       state.busy = false;
       renderPicker();
+    }
+  }
+
+  /* 管理面板里的「新建」—— 与下拉里的 createFolder 做同一件事，只是数据源是 managerState。
+     空歌单时这是面板里唯一能做的事，所以它必须存在。 */
+  async function createFolderInManager() {
+    const state = managerState;
+    if (!state || state.busy) return;
+    const name = String(state.newName ?? '').trim();
+    if (!name) { toast('先写个歌单名字', false); return; }
+    state.busy = true;
+    renderManager();
+    try {
+      const created = await api('/toy/folders', { method: 'POST', body: JSON.stringify({ name }) });
+      folders = [];
+      await folderList(true);
+      state.folderId = created.id;
+      state.items = [];
+      state.newName = '';
+      state.creating = false;
+      toast(`已新建《${created.name}》`, true);
+      hintEntryOnce();
+      renderManager();
+      await loadManagerItems();
+    } catch (error) {
+      toast(`新建失败：${error.message}`, false);
+      state.busy = false;
+      renderManager();
     }
   }
 
@@ -427,12 +566,23 @@
       toast(`歌单读取失败：${error.message}`, false);
       return;
     }
-    if (!list.length) { toast('还没有歌单 —— 先在歌曲行上新建一个', false); return; }
-    const target = list.find(folder => folder.id === folderId) ?? list[0];
+    // 空歌单也必须能进管理面板（1.2.0 真机反馈）：原来这里只弹一句 toast 就把人挡在门外，
+    // 而入口恰恰是给「还没有歌单」的人准备的 —— 进去连「新建」都够不着。
+    const target = list.find(folder => folder.id === folderId) ?? list[0] ?? null;
     closePanels();
-    managerState = { overlay: null, folderId: target.id, items: [], busy: true, deleting: false, exportData: null };
+    managerState = {
+      overlay: null,
+      folderId: target ? target.id : '',
+      items: [],
+      busy: Boolean(target),
+      deleting: false,
+      creating: !target,
+    };
     renderManager();
-    void loadManagerItems();
+    if (target) void loadManagerItems();
+    /* 打开面板时先按播放器真实状态校正一次，再挂上巡检（面板开着才需要巡检） */
+    syncPlayingState();
+    startPlayingWatch();
   }
 
   async function loadManagerItems() {
@@ -453,16 +603,87 @@
     const state = managerState;
     if (!state) return;
     const folder = folders.find(one => one.id === state.folderId);
+    /* 面板里的「新建歌单」。空歌单时它是这个面板唯一能做的事，所以常驻在最上面
+       （1.2.0 真机反馈：入口要能通到「建一个」这一步，而不是只提示去别处建）。 */
+    const createRow = state.creating
+      ? h('div', { style: { display: 'flex', gap: '8px', marginBottom: '10px' } }, [
+        h('input', {
+          class: 'tp-el-input__inner',
+          style: { flex: '1', height: '32px', padding: '0 10px', borderRadius: '6px', border: '1px solid var(--tp-grey-4)', background: 'transparent', color: 'var(--tp-grey-9)', fontSize: '13px' },
+          placeholder: '新歌单名字',
+          value: state.newName ?? '',
+          maxlength: '40',
+          oninput: event => { state.newName = event.target.value; },
+          onkeydown: event => { if (event.key === 'Enter') void createFolderInManager(); },
+        }),
+        h('button', { class: 'tp-el-button tp-el-button--primary', style: { height: '32px' }, text: '建立', onclick: () => void createFolderInManager() }),
+        h('button', { class: 'tp-el-button tp-el-button--default', style: { height: '32px' }, text: '取消', onclick: () => { state.creating = false; state.newName = ''; renderManager(); } }),
+      ])
+      : h('div', {
+        style: { display: 'inline-flex', alignItems: 'center', marginBottom: '10px', color: 'var(--tp-primary-2)', fontSize: '13px', cursor: 'pointer' },
+        text: '＋ 新建歌单…',
+        onclick: () => { state.creating = true; renderManager(); },
+      });
+    const emptyHint = folders.length
+      ? null
+      : h('div', {
+        style: { color: 'var(--tp-text-secondary)', fontSize: '13px', lineHeight: '1.8', marginBottom: '10px' },
+        text: '还没有歌单。点上面的「＋ 新建歌单…」建一个，再在任意一首歌上点「加播单」就能把歌加进来。',
+      });
+    /* 一句话说清这片小圆点怎么用（用户反馈「不明显」：光有图标不说，第一次看不懂） */
+    const stripHint = folders.length
+      ? h('div', { style: { color: 'var(--tp-text-tertiary)', fontSize: '12px', marginBottom: '6px' }, text: '点歌单左边的小 ▶ 直接换着听（正在放的那一夹再点一下就是停）；点歌单名看里面的曲目' })
+      : null;
+
+    /* 每个歌单一个「片」：左边 ▶ 是一键切播（切到这一夹并立刻开始循环），右边名字是选中看成员。
+       1.2.1 第二十八轮（用户反馈「切换歌单播放还要手动点歌单才能切换」）：
+       ▶ 单独成一个热区，一次点击就换掉正在放的那一夹，不必先选中再点播放；
+       正在放的那一夹整片高亮并挂「播放中」。 */
     const strip = h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' } },
-      folders.map(one => h('button', {
-        style: {
-          border: '1px solid var(--tp-grey-3)', borderRadius: '6px', padding: '4px 10px', fontSize: '13px', cursor: 'pointer',
-          background: one.id === state.folderId ? 'var(--tp-grey-2)' : 'transparent',
-          color: one.id === state.folderId ? 'var(--tp-grey-9)' : 'var(--tp-grey-8)',
-        },
-        text: `${one.name} · ${one.itemCount ?? 0}`,
-        onclick: () => { state.folderId = one.id; state.items = []; state.busy = true; renderManager(); void loadManagerItems(); },
-      })));
+      folders.map(one => {
+        const active = one.id === state.folderId;
+        const playing = playingFolderId === one.id;
+        return h('div', {
+          style: {
+            display: 'inline-flex', alignItems: 'center', gap: '2px',
+            border: `1px solid ${active ? 'var(--tp-primary-2)' : 'var(--tp-grey-3)'}`,
+            borderRadius: '9999px', padding: '3px 10px 3px 4px',
+            background: active ? 'var(--tp-primary-4)' : 'transparent',
+            color: active ? 'var(--tp-grey-9)' : 'var(--tp-grey-8)', fontSize: '13px',
+          },
+        }, [
+          h('span', {
+            'data-olivia-play': '1',
+            title: playing ? '再点一下停止播放' : '切到这个歌单并开始播（夹内循环）',
+            style: {
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '20px', height: '20px',
+              borderRadius: '9999px', cursor: 'pointer', fontSize: '11px', lineHeight: '1',
+              color: playing ? 'var(--tp-primary-2)' : 'var(--tp-grey-6)',
+              background: playing ? 'var(--tp-primary-4)' : 'var(--tp-grey-2)',
+            },
+            onclick: event => { event.stopPropagation(); void playFolder(one.id); },
+          }, playing ? [svgGlyph(PAUSE_GLYPH, 10)] : [h('span', { text: '▶' })]),
+          h('span', {
+            style: { cursor: 'pointer' },
+            text: `${one.name} · ${one.itemCount ?? 0}`,
+            onclick: () => { state.folderId = one.id; state.items = []; state.busy = true; renderManager(); void loadManagerItems(); },
+          }),
+          playing ? h('span', { style: { marginLeft: '2px', fontSize: '11px', color: 'var(--tp-primary-2)' }, text: '播放中' }) : null,
+        ]);
+      }));
+
+    /* 播放这一夹：从原先的右侧窄列（260px、字号小）提到歌单条下面的整行主按钮 ——
+       用户反馈「切着听」这件事在面板里找不到落点。正在放的那一夹文案会跟着变，
+       并且再点一次就是停（1.2.1 第三十轮，与 ▶ 热区同一套行为）。 */
+    const rowPlaying = Boolean(folder) && playingFolderId === folder.id;
+    const playRow = folder ? h('button', {
+      class: 'tp-el-button tp-el-button--primary',
+      style: { width: '100%', height: '36px', marginBottom: '10px' },
+      text: rowPlaying
+        ? `■ 停止《${folder.name}》 · 正在播放`
+        : `▶ 播放《${folder.name}》（夹内循环）`,
+      onclick: () => void playFolder(state.folderId),
+    }) : null;
 
     const rows = state.items.slice(0, ROW_LIMIT).map((item, index) => h('div', {
       draggable: 'true',
@@ -491,27 +712,6 @@
       h('button', { class: 'tp-el-button tp-el-button--default', style: { height: '24px', padding: '0 8px', fontSize: '12px' }, text: '移除', onclick: () => void removeItem(item.itemId) }),
     ]));
 
-    const exportBox = h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } }, [
-      h('div', { style: { fontSize: '13px', color: 'var(--tp-text-secondary)' }, text: '把这个码发给自己人，在程序端「歌单与收藏」里导入' }),
-      h('div', {
-        style: { width: '180px', height: '180px', background: 'var(--tp-primary-0)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-        id: 'olivia-fav-qr',
-      }, [h('span', { style: { color: 'var(--tp-grey-6)', fontSize: '12px' }, text: '生成中…' })]),
-      h('textarea', {
-        readonly: true,
-        value: '',
-        placeholder: '超过 30 首不在框里展开 —— 点下面的「复制分享码」拿全文',
-        style: {
-          width: '100%', height: '76px', resize: 'none', background: 'transparent', color: 'var(--tp-grey-8)', fontSize: '12px',
-          border: '1px solid var(--tp-grey-3)', borderRadius: '6px', padding: '6px', boxSizing: 'border-box', fontFamily: 'ui-monospace, monospace',
-        },
-      }),
-      h('button', {
-        class: 'tp-el-button tp-el-button--default', text: '复制分享码',
-        onclick: () => void copyShare(state),
-      }),
-    ]);
-
     const overlay = h('div', {
       class: 'tp-el-overlay',
       style: { position: 'fixed', inset: '0', zIndex: '2147482999', background: 'rgba(4,4,6,.72)', display: 'flex', alignItems: 'center', justifyContent: 'center' },
@@ -519,24 +719,28 @@
     }, [
       h('div', {
         class: 'tp-el-dialog',
-        style: { width: '760px', maxWidth: '92vw', maxHeight: '84vh', display: 'flex', flexDirection: 'column', background: 'var(--tp-grey-1)', borderRadius: '16px', overflow: 'hidden' },
+        style: { width: '560px', maxWidth: '92vw', maxHeight: '84vh', display: 'flex', flexDirection: 'column', background: 'var(--tp-grey-1)', borderRadius: '16px', overflow: 'hidden' },
       }, [
         h('div', { class: 'tp-el-dialog__header', style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px' } }, [
-          h('span', { class: 'tp-el-dialog__title', style: { color: 'var(--tp-grey-9)', fontSize: '15px' }, text: `歌单管理 · ${folder ? folder.name : ''}` }),
+          h('span', { class: 'tp-el-dialog__title', style: { color: 'var(--tp-grey-9)', fontSize: '15px' }, text: folder ? `歌单管理 · ${folder.name}` : '歌单管理（还没有歌单）' }),
           h('button', { style: { border: '0', background: 'transparent', color: 'var(--tp-grey-6)', cursor: 'pointer', fontSize: '16px' }, text: '✕', onclick: () => closeManager() }),
         ]),
         h('div', { class: 'tp-el-dialog__body', style: { display: 'flex', gap: '16px', padding: '0 18px 12px', overflow: 'auto' } }, [
           h('div', { style: { flex: '1 1 400px', minWidth: '0' } }, [
+            stripHint,
             strip,
-            h('div', { style: { display: 'flex', gap: '8px', marginBottom: '10px' } }, [
+            playRow,
+            createRow,
+            emptyHint,
+            folder ? h('div', { style: { display: 'flex', gap: '8px', marginBottom: '10px' } }, [
               h('input', {
                 class: 'tp-el-input__inner',
                 style: { flex: '1', height: '32px', padding: '0 10px', borderRadius: '6px', border: '1px solid var(--tp-grey-4)', background: 'transparent', color: 'var(--tp-grey-9)', fontSize: '13px' },
-                value: state.rename ?? (folder ? folder.name : ''),
+                value: state.rename ?? folder.name,
                 oninput: event => { state.rename = event.target.value; },
               }),
               h('button', { class: 'tp-el-button tp-el-button--default', style: { height: '32px' }, text: '保存名称', onclick: () => void renameFolder() }),
-            ]),
+            ]) : null,
             h('div', {
               style: { color: 'var(--tp-text-tertiary)', fontSize: '12px', marginBottom: '8px' },
               text: state.busy
@@ -547,26 +751,18 @@
             }),
             h('div', { style: { maxHeight: '38vh', overflowY: 'auto' } }, state.busy ? [] : rows),
           ]),
-          h('div', { style: { flex: '0 0 260px', borderLeft: '1px solid var(--tp-grey-3)', paddingLeft: '16px' } }, [
-            h('div', { style: { color: 'var(--tp-grey-9)', fontSize: '14px', marginBottom: '8px' }, text: '分享码' }),
-            exportBox,
-            h('button', {
-              class: 'tp-el-button tp-el-button--primary',
-              style: { marginTop: '10px', width: '100%' },
-              text: '播放这个歌单（夹内循环）',
-              onclick: () => void playFolder(state.folderId),
-            }),
-          ]),
         ]),
         h('div', { class: 'tp-el-dialog__footer', style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 18px', borderTop: '1px solid var(--tp-grey-3)' } }, [
-          h('span', { style: { color: 'var(--tp-error)', fontSize: '12px' }, text: '删除歌单不可恢复（曲库文件不受影响）' }),
+          folder
+            ? h('span', { style: { color: 'var(--tp-error)', fontSize: '12px' }, text: '删除歌单不可恢复（曲库文件不受影响）' })
+            : h('span', { style: { color: 'var(--tp-text-tertiary)', fontSize: '12px' }, text: '这里只改歌单归属，曲库文件不受影响' }),
           h('div', { style: { display: 'flex', gap: '8px' } }, [
-            h('button', {
+            folder ? h('button', {
               class: 'tp-el-button tp-el-button--default',
               style: { color: 'var(--tp-error)', borderColor: 'var(--tp-error)' },
               text: state.deleting ? '再点一次确认删除' : '删除歌单',
               onclick: () => void deleteFolder(),
-            }),
+            }) : null,
             h('button', { class: 'tp-el-button tp-el-button--primary', text: '完成', onclick: () => closeManager() }),
           ]),
         ]),
@@ -577,83 +773,6 @@
     document.body.append(overlay);
     state.overlay = overlay;
     if (previous) previous.remove();
-    /* 已经算好且还是同一份歌单 → 直接把结果画上；否则先显示「生成中…」再去算 */
-    paintExport();
-    if (!state.exportData || state.exportData.folderId !== state.folderId) void fillExport();
-  }
-
-  /* 把 state.exportData 画到当前弹层上（同一份歌单重画弹层时可重复调用） */
-  function paintExport() {
-    const state = managerState;
-    if (!state || !state.overlay) return;
-    const data = state.exportData && state.exportData.folderId === state.folderId ? state.exportData.data : null;
-    const box = state.overlay.querySelector('#olivia-fav-qr');
-    const textarea = state.overlay.querySelector('textarea');
-    if (!box) return;
-    if (!data) {
-      box.replaceChildren(h('span', { style: { color: 'var(--tp-grey-6)', fontSize: '12px' }, text: '生成中…' }));
-      if (textarea) textarea.value = '';
-      return;
-    }
-    box.replaceChildren();
-    if (data.qr && Array.isArray(data.qr.rows)) box.append(renderQr(data.qr));
-    else box.append(h('span', { style: { color: 'var(--tp-grey-6)', fontSize: '12px', padding: '8px', textAlign: 'center' }, text: `共 ${data.count} 首，超过 30 首无法用二维码 —— 点「复制分享码」拿整份文本，或在程序端「歌单与收藏」里导出 .osfolder 文件` }));
-    if (textarea) textarea.value = String(data.text ?? '').length <= SHARE_INLINE_LIMIT ? String(data.text ?? '') : '';
-  }
-
-  async function fillExport() {
-    const state = managerState;
-    if (!state) return;
-    const folderId = state.folderId;
-    try {
-      const data = await api(`/toy/folders/${folderId}/export`);
-      if (managerState !== state || state.folderId !== folderId) return;
-      state.exportData = { folderId, data };
-      paintExport();
-    } catch (error) {
-      if (managerState === state) toast(`分享码生成失败：${error.message}`, false);
-    }
-  }
-
-  function renderQr(qr) {
-    const quiet = 2;
-    const size = qr.size;
-    const total = size + quiet * 2;
-    let path = '';
-    for (let row = 0; row < size; row += 1) {
-      const line = qr.rows[row] ?? '';
-      for (let column = 0; column < size; column += 1) {
-        if (line[column] === '1') path += `M${column + quiet} ${row + quiet}h1v1h-1z`;
-      }
-    }
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('viewBox', `0 0 ${total} ${total}`);
-    svg.setAttribute('width', '170');
-    svg.setAttribute('height', '170');
-    svg.setAttribute('shape-rendering', 'crispEdges');
-    const background = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    background.setAttribute('width', String(total));
-    background.setAttribute('height', String(total));
-    background.setAttribute('fill', 'var(--tp-primary-0)');
-    const modules = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    modules.setAttribute('d', path);
-    modules.setAttribute('fill', 'var(--tp-grey-2)');
-    svg.append(background, modules);
-    return svg;
-  }
-
-  async function copyShare(state) {
-    const text = state.exportData && state.exportData.folderId === state.folderId ? String(state.exportData.data.text ?? '') : '';
-    if (!text) { toast('还没生成分享码', false); return; }
-    try {
-      await navigator.clipboard.writeText(text);
-      toast('分享码已复制', true);
-    } catch {
-      /* 大歌单的正文没塞进输入框，兜底就只能让用户自己到程序端导出 */
-      const textarea = state.overlay && state.overlay.querySelector('textarea');
-      if (textarea && textarea.value) { textarea.select(); document.execCommand && document.execCommand('copy'); toast('已选中分享码，按 Ctrl+C 复制', true); return; }
-      toast('复制失败：正文太长，请在程序端「歌单与收藏」里导出 .osfolder 文件', false);
-    }
   }
 
   async function renameFolder() {
@@ -733,16 +852,66 @@
     const overlay = managerState.overlay;
     managerState = null;
     if (overlay) overlay.remove();
+    stopPlayingWatch();
     refreshChipsSoon();
   }
 
   /* ---------- 夹内循环 ---------- */
 
+  /* 「正在播放」的判定：读游戏播放器的真实状态，而不是我们自己记的账。
+     桥是 1.2.1 第三十轮新加的（注入在播放器工厂内，能看见 h/m/x/u/f）：
+       window.OliviaSoulPlayerState() → { playing, source, ids, cursor } | null
+     老补丁没有这个桥 ⇒ 返回 null 时一律「什么都不改」，退回「点过就一直亮」的旧行为，不会更坏。 */
+  function playerState() {
+    if (typeof window.OliviaSoulPlayerState !== 'function') return null;
+    try { return window.OliviaSoulPlayerState(); } catch { return null; }
+  }
+
+  const idsKeyOf = list => (list || []).map(one => String(one)).join('\u0001');
+
+  /* 巡检一次：播放器停了、或者当前列表已经换成别的（指纹对不上），就把「播放中」摘掉。
+     只有真的变了才重画 —— 否则每 2 秒把面板推倒重来一次，正拖着排序的人会被打断。 */
+  function syncPlayingState() {
+    if (!playingFolderId) return;
+    const state = playerState();
+    if (!state) return;                        // 老补丁：保持现状
+    if (state.playing && idsKeyOf(state.ids) === playingIdsKey) return;
+    playingFolderId = '';
+    playingIdsKey = '';
+    if (managerState) renderManager();
+  }
+
+  function startPlayingWatch() {
+    stopPlayingWatch();
+    playingTimer = setInterval(syncPlayingState, 2000);
+  }
+
+  function stopPlayingWatch() {
+    clearInterval(playingTimer);
+    playingTimer = null;
+  }
+
+  /* 夹内循环。也可以从面板里每个歌单片上的 ▶ 直接调用 —— 那就是「一键切播」：
+     不必先选中那一夹再点播放，点了就换掉正在放的那一份。
+     1.2.1 第三十轮（用户要求「再点即停」）：同一夹再点一次 = 停。判断依据同样是播放器的
+     真实状态（playingFolderId 由 syncPlayingState 守着），不是「上次点了谁」。 */
   async function playFolder(folderId) {
     if (!folderId) return;
     if (typeof window.OliviaSoulPlayFolder !== 'function') {
       toast('游戏播放桥没有注入 —— 请重新安装客户端补丁', false);
       return;
+    }
+    /* 已经在放这一夹 ⇒ 再点就是停 */
+    if (playingFolderId === folderId) {
+      const stopped = typeof window.OliviaSoulStopPlayback === 'function' ? window.OliviaSoulStopPlayback() : false;
+      if (stopped) {
+        playingFolderId = '';
+        playingIdsKey = '';
+        if (managerState) renderManager();
+        toast('已停止播放', true);
+        return;
+      }
+      /* 停不了（老补丁）就照常往下走，重播一遍，不留死路 */
     }
     try {
       const data = await api(`/toy/folders/${folderId}`, { method: 'GET' });
@@ -750,7 +919,10 @@
       if (!items.length) { toast('这个歌单里没有能播的曲目', false); return; }
       const started = window.OliviaSoulPlayFolder(items, 0);
       if (!started) { toast('游戏播放器没有就绪，稍后再试', false); return; }
-      toast(`开始夹内循环：《${data.name}》共 ${items.length} 首（第一次点播放才会开始）`, true);
+      playingFolderId = folderId;
+      playingIdsKey = idsKeyOf(items.map(songKey));
+      if (managerState) renderManager();
+      toast(`开始夹内循环：《${data.name}》共 ${items.length} 首`, true);
       void refreshChipsSoon();
     } catch (error) {
       toast(`播放失败：${error.message}`, false);
@@ -793,6 +965,10 @@
 
   async function refreshAllChips() {
     if (stopped) return;
+    /* 常驻入口的显隐跟着「页面上有没有歌曲行 / 有没有音乐桌面面板」走，
+       必须在 !ids.length 提前 return 之前同步 —— 音乐桌面面板里可能一首本地歌都没有。 */
+    syncEntryButton();
+    mountDeskTab();
     const rows = [...document.querySelectorAll('[data-olivia-song]')];
     const ids = [...new Set(rows.map(row => row.getAttribute('data-olivia-song')).filter(Boolean))];
     if (!ids.length) return;
@@ -837,6 +1013,7 @@
       observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-olivia-song'] });
       document.addEventListener('mousedown', onOutsideDown, true);
       document.addEventListener('keydown', onKeyDown, true);
+      ensureEntryButton();
       void refreshAllChips();
     } else {
       document.addEventListener('DOMContentLoaded', start, { once: true });
@@ -850,6 +1027,7 @@
     document.removeEventListener('keydown', onKeyDown, true);
     clearTimeout(chipTimer);
     clearTimeout(toastTimer);
+    stopPlayingWatch();
     closePanels();
   }
 

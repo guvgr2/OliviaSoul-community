@@ -438,6 +438,30 @@
     const fileInput = h('input', {
       type: 'file', accept: '.json,application/json',
       style: { font: `400 12px ${FONT}`, color: 'var(--tp-text-secondary)', width: '100%' },
+      // 用户是**直接点这个 input** 的（没有按钮代劳），所以只能在这里做预处理：
+      // 先把文档临时切成浅色，免得 Chromium 把文件选择器的面包屑那行画成黑底
+      // （见 analysis/给deepseek-1.2.0-真机反馈修复单-2026-10-11.md §一）。
+      // 这里不能复用管理端的 public/file-picker-guard.js —— 游戏内加载的是客户端补丁
+      // 注入的那几个脚本，多挂一个文件要动补丁清单与 marker，代价远大于这十行。
+      // cancel 与 window focus 两道兜底不许省：用户按取消/Esc 不会触发 change。
+      onclick: () => {
+        const root = document.documentElement;
+        const previous = root.style.colorScheme;
+        root.style.colorScheme = 'light';
+        let restored = false;
+        const restore = () => {
+          if (restored) return;
+          restored = true;
+          root.style.colorScheme = previous;
+          fileInput.removeEventListener('change', onDone);
+          fileInput.removeEventListener('cancel', restore);
+          window.removeEventListener('focus', restore);
+        };
+        const onDone = () => setTimeout(restore, 0);
+        fileInput.addEventListener('change', onDone, { once: true });
+        fileInput.addEventListener('cancel', restore, { once: true });
+        window.addEventListener('focus', restore, { once: true });
+      },
       onchange: event => {
         const file = event.target.files && event.target.files[0];
         if (!file) return;

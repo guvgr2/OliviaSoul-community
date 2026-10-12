@@ -1,0 +1,12 @@
+{
+  "_why": "注入到游戏 feapp.dat 里的那四个前端脚本（由 tools/patch-feapp-local.ps1 的 loader 行 <script src=.../admin/xxx.js> 动态加载）的内容基线。存在的唯一理由：把『改了游戏内脚本、却忘了升补丁 marker』从『等用户真机点了没反应才发现』变成一条会当场变红的断言（1.2.0 真机反馈就是这么暴露的 —— 常驻歌单入口加了、marker 还是 v63）。",
+  "_怎么维护": "改过 scripts 里任何一个文件之后：① 先升 marker（desktop/feapp-revisions.js 的 FEAPP_REVISIONS 加新版本、tools/patch-feapp-local.ps1 的 $patchMarker、tools/get-feapp-status.ps1 的 $currentMarker + knownMarkers、test/api.test.js 里那两处字面量）；② 再把本文件的 marker 改成同一个新版本；③ 最后按 `node -e` 或 Get-FileHash 重算 SHA-256 填进 scripts。三件事缺一件，feapp-revisions-consistency 套件就会红。",
+  "_来源": "脚本清单取自 repo/source/tools/patch-feapp-local.ps1 里那行 loader（game-lyrics / game-letter-export / game-favorites / game-letter-timeline 四个）。新增注入脚本时，这里与 loader 行要一起改。",
+  "marker": "v69",
+  "scripts": {
+    "public/game-lyrics.js": "093864873b52334b214ab3c5969b357b288e91b0de3ab6bf8847cb20ab7942f4",
+    "public/game-letter-export.js": "bea95593aacf440771ea448a0837d03329c3bfb363e504e0738ec5f0d9f032f3",
+    "public/game-favorites.js": "cdb3c178d88e3d9de5370f178f01a9077748bcc36c80c5f4873f802ee8011899",
+    "public/game-letter-timeline.js": "201cfb2db21e09d448c301f3f9e0feaa824748849738133645bab86a1be780da"
+  }
+}

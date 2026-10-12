@@ -1,5 +1,5 @@
 // 「歌单与收藏」独立页：与游戏里的歌单是同一份数据。
-// 程序端只做重活：一次灌入整个曲库、拖拽排序、看大尺寸二维码、批量导入导出。
+// 程序端只做重活：一次灌入整个曲库、拖拽排序、批量导入导出。
 // 观感全部复用既有类（panelHead / settingsBlock / actions / ln-diagTable / noticeDialog），
 // 不引入新色值、新字体、新渐变、新阴影。
 (function (global) {
@@ -8,7 +8,6 @@
   const document = global.document;
   const TAB = "folders";
   const BASE = "/toy/folders";
-  const SVG_NS = "http://www.w3.org/2000/svg";
   // 曲库上千首时「一键灌入整个曲库」会让歌单很长：一次只画这么多行，
   // 否则几千个 <li>（每个都带拖拽监听）会把页面卡住。拖拽只在整单都画出来时开放。
   const RENDER_LIMIT = 200;
@@ -74,33 +73,6 @@
     });
   }
 
-  // 二维码绘制：后端只给黑白模块，这里画成 SVG（≤30 首最大约 105×105，路径一次拼完）。
-  function renderQr(qr) {
-    const quiet = 2;
-    const span = qr.size + quiet * 2;
-    const svg = document.createElementNS(SVG_NS, "svg");
-    svg.setAttribute("class", "fm-qr");
-    svg.setAttribute("viewBox", `0 0 ${span} ${span}`);
-    svg.setAttribute("role", "img");
-    svg.setAttribute("aria-label", "歌单二维码");
-    const background = document.createElementNS(SVG_NS, "rect");
-    background.setAttribute("width", String(span));
-    background.setAttribute("height", String(span));
-    background.setAttribute("fill", "#ffffff");
-    svg.append(background);
-    let path = "";
-    qr.rows.forEach((row, y) => {
-      for (let x = 0; x < row.length; x += 1) {
-        if (row[x] === "1") path += `M${x + quiet} ${y + quiet}h1v1h-1z`;
-      }
-    });
-    const dark = document.createElementNS(SVG_NS, "path");
-    dark.setAttribute("d", path);
-    dark.setAttribute("fill", "#111114");
-    svg.append(dark);
-    return svg;
-  }
-
   function formatDuration(seconds) {
     const total = Math.round(Number(seconds) || 0);
     if (!total) return "";
@@ -121,7 +93,7 @@
     steps.append(
       node("li", "先在「新歌单名」里起个名字、点「新建歌单」；名字撞车会自动加后缀，不用自己避让。"),
       node("li", "选中左边的歌单，点「一键灌入整个曲库」把它填满；用每行的 ↑ ↓ 调顺序，「移出」把某首拿掉（曲库文件不受影响）。"),
-      node("li", "要给别人：选中歌单点「导出二维码」——不超过 30 首出二维码，可以「复制文本」或「下载」.osfolder 文件；对方用「导入 .osfolder 文件」或「导入粘贴的文本」导进来，匹配不上的曲目会逐条列出来，不会静默丢。"),
+      node("li", "要在自己另一台机器 / 另一个安装上恢复：选中歌单点「导出歌单」，可以「复制文本」或「下载」.osfolder 文件；那台机器用「导入 .osfolder 文件」或「导入粘贴的文本」导进来。分享码里只有曲目 id、不带曲库文件，所以对方的曲库里必须有同样的曲目；匹配不上的会逐条列出来，不会静默丢。"),
     );
     const hint = node("p",
       "这里的歌单与游戏里的歌单是同一份数据：游戏里加了歌，回这一页点「刷新」就能看到。",
@@ -144,7 +116,7 @@
     const left = node("div");
     left.append(
       node("h2", "歌单与收藏"),
-      node("p", "与游戏里的歌单是同一份数据：游戏端管日常加歌，这里一次灌入整个曲库、拖拽排序、看大尺寸二维码、批量导入导出。"),
+      node("p", "与游戏里的歌单是同一份数据：游戏端管日常加歌，这里一次灌入整个曲库、拖拽排序、批量导入导出。"),
     );
     const chips = node("div", null, "ln-statusChips");
     const chipFolders = node("span", "—", "ln-chip");
@@ -204,7 +176,7 @@
     const detailActions = node("div", null, "fm-detailActions");
     const renameButton = node("button", "重命名", "secondary");
     const deleteButton = node("button", "删除歌单", "secondary");
-    const exportButton = node("button", "导出二维码", "");
+    const exportButton = node("button", "导出歌单", "");
     for (const button of [renameButton, deleteButton, exportButton]) {
       button.type = "button";
       button.disabled = true;
@@ -490,7 +462,7 @@
       await importText(text);
     }, "导入文本"));
 
-    pickFileButton.addEventListener("click", () => fileInput.click());
+    pickFileButton.addEventListener("click", () => window.pickFile(fileInput));
     fileInput.addEventListener("change", () => run(async () => {
       const file = fileInput.files?.[0];
       if (!file) return;
@@ -506,6 +478,8 @@
       const parts = [`已导入《${imported.folder.name}》：${imported.added} 首`];
       if (imported.skipped) parts.push(`跳过重复 ${imported.skipped} 首`);
       if (imported.missingCount) parts.push(`本机曲库里找不到 ${imported.missingCount} 首：${imported.missing.slice(0, 8).join("、")}${imported.missingCount > 8 ? " …" : ""}`);
+      // 全都没匹配上时给出「为什么」，否则用户看到「已导入《X》：0 首」会以为是坏了。
+      if (imported.missingCount && !imported.added) parts.push("这首歌单里的曲目在这台机器上一首都没有 —— 歌单已经建好，但会是空的（分享码只带曲目 id，需要两边的曲库里有同样的歌）");
       setResult(`${parts.join("，")}。`);
     }
 
@@ -557,13 +531,7 @@
         exportBlock.append(node("p", "空歌单没有可导出的内容。", "empty"));
         return;
       }
-      if (data.qr) {
-        const figure = node("div", null, "fm-qrBox");
-        figure.append(renderQr(data.qr), node("p", `${data.count} 首 · 二维码：用手机扫，或另一台机器导出后按文本导入`, "fm-hint"));
-        exportBlock.append(figure);
-      } else {
-        exportBlock.append(node("p", `这个歌单有 ${data.count} 首，超过 30 首就不出二维码了，请用下面的文件分享。`, "fm-hint"));
-      }
+      exportBlock.append(node("p", `这个歌单有 ${data.count} 首 —— 复制下面的文本，或用「下载」拿到 .osfolder 文件，在另一台机器上按文本 / 文件导入（那台机器的曲库里要有这些歌）。`, "fm-hint"));
       const text = node("textarea", data.text, "fm-exportText");
       text.readOnly = true;
       text.rows = 3;

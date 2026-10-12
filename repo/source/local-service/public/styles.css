@@ -688,7 +688,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ln-diagPeriodic small { color: #9a9ba3; line-height: 1.5; }
 .ln-diagPeriodic select { min-width: 200px; }
 
-/* 1.2.0 歌单与收藏（程序端页签）：两栏布局、可拖拽的曲目行、二维码。
+/* 1.2.0 歌单与收藏（程序端页签）：两栏布局、可拖拽的曲目行。
    配色与圆角全部沿用既有值（面板 #1b1c20 / 描边 #292a2f / 次要字 #77777d / 正文 #b9bac1），
    不新增色值、字体、渐变、阴影。 */
 .fm-nameInput { flex: 1 1 260px; max-width: 360px; }
@@ -721,6 +721,4 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .fm-duration { color: #77777d; font-size: 12px; font-variant-numeric: tabular-nums; }
 .fm-mini { padding: 4px 8px; font-size: 12px; flex: none; }
 .fm-exportBlock { margin-top: 12px; }
-.fm-qrBox { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 12px; }
-.fm-qr { width: 220px; height: 220px; max-width: 60vw; border: 1px solid #292a2f; border-radius: 9px; background: #fff; }
 .fm-exportText { width: 100%; margin-top: 12px; box-sizing: border-box; font: inherit; resize: vertical; }

@@ -39,7 +39,7 @@ if ($mainFiles.Count -ne 1) { throw "expected one main-*.js, got $($mainFiles.Co
 $utf8 = New-Object System.Text.UTF8Encoding $false
 $mainPath = $mainFiles[0].FullName
 $text = [IO.File]::ReadAllText($mainPath, $utf8)
-$patchMarker = '/*OliviaSoulPatch:mail-music-v63*/'
+$patchMarker = '/*OliviaSoulPatch:mail-music-v69*/'
 if ($text.Contains($patchMarker)) { throw "original feapp already contains current patch" }
 $text = $patchMarker + $text
 $playerCommandUrl = $ServiceUrl.TrimEnd("/") + "/toy/player-command"
@@ -59,6 +59,27 @@ function OliviaSoulRemoveSong(song){
   if(!String(song&&song.videoUrl||'').includes('/toy/midi/songs/'))return;
   return window.OliviaSoulSongEditor.remove({baseUrl:'__OLIVIA_SONG_EDITOR_BASE__',ids:[window.OliviaSoulSongEditor.stableId(song)],names:[song.name]});
 }
+'@
+$songEditorBridge = $songEditorBridge.Replace('__OLIVIA_SONG_EDITOR_BASE__', $songEditorBase)
+# 播放歌单桥必须注入到播放器工厂内部：它引用 x（曲目 store）p（播放模式）t（PRO/LITE 标记）
+# Se（PRO/LITE 枚举）ot（播放模式枚举）M（换曲函数）Ct（播放命令桥）—— 这些都不是模块顶层变量。
+# 2026-10-12 第二十五轮复核：它曾跟随 $songEditorBridge 注入到 bundle 顶部，导致「播放这个歌单」
+# 必抛 ReferenceError: x is not defined（该按钮直到 1.2.1 才第一次被按到，所以潜伏了一整版）。
+# 注入点见 $playerFactoryFrom，作用域护栏见写盘前的 g30b 检查。
+# 2026-10-12 第三十轮在同一锚点新增两个（作用域理由完全相同，逐个标识符实测过）：
+#   OliviaSoulPlayerState —— 读 h（播放来源）/ m（是否在播放）/ x（当前列表）/ u、f（当前曲），
+#     让游戏端面板按播放器的真实状态判断「正在播放的是哪一夹」，取代原先「点过一次就永远亮着」的本地记账。
+#   OliviaSoulStopPlayback —— 照抄游戏原生停止（Ct({cmd:"stop"}) + 清 m/u/f/d），供「再点即停」用。
+#   h 在工厂里的声明是 h=b("playlist")，m=b(!1)、d=b(0)、x=b([])、u/f=b(null)，位置都在本锚点之前
+#   （decl-all.py 实测：这些名字顶层=0，工厂内各 1 处且早于锚点）。
+$playFolderBridge = @'
+function OliviaSoulFolderItemId(item){
+  if(!item)return "";
+  const url=String(item.videoUrl||"");
+  const matched=/\/toy\/midi\/songs\/([^/?#]+)/u.exec(url);
+  if(matched)return decodeURIComponent(matched[1]);
+  return String(item.itemId!=null?item.itemId:item.id||"");
+}
 function OliviaSoulPlayFolder(items,startIndex){
   const list=(items||[]).filter(item=>String(item&&item.videoUrl||"").includes("/toy/midi/songs/"));
   if(!list.length)return false;
@@ -70,8 +91,27 @@ function OliviaSoulPlayFolder(items,startIndex){
   return true;
 }
 window.OliviaSoulPlayFolder=OliviaSoulPlayFolder;
+function OliviaSoulPlayerState(){
+  try{
+    const current=u.value||f.value;
+    return {
+      playing:!!m.value,
+      source:String(h.value||""),
+      ids:(x.value||[]).map(OliviaSoulFolderItemId),
+      cursor:OliviaSoulFolderItemId(current),
+    };
+  }catch(error){return null}
+}
+window.OliviaSoulPlayerState=OliviaSoulPlayerState;
+function OliviaSoulStopPlayback(){
+  try{
+    Ct({cmd:"stop"});
+    m.value=false;u.value=null;f.value=null;d.value=0;
+    return true;
+  }catch(error){return false}
+}
+window.OliviaSoulStopPlayback=OliviaSoulStopPlayback;
 '@
-$songEditorBridge = $songEditorBridge.Replace('__OLIVIA_SONG_EDITOR_BASE__', $songEditorBase)
 $songTitleSync = @'
 function OliviaSoulApplySongMetadata(metadata){window.OliviaSoulSongEditor.applyMetadata([...x.value,u.value,f.value],metadata)}
 let OliviaSoulTitleBusy=false,OliviaSoulTitleEpoch=0;
@@ -192,7 +232,8 @@ $text = $text.Replace($toggleLocalFrom, $toggleLocalTo)
 # g30：随机播放不再连续抽到同一首 —— Fisher-Yates 牌堆 + 游标 + localStorage。
 # 官方原本是「每次随机抽 + 排除最近 K 首」：K=clamp(2,floor(len/3),5)，短歌单（<=6 首）排除窗口一吃满
 # 就退化成「只排除当前」的纯随机；播放历史 I.value 又会被切页面/切模式清空，所以历史法天生不可靠。
-# 牌堆本体放 $shuffleDeckSource，注入到 bundle 顶部（与 x/a/u/f 同作用域），这里只改 4 个调用点：
+# 牌堆本体放 $shuffleDeckSource，注入到播放器工厂内部（与 x/a/u/f 同作用域 —— 锚点见 $playerFactoryFrom），
+# 这里只改 4 个调用点：
 # 下一首、上一首、songlist 页面的「播放」（原来固定播第一首可用曲，根本不随机）、切到随机模式。
 # 不动 S()（上一首按钮）：它走 L()，游标已经在 L() 里退好了，I.value 的既有行为原样保留。
 $shuffleDeckSource = @'
@@ -400,9 +441,15 @@ $playerStateExportTo = 'playSonglistItem:A,applyLocalPlayerState:OliviaSoulApply
 $playerStateExportCount = ([regex]::Matches($text, [regex]::Escape($playerStateExportFrom))).Count
 if ($playerStateExportCount -ne 1) { throw "expected one player store export, got $playerStateExportCount" }
 $text = $text.Replace($playerStateExportFrom, $playerStateExportTo)
-$songTitleSyncFrom = 'const te=j(()=>{if(h.value==="songlist"&&f.value)return f.value;'
-if (([regex]::Matches($text,[regex]::Escape($songTitleSyncFrom))).Count -ne 1) { throw "expected one local title store anchor" }
-$text = $text.Replace($songTitleSyncFrom, ($songTitleSync + $songTitleSyncFrom))
+$playerFactoryFrom = 'const te=j(()=>{if(h.value==="songlist"&&f.value)return f.value;'
+if (([regex]::Matches($text,[regex]::Escape($playerFactoryFrom))).Count -ne 1) { throw "expected one local player factory anchor" }
+# 工厂内部注入，顺序：随机牌堆 → 曲名同步 → 播放歌单桥。
+# 三者都引用工厂局部变量（牌堆 x/a/u/f，曲名同步 x/u/f，播放桥 x/p/t/Se/ot/M/Ct），
+# 所以必须与锚点同作用域 —— 这是 2026-10-12 第二十五轮复核的核心结论。
+$insidePlayerFactory = ""
+if ($shuffleDeckApplied) { $insidePlayerFactory += $shuffleDeckSource + "`n" }
+$insidePlayerFactory += $songTitleSync + "`n" + $playFolderBridge + "`n"
+$text = $text.Replace($playerFactoryFrom, ($insidePlayerFactory + $playerFactoryFrom))
 $songEditorRowFrom = 'n("p",Ox,v(X.song.originalAuthor)+" • "+v(o(G)),1)],2)'
 $songEditorRowTo = 'n("p",Ox,v(X.song.originalAuthor)+" • "+v(o(G)),1),String(X.song.videoUrl||"").includes("/toy/midi/songs/")?n("button",{type:"button",style:{fontSize:"12px",textAlign:"left",color:"#4c8778",marginTop:"4px"},onClick:Oe(()=>OliviaSoulEditSong(X.song),["stop"]),onDblclick:Oe(()=>{},["stop"])},"名称 / 时段"):Y("",!0)],2)'
 if (([regex]::Matches($text,[regex]::Escape($songEditorRowFrom))).Count -ne 1) { throw "expected one local song row editor anchor" }
@@ -781,8 +828,22 @@ foreach ($replacementBase64 in $localeReplacementBase64) {
 }
 [IO.File]::WriteAllText($localePath, $localeText, $utf8)
 
-$shuffleInjection = if ($shuffleDeckApplied) { $shuffleDeckSource + "`n" } else { "" }
-$text = $patchMarker + "`n" + $songEditorSource + "`n" + $shuffleInjection + $songEditorBridge + "`n" + $text.Substring($patchMarker.Length)
+# 顶部只保留共享编辑器与编辑/移除桥：$songEditorBridge 里的函数是按名字被游戏组件调用的
+# （见 $songEditorRowTo / $removeRowTo 的 onClick），必须在模块顶层。
+# 随机牌堆与播放歌单桥不能放这里 —— 它们引用播放器工厂局部变量，已在 $playerFactoryFrom 处注入。
+$text = $patchMarker + "`n" + $songEditorSource + "`n" + $songEditorBridge + "`n" + $text.Substring($patchMarker.Length)
+# g30b 作用域护栏（2026-10-12 加）：注入机制是 Replace(anchor, inside + anchor)，所以这些函数必须
+# 落在锚点之前紧邻的注入区里。若落到 bundle 顶部（距锚点十万字符），它们引用的工厂局部变量不可见，
+# 运行时会抛 ReferenceError —— 这正是 1.2.1「播放这个歌单 / 随机播放」坏掉的根因。
+$factoryAnchorAt = $text.IndexOf($playerFactoryFrom)
+if ($factoryAnchorAt -lt 0) { throw "player factory anchor disappeared during patching" }
+foreach ($factorySymbol in @("function OliviaSoulPlayFolder", "function OliviaSoulFolderItemId", "function OliviaSoulPlayerState", "function OliviaSoulStopPlayback", "function OliviaSoulShuffleNextIndex", "function OliviaSoulShuffleUsable", "function OliviaSoulShuffleRestart")) {
+    $factorySymbolAt = $text.IndexOf($factorySymbol)
+    if ($factorySymbolAt -lt 0) { throw "patched bundle missing $factorySymbol" }
+    if ($factorySymbolAt -ge $factoryAnchorAt -or ($factoryAnchorAt - $factorySymbolAt) -gt 60000) {
+        throw "$factorySymbol injected outside the player factory (offset $factorySymbolAt vs anchor $factoryAnchorAt) - it would reference undefined factory locals"
+    }
+}
 [IO.File]::WriteAllText($mainPath, $text, $utf8)
 
 # g27：注入后 JS 语法校验 —— 续播等注入一旦把 main 的 JS 写坏，游戏前端会整体失效。
@@ -838,7 +899,10 @@ if (-not $verifyText.StartsWith($patchMarker)) { throw "patched archive missing 
 if (-not $verifyText.Contains($songEditorSource) -or -not $verifyText.Contains($songEditorRowTo) -or -not $verifyText.Contains($songTitleSync)) { throw "patched archive missing shared song editor or title synchronization" }
 if (-not $verifyText.Contains($songFavoritesAddTo)) { throw "patched archive missing the favorites add-to-playlist hook" }
 if (-not $verifyText.Contains($songRowIdTo)) { throw "patched archive missing the song row id attribute" }
+if (-not $verifyText.Contains($playFolderBridge)) { throw "patched archive missing the favorites play bridge source" }
 if (-not $verifyText.Contains('window.OliviaSoulPlayFolder=OliviaSoulPlayFolder')) { throw "patched archive missing the favorites play bridge" }
+if (-not $verifyText.Contains('window.OliviaSoulPlayerState=OliviaSoulPlayerState')) { throw "patched archive missing the local player state bridge" }
+if (-not $verifyText.Contains('window.OliviaSoulStopPlayback=OliviaSoulStopPlayback')) { throw "patched archive missing the local playback stop bridge" }
 if (-not $verifyText.Contains('admin/game-letter-timeline.js')) { throw "patched archive missing the letter timeline script" }
 if (-not $verifyText.Contains($offlineWidgetsEnabled)) { throw "patched archive still disables offline desktop widgets" }
 if (-not $verifyText.Contains($settingsInitTo)) { throw "patched archive still accepts hidden desktop widget settings" }

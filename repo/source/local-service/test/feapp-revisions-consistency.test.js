@@ -7,6 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { FEAPP_REVISIONS, feappMarkerStartsWithExpression, feappRevisionAtLeast, feappRevisionRank, isKnownFeappRevision } from '../desktop/feapp-revisions.js';
 
 const DESKTOP = new URL('../desktop/', import.meta.url);
@@ -162,4 +163,39 @@ test('打包清单必须覆盖 midi 下的全部本支模块（上游未打包�
   const actual = (await readdir(new URL('../midi/', import.meta.url))).filter(name => name.endsWith('.js'));
   const missing = actual.filter(name => !listed.has(name) && !upstreamOnly.has(name));
   assert.deepEqual(missing, [], `midi 下这些模块没进打包清单：${missing.join('、')}`);
+});
+
+// ---- 游戏内注入脚本的内容护栏（2026-10-12 新增）--------------------------------------
+// 背景：v62 / v63 给游戏端挂了歌单与信件时间线脚本；1.2.0 又在 game-favorites.js 里加了
+// 「常驻歌单入口 + 空歌单创建态」，marker 却一直停在 v63 —— 全部单元测试绿，直到用户真机
+// 点了才发现「新入口看不到」。上面 9 条断言都围绕「同一份版本列表有没有被抄到多处」，
+// 没有一条把**脚本内容**与**marker 版本**绑起来，所以这类「升了脚本忘了升 marker」抓不住。
+//
+// 做法（真机反馈修复单 §9.4 的简易版）：基线文件 test/feapp-injected-scripts.baseline.json
+// 记住 marker 与那四个脚本的 SHA-256。改脚本 ⇒ 哈希对不上 ⇒ 红；只改基线 marker ⇒ 与
+// FEAPP_REVISIONS 最新版本不一致 ⇒ 红。两个方向都用 mut-config-feapp-scripts.json 验过。
+const INJECTED_BASELINE = new URL('./feapp-injected-scripts.baseline.json', import.meta.url);
+const hashOf = text => createHash('sha256').update(text.replace(/\r\n/gu, '\n'), 'utf8').digest('hex');
+
+test('游戏内注入脚本的内容与基线一致（改脚本必须同步升 marker 并更新基线）', async () => {
+  const baseline = JSON.parse(await readFile(INJECTED_BASELINE, 'utf8'));
+  const drifted = [];
+  for (const [relative, expected] of Object.entries(baseline.scripts)) {
+    const text = await readFile(new URL(`../${relative}`, import.meta.url), 'utf8');
+    const actual = hashOf(text);
+    if (actual !== expected) drifted.push(`${relative}（基线 ${expected.slice(0, 12)}… / 实际 ${actual.slice(0, 12)}…）`);
+  }
+  assert.deepEqual(drifted, [],
+    `这些注入脚本的内容变了，但基线没更新：\n${drifted.join('\n')}\n`
+    + '改了游戏内脚本就要升补丁 marker（desktop/feapp-revisions.js 的 FEAPP_REVISIONS、'
+    + 'tools/patch-feapp-local.ps1 的 $patchMarker、tools/get-feapp-status.ps1 的 $currentMarker 与 '
+    + '$knownMarkers、test/api.test.js 里那两处字面量），然后更新 test/feapp-injected-scripts.baseline.json。');
+});
+
+test('注入脚本基线的 marker 必须是 FEAPP_REVISIONS 里的最新版本', async () => {
+  const baseline = JSON.parse(await readFile(INJECTED_BASELINE, 'utf8'));
+  const latest = FEAPP_REVISIONS[FEAPP_REVISIONS.length - 1];
+  assert.ok(FEAPP_REVISIONS.includes(baseline.marker), `基线 marker ${baseline.marker} 不在已知版本列表里`);
+  assert.equal(baseline.marker, latest,
+    `注入脚本基线停在 ${baseline.marker}，而 FEAPP_REVISIONS 最新是 ${latest} —— 两者必须同步。`);
 });

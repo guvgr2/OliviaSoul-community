@@ -971,7 +971,7 @@
     keepSave.addEventListener("click", () => { void saveBackupKeep(); });
     keepCleanup.addEventListener("click", () => { void cleanupPeriodicBackups(); });
     exportDataButton.addEventListener("click", () => { void exportAllData(); });
-    importDataButton.addEventListener("click", () => importDataInput.click());
+    importDataButton.addEventListener("click", () => window.pickFile(importDataInput));
     importDataInput.addEventListener("change", () => {
       const file = importDataInput.files?.[0];
       importDataInput.value = "";
