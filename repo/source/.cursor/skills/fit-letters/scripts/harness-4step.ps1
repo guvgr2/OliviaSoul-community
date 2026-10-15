@@ -237,6 +237,39 @@ function Test-SafeLedgerFormat([string]$Text, [int]$ExpectedLines, $Relationship
     }
     return $true
 }
+# ---- 禁补史机械护栏（2026-10-16）-----------------------------------------------
+# 为什么需要它：harness/04-尾端检查.md 的「历史证据」一栏要求「草稿引用的旧话、
+# 旧称呼、旧约定、旧动作或共同事实，必须能在近期原文或带 ID 与哈希的检索原文中
+# 找到」，但那一栏的「过 / 违规」也是**模型自己**写的 —— 模型写「过」就真的过了，
+# 全链没有第二层独立去看草稿。这一层不看模型结论，只做一件机械的事：
+#   本轮一篇原文证据都没取到（$historyEvidence.Count -eq 0），草稿却对过去做了
+#   具体断言（命中下面的措辞表）⇒ 判违规，与模型自报的违规同等处理（走 STEP5 重写）。
+# 为什么不会误伤：只在「零证据」时触发（与上面 :299 / :322 的强制检索同源）；
+# 有证据时完全交给 STEP4 的逐句核对。词表刻意只收「指代更早」的措辞 ——
+# 用户本封信里刚说的话一般不会用「上次 / 上回 / 以前 / 还记得」这些词。
+# 中文用码点拼：与本文件既有的 $blockWord / $badWord 保持一致，避免编码差异吃掉判定词。
+$historyClaimWords = @(
+    (-join @([char]0x4E0A, [char]0x6B21)),                                                     # 上次
+    (-join @([char]0x4E0A, [char]0x56DE)),                                                     # 上回
+    (-join @([char]0x4E0A, [char]0x5C01)),                                                     # 上封
+    (-join @([char]0x524D, [char]0x4E9B, [char]0x5929)),                                       # 前些天
+    (-join @([char]0x8FD8, [char]0x8BB0, [char]0x5F97)),                                       # 还记得
+    (-join @([char]0x4F60, [char]0x8DDF, [char]0x6211, [char]0x8BF4, [char]0x8FC7)),           # 你跟我说过
+    (-join @([char]0x4F60, [char]0x8BB2, [char]0x8FC7)),                                       # 你讲过
+    (-join @([char]0x4F60, [char]0x7B54, [char]0x5E94, [char]0x8FC7)),                         # 你答应过
+    (-join @([char]0x6BCF, [char]0x6B21, [char]0x4F60, [char]0x90FD)),                         # 每次你都
+    (-join @([char]0x4F60, [char]0x4EE5, [char]0x524D, [char]0x603B, [char]0x662F))            # 你以前总是
+)
+function Get-DraftHistoryClaims([string]$Draft, [int]$EvidenceCount) {
+    if ($EvidenceCount -gt 0) { return @() }
+    if ([string]::IsNullOrWhiteSpace($Draft)) { return @() }
+    $pattern = ($historyClaimWords | ForEach-Object { [regex]::Escape($_) }) -join '|'
+    return @(
+        ($Draft -split "`r?`n") |
+            Where-Object { $_.Trim().Length -gt 0 -and $_ -match $pattern } |
+            ForEach-Object { $_.Trim() }
+    )
+}
 $invalidSafe = -not (Test-SafeLedgerFormat -Text $safe -ExpectedLines $expectedSafeLines -Relationships $allowedRelationships)
 if ($invalidSafe -and [string]::IsNullOrWhiteSpace($ReuseSafeTag)) {
     Write-Output ("STEP1 repair-format " + $Person + " " + $nn)
@@ -488,6 +521,13 @@ $bad = @(
         if ($parts.Count -ge 2 -and $parts[1].Trim() -eq $badWord) { $line }
     }
 )
+# 禁补史机械护栏：零原文证据 + 草稿引用过去 ⇒ 与模型自报的违规同等处理
+$claimLabel = -join @([char]0x5386, [char]0x53F2, [char]0x5F15, [char]0x7528)   # 历史引用
+$draftClaims = @(Get-DraftHistoryClaims -Draft $draft -EvidenceCount $historyEvidence.Count)
+if ($draftClaims.Count -gt 0) {
+    Write-Output ("STEP4 antifabrication " + $Person + " " + $nn + " claims=" + $draftClaims.Count)
+    $bad += @($draftClaims | ForEach-Object { $claimLabel + $fullWidthSpace + $badWord + $fullWidthSpace + "本轮没有取到原文证据；" + $_ })
+}
 if ($bad.Count -eq 0) {
     Save-Step "5final" $draft
     Write-Output ("STEP5 clean " + $Person + " " + $nn)
@@ -513,6 +553,10 @@ else {
             if ($parts.Count -ge 2 -and $parts[1].Trim() -eq $badWord) { $line }
         }
     )
+    $recheckClaims = @(Get-DraftHistoryClaims -Draft $final -EvidenceCount $historyEvidence.Count)
+    if ($recheckClaims.Count -gt 0) {
+        throw ("STEP5 rewritten reply still fabricates history without evidence: " + ($recheckClaims -join " / "))
+    }
     if ($recheckBad.Count -gt 0) { throw "STEP5 rewritten reply still violates hard checks" }
     Save-Step "5final" $final
 }
