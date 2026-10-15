@@ -486,6 +486,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .debugCard { border: 1px solid #303138; border-radius: 9px; background: #1d1e22; padding: 14px; }
 .debugCard > small, .quotaReset small { display: block; margin-top: 7px; color: #7f7f85; }
 .debugCard input[type="number"] { width: 220px; }
+.proactiveRoutine { display: grid; gap: 8px; margin-top: 10px; }
+.proactiveRow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.proactiveRow input[type="time"] { width: 108px; }
+.proactiveRow input[type="text"] { flex: 1 1 180px; min-width: 140px; }
+.proactiveRow select { min-width: 96px; }
+.proactiveSep { color: #7f7f85; }
 .debugSummaries { display: grid; gap: 16px; border-top: 1px solid #303138; margin-top: 14px; padding-top: 14px; }
 .debugSummaries[hidden], #bulkSummarySection[hidden] { display: none; }
 .debugSummaries p { color: #b9b5ae; line-height: 1.7; white-space: pre-wrap; }

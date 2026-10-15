@@ -28,8 +28,12 @@ function Get-ArchiveExchanges {
         $n = [int]$hm.Groups[1].Value
         $him = ""
         $her = ""
+        $reason = ""
         $hmHim = [regex]::Match($p, '(?s)#### 我（信件）\s*\n(.*?)(?=\n#### |\z)')
         if ($hmHim.Success) { $him = $hmHim.Groups[1].Value.Trim() }
+        # 主动信那一轮没有他的来信，末段是「由头」而不是「我（信件）」。
+        $hmReason = [regex]::Match($p, '(?s)#### 由头\s*\n(.*?)(?=\n#### |\z)')
+        if ($hmReason.Success) { $reason = $hmReason.Groups[1].Value.Trim() }
         $hmHer = [regex]::Match($p, '(?s)#### 林离（[^）]*）\s*\n(.*)$')
         if ($hmHer.Success) {
             $her = $hmHer.Groups[1].Value
@@ -39,7 +43,7 @@ function Get-ArchiveExchanges {
             $her = [regex]::Replace($her, '(?s)\n##\s+(?:\d{4}-\d{2}-\d{2}|未注明日期)\s*\z', '')
             $her = $her.Trim()
         }
-        $list += New-Object psobject -Property @{ N = $n; Him = $him; Her = $her }
+        $list += New-Object psobject -Property @{ N = $n; Him = $him; Her = $her; Reason = $reason }
     }
     return @($list | Sort-Object N)
 }

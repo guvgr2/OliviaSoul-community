@@ -56,6 +56,7 @@
           <details class="sideGroup" data-group="letters" open>
             <summary class="sideGroupTitle" data-tip="记忆整理与信件往来"><span>信件与记忆</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
             <button class="sideTab" type="button" data-tab="memory" data-tip="记忆：查看与编辑已整理的记忆、今日信件与来信记录">记忆</button>
+            <button class="sideTab" type="button" data-tab="proactive" data-tip="主动来信：她什么时候会先写给你 · 她的作息 · 现在为什么不写">主动来信</button>
           </details>
 
           <details class="sideGroup" data-group="naming" open>
@@ -114,6 +115,7 @@
               <li><b>桌面歌词外观</b> → 「客户端与歌词 → <em>歌词设置</em>」</li>
               <li><b>换模型 / 想用别的模型</b> → 「基础与设置 → <em>AI 模型</em>」：在「<b>选择模型</b>」里挑一个（DeepSeek 的 <b>deepseek-flash</b> / <b>deepseek-v4-pro</b>，智谱 GLM 的 <b>glm-5.3-flash</b> / <b>glm-5.3-flashx</b> / <b>glm-5.3</b>，Kimi 的 <b>kimi-k3</b> / <b>kimi-k2.6</b> / <b>kimi-k2.7-code</b>，MiniMax 的 <b>M2-her</b>（角色扮演、多轮闲聊），豆包（火山方舟）的 <b>doubao-seed-character-260628</b> / <b>doubao-seed-character-251128</b> / <b>doubao-seed-2-0-mini-260428</b>（<b>需先在火山方舟控制台开通模型</b>，未开通会报 403）），或选「<b>自定义</b>」自己填接口地址与模型名。<b>选哪个就用哪个，程序不会自动切换</b>；换完要填 Key 并点「保存并测试远程模型」</li>
               <li><b>记忆与信件</b> → 「信件与记忆 → <em>记忆</em>」</li>
+              <li><b>她什么时候会主动写信给我 / 能不能关掉</b> → 「信件与记忆 → <em>主动来信</em>」：开关、每天与每周上限、隔多久没写信她才可能先写，以及<b>她自己的作息</b>（几点睡、几点起、上课与练琴时段）都在这里改；页面会直接写清<b>现在为什么不写</b></li>
               <li><b>使用声明 / 隐私 / 开源许可</b> → 「基础与设置 → <em>声明与合规</em>」</li>
               <li><b>管理游戏里的歌单 / 建收藏夹</b> → <b>游戏内</b>：<b>「音乐桌面」面板标题行右侧</b>有「歌单」切换键（认游戏语言包渲染出来的「音乐桌面」文字，1.2.1 起的主入口），页面上没有那块面板时改为曲库页右下角常驻的「歌单」按钮（主色实心、带 ▶，一个歌单都还没建时也能点开、并当场新建）；也可以在曲库与作品列表里每首歌的「加播单」上点开本地歌单下拉，勾选即可加进去；已经进过歌单的曲目会在行右上角显示「已在 N 个歌单」；下拉底部「＋新建歌单」可以当场建，右上「管理歌单」能改名 / 调顺序 / 一键切播（每个歌单片左边的小 ▶ 点一下就切到那一夹并开始播，正在放的那一夹标着「播放中」）。<b>想批量操作（一次灌入整个曲库、拖拽排序、导入导出、导出歌单分享码）就去「曲库与作品 → 歌单与收藏」</b>，两边是同一份数据</li>
               <li><b>在另一台机器 / 另一个安装上恢复歌单</b> → 「曲库与作品 → <em>歌单与收藏</em>」里选一份歌单点「导出歌单」：可以「复制文本」，也可以用「下载」拿到 .osfolder 文件（游戏内歌单弹层里的分享码区块自 1.2.1 起已撤下，导出统一走这条路）。分享码里只有曲目 id、不带曲库文件，所以那台机器的曲库里必须有同样的歌；导入时选文件即可自动匹配曲库，匹配不上的会逐条列出来告诉你（一首都没匹配上时会说明歌单会是空的）</li>
@@ -684,6 +686,61 @@
             </section>
           </div>
         </section>
+      <section class="panel tabPage" data-page="proactive" data-panel-mount="keep" hidden>
+        <div class="panelHead">
+          <div>
+            <h2>主动来信</h2>
+            <p>让她偶尔先写信给你。由头来自你们聊过的事、你反复在听的曲子，以及「隔了多久」—— 她只在自己方便的时候写，写之前也会先看看有没有话想说。</p>
+          </div>
+        </div>
+
+        <section class="debugCard">
+          <div>
+            <label class="check"><input id="proactiveEnabled" type="checkbox"><span>允许她主动写信</span></label>
+            <small>关掉后她只会回信。<b>开着也不会写得很勤</b> —— 默认每 7 天最多 2 封、每天最多 1 封；你没回的时候会越等越久，而且不会一直等下去。</small>
+          </div>
+        </section>
+
+        <section class="debugCard">
+          <div>
+            <label>现在为什么不写</label>
+            <span id="proactiveVerdict" class="result">正在读取…</span>
+          </div>
+        </section>
+
+        <section class="debugCard">
+          <div>
+            <label for="proactiveMaxPerDay">每天最多（封）</label>
+            <input id="proactiveMaxPerDay" type="number" min="0" max="10" step="1">
+          </div>
+          <div>
+            <label for="proactiveMaxPerWeek">每 7 天最多（封）</label>
+            <input id="proactiveMaxPerWeek" type="number" min="0" max="30" step="1">
+          </div>
+          <div>
+            <label for="proactiveMinSilenceDays">你多久没写信后，她才可能先写（天）</label>
+            <input id="proactiveMinSilenceDays" type="number" min="0" max="90" step="1">
+          </div>
+        </section>
+
+        <section class="debugCard">
+          <strong>她自己的作息</strong>
+          <small>她只在自己方便的时候写信。下面这些是她「在忙、不方便写」的时段 —— 没列出来的时间就是方便的；你给她写信、她回信不受这些限制。</small>
+          <div id="proactiveRoutine" class="proactiveRoutine"></div>
+          <div class="actions">
+            <button id="proactiveAddSlot" class="secondary" type="button">再加一段</button>
+          </div>
+        </section>
+
+        <section class="debugCard">
+          <div class="actions">
+            <button id="saveProactiveSettings" class="secondary" type="button">保存</button>
+            <button id="resetProactiveSettings" class="secondary" type="button">恢复默认</button>
+            <button id="checkProactiveNow" class="secondary" type="button">现在检查一次</button>
+            <span id="proactiveSaveResult" class="result"></span>
+          </div>
+        </section>
+      </section>
       <section class="panel tabPage" data-page="folders" hidden></section>
       <section class="panel tabPage" data-page="library-health" hidden></section>
       <section class="panel tabPage" data-page="listen-naming" hidden></section>
@@ -712,6 +769,7 @@
       </div>
     </section>
   </div>
+  <script src="/admin/proactive-settings.js"></script>
   <script src="/admin/listen-naming.js"></script>
   <script src="/admin/listen-naming-tools.js"></script>
     <script src="/admin/panel-host.js"></script>

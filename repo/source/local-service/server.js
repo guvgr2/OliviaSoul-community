@@ -70,6 +70,15 @@ import { checkMigrationCapacity, resolveSongStoragePath, storageDirectories } fr
 import { createStorageMigrationManager } from "./storage-migration.js";
 import { mergeLegacyDatabases, restoreLegacyModelConfig } from "./data-migration.js";
 import {
+  PROACTIVE_DEFAULTS,
+  PROACTIVE_DEFAULT_ROUTINE,
+  PROACTIVE_REASONS,
+  evaluateProactiveLetter,
+  normalizeProactiveSettings,
+  normalizeRoutine,
+  proactiveReasonLabel,
+} from "./proactive-letters.js";
+import {
   activeModelProfile,
   buildChatRequest,
   buildModelListRequest,
@@ -91,9 +100,18 @@ const JSON_HEADERS = {
   "Cache-Control": "no-store",
 };
 const REPLY_DELAY_SECONDS = 300;
+// 主动来信：多久看一次「她能不能先写一封」（由头判定很便宜，真正的生成只在判定通过时发生）。
+const PROACTIVE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+/** 分钟数 → "HH:MM"（parseClock 的反函数，导出供设置页与测试用）。 */
+export function clockText(minutes) {
+  const value = Math.max(0, Math.min(1440, Number(minutes) || 0));
+  return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
+}
 const REPLY_DELAY_SETTING = "reply_delay_seconds_v2";
 const DAILY_LETTER_LIMIT_SETTING = "daily_letter_limit";
 const LETTER_REVISION_SETTING = "letter_revision";
+// 主动来信（她的参数）：存成一条 JSON，读写同一处；默认尺度来自 proactive-letters.js。
+const PROACTIVE_LETTER_SETTING = "proactive_letter_settings_v1";
 const STORAGE_REVISION_SETTING = "storage_revision";
 const LAST_SONG_STORAGE_PATH_SETTING = "last_song_storage_path";
 const DEFAULT_DAILY_LETTER_LIMIT = 3;
@@ -700,6 +718,15 @@ function initDatabase(path) {
     db.exec("ALTER TABLE letters ADD COLUMN reply_label TEXT NOT NULL DEFAULT '回信'");
   if (!letterColumns.some(column => column.name === "content_md5"))
     db.exec("ALTER TABLE letters ADD COLUMN content_md5 TEXT");
+  // 历史修复（2026-10-16）：主动来信落占位行时没写 reply_type（吃列默认值 0），生成完成后也只更新了
+  // status / reply_text —— 而 visibleLetter 把 reply_type 当作「她到底回没回」返回给游戏端（replyType:
+  // available ? row.reply_video ? 2 : row.reply_type : 0）。reply_type 停在 0 ⇒ 详情页永远显示
+  // 「林离回信中…」。这里把「已生成完的主动信」补成文字回信（reply_text 非空才算生成完）。
+  db.prepare(`
+    UPDATE letters SET reply_type = 1
+    WHERE source = 'proactive' AND status = ? AND reply_type = 0
+      AND reply_text IS NOT NULL AND reply_text <> ''
+  `).run(STATUS.REPLIED);
   const letterSummaryColumns = db.prepare("PRAGMA table_info(letter_summaries)").all();
   if (!letterSummaryColumns.some(column => column.name === "prompt_version"))
     db.exec("ALTER TABLE letter_summaries ADD COLUMN prompt_version TEXT NOT NULL DEFAULT ''");
@@ -794,8 +821,8 @@ export function isSqliteCorruptionError(error) {
   return /malformed|not a database|unsupported file format/iu.test(String((error && error.message) ?? error ?? ""));
 }
 
-export function validateHarnessReply(stdout, reply) {
-  if (!stdout.includes("HARNESS LIVE DONE"))
+export function validateHarnessReply(stdout, reply, doneMarker = "HARNESS LIVE DONE") {
+  if (!stdout.includes(doneMarker))
     throw new Error("Harness 未报告完成");
   const normalized = reply.trim();
   if (!normalized) throw new Error("Harness 返回空正文");
@@ -831,6 +858,38 @@ async function deepSeekGenerator({ person, content, id, root, tempDir, historySn
     return validateHarnessReply(processResult.stdout, await readFile(replyFile, "utf8"));
   } finally {
     await rm(historyFile, { force: true });
+  }
+}
+
+/**
+ * 她主动写一封（没有你的来信）：把「由头」写进临时文件交给 harness-proactive.ps1。
+ * 与 deepSeekGenerator 共用同一套「步骤日志 + 完成标记 + 非空校验」，只有入口脚本与完成标记不同。
+ */
+async function proactiveLetterGenerator({ person, reasonText, id, root, tempDir }) {
+  const harnessVersion = (await readFile(join(root, "harness", "VERSION"), "utf8")).trim();
+  if (harnessVersion !== "v18") throw new Error(`Harness 版本不正确：${harnessVersion || "缺失"}`);
+  const reasonFile = join(tempDir, `${id}.reason.txt`);
+  const replyFile = join(tempDir, `${id}.proactive.txt`);
+  await writeFile(reasonFile, reasonText, "utf8");
+  try {
+    let progressBuffer = "";
+    const processResult = await runProcess("powershell.exe", [
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+      join(root, ".cursor", "skills", "fit-letters", "scripts", "harness-proactive.ps1"),
+      "-Person", person, "-Reason", reasonFile, "-OutFile", replyFile,
+      "-RulesFile", join(root, "harness", "写法.md"), "-Root", root,
+    ], root, GENERATION_TIMEOUT_MS, undefined, chunk => {
+      progressBuffer += chunk;
+      const lines = progressBuffer.split(/\r?\n/u);
+      progressBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const stage = /^(STEP\d+\s+[\w-]+)/u.exec(line.trim())?.[1];
+        if (stage) console.log(`[harness-stage] id=${id} stage=${stage} proactive=1`);
+      }
+    });
+    return validateHarnessReply(processResult.stdout, await readFile(replyFile, "utf8"), "HARNESS PROACTIVE DONE");
+  } finally {
+    await rm(reasonFile, { force: true });
   }
 }
 
@@ -986,6 +1045,7 @@ export async function createOliviaService(options = {}) {
     if (row.reply_video) await rm(join(videosDir, row.reply_video), { force: true });
   }
   const generator = options.generator ?? deepSeekGenerator;
+  const proactiveGenerator = options.proactiveGenerator ?? proactiveLetterGenerator;
   const request = options.fetch ?? fetch;
   const updateRequest = options.updateFetch ?? options.fetch ?? createUpdateFetch();
 
@@ -1254,6 +1314,8 @@ export async function createOliviaService(options = {}) {
   let midiLibraryWatcher = null;
   let midiLibraryWatchedRoot = "";
   let storagePollTimer;
+  let proactiveLetterTimer;
+  let proactiveLetterBusy = false;
   let periodicBackup;
   let closing = false;
   let lastClientAt = null;
@@ -1980,6 +2042,7 @@ export async function createOliviaService(options = {}) {
   function visibleLetter(row, req, at = nowSeconds()) {
     const available = row.status === STATUS.REPLIED && (row.source === "import" || row.available_at <= at);
     const status = row.status === STATUS.REPLIED && !available ? STATUS.LLM_PROCESSING : row.status;
+    const proactive = row.source === "proactive";
     const result = {
       letterId: row.id,
       content: row.content,
@@ -2003,6 +2066,11 @@ export async function createOliviaService(options = {}) {
         visibleStates.set(key, signature);
         console.log(`[letter-visible] route=${route} id=${row.id} status=${result.letterStatus} replyType=${result.replyType} hasReply=${Boolean(result.replyText)}`);
       }
+    }
+    if (proactive) {
+      // 她先写来的信没有你的来信：摘要不能是空白（否则游戏端那一栏是空的）。
+      result.proactive = true;
+      result.summary = "（这次是她先写来的）";
     }
     return result;
   }
@@ -2085,6 +2153,9 @@ export async function createOliviaService(options = {}) {
       exchange.stateLabel = replied ? "已回信" : row.status === STATUS.FAILED ? "回信失败" : "等待回信";
       exchange.readLabel = replied ? row.is_read ? "已读" : "未读" : "";
     }
+    // 她先写来的信也走同一条往来记录；只在这一条上多一个标记，不动既有字段
+    // （既有契约测试按整个对象比较，多一个恒为 false 的字段就会把它们打红）。
+    if (row.source === "proactive") exchange.proactive = true;
     return exchange;
   }
 
@@ -3109,7 +3180,8 @@ export async function createOliviaService(options = {}) {
     ).get(row.user_id).value;
     db.prepare(`
       UPDATE letters SET
-        memory_order = ?, letter_date = ?, letter_time = ?, reply_label = '回信',
+        memory_order = ?, letter_date = ?, letter_time = ?,
+        reply_label = CASE WHEN source = 'proactive' THEN reply_label ELSE '回信' END,
         content_md5 = ?, archived_at = ?, memory_error = NULL
       WHERE id = ?
     `).run(
@@ -3145,7 +3217,7 @@ export async function createOliviaService(options = {}) {
   }
 
   async function processOne() {
-    const row = db.prepare("SELECT * FROM letters WHERE status = ? ORDER BY created_at, rowid LIMIT 1").get(STATUS.PENDING);
+    const row = db.prepare("SELECT * FROM letters WHERE status = ? AND source <> 'proactive' ORDER BY created_at, rowid LIMIT 1").get(STATUS.PENDING);
     if (!row) return false;
     const startedAt = Date.now();
     let memoryJob = memoryJobs.get(row.person);
@@ -3236,6 +3308,155 @@ export async function createOliviaService(options = {}) {
     workerTimer = setTimeout(() => {
       workerPromise = drainWorker().finally(() => workerPromise = null);
     }, 0);
+  }
+
+  // ---- 主动来信：她自己先写一封 --------------------------------------------
+  // 与竞品 bside-olivia-community 的形态差异（见 analysis/1.2.0-待审查清单.md §21）：
+  // **由头驱动**，不是按关系档位定时投递 —— 先看有没有话想说（隔太久了 / 她上封信问过你的事），
+  // 再看上限，最后看她方不方便。判定与尺度全在 proactive-letters.js（纯函数，有单测与变异护栏）。
+  const PROACTIVE_REPLY_LABEL = "她先写来的";
+
+  function readProactiveLetterSettings() {
+    let raw = null;
+    try {
+      raw = JSON.parse(getSetting(PROACTIVE_LETTER_SETTING) ?? "null");
+    } catch {
+      raw = null;
+    }
+    return normalizeProactiveSettings(raw);
+  }
+
+  function saveProactiveLetterSettings(patch) {
+    const current = readProactiveLetterSettings();
+    const merged = {
+      enabled: patch?.enabled === undefined ? current.enabled : patch.enabled === true,
+      maxPerDay: patch?.maxPerDay === undefined ? current.maxPerDay : patch.maxPerDay,
+      maxPerWeek: patch?.maxPerWeek === undefined ? current.maxPerWeek : patch.maxPerWeek,
+      minSilenceDays: patch?.minSilenceDays === undefined ? current.minSilenceDays : patch.minSilenceDays,
+      minGapDays: patch?.minGapDays === undefined ? current.minGapDays : patch.minGapDays,
+      routine: patch?.routine === undefined ? PROACTIVE_DEFAULT_ROUTINE : patch.routine,
+    };
+    const normalized = normalizeProactiveSettings(merged);
+    // 有非法值就**拒绝保存**（而不是静默回退默认值 —— 否则用户以为改好了，其实没生效）。
+    if (normalized.invalid.length) return { ok: false, invalid: normalized.invalid, settings: normalized };
+    setSetting(PROACTIVE_LETTER_SETTING, JSON.stringify({
+      enabled: normalized.enabled,
+      maxPerDay: normalized.maxPerDay,
+      maxPerWeek: normalized.maxPerWeek,
+      minSilenceDays: normalized.minSilenceDays,
+      minGapDays: normalized.minGapDays,
+      routine: merged.routine,
+    }));
+    return { ok: true, invalid: [], settings: normalized };
+  }
+
+  function proactiveRoutinePayload(settings) {
+    return settings.routine.map(slot => ({
+      from: clockText(slot.from),
+      to: clockText(slot.to),
+      activity: slot.activity,
+      label: slot.label,
+      weekdays: slot.weekdays ?? null,
+    }));
+  }
+
+  function proactiveLetterContext(atSeconds = nowSeconds()) {
+    const at = new Date(atSeconds * 1000);
+    const lastUser = db.prepare(
+      "SELECT created_at FROM letters WHERE user_id = ? AND source = 'live' ORDER BY created_at DESC, rowid DESC LIMIT 1"
+    ).get(localUser.id);
+    const lastReply = db.prepare(
+      "SELECT reply_text FROM letters WHERE user_id = ? AND status = ? AND source <> 'proactive' AND reply_text IS NOT NULL AND reply_text <> '' ORDER BY created_at DESC, rowid DESC LIMIT 1"
+    ).get(localUser.id, STATUS.REPLIED);
+    const lastProactive = db.prepare(
+      "SELECT created_at FROM letters WHERE user_id = ? AND source = 'proactive' ORDER BY created_at DESC, rowid DESC LIMIT 1"
+    ).get(localUser.id);
+    const countSince = since => Number(db.prepare(
+      "SELECT COUNT(*) AS n FROM letters WHERE user_id = ? AND source = 'proactive' AND created_at >= ?"
+    ).get(localUser.id, since).n) || 0;
+    const lastUserAt = Number(lastUser?.created_at) || 0;
+    const lastProactiveAt = Number(lastProactive?.created_at) || 0;
+    return {
+      nowMinutes: at.getHours() * 60 + at.getMinutes(),
+      weekday: at.getDay(),
+      // 没写过信时给 undefined（不是 null）：纯函数用 Number.isFinite 判「有没有这个前提」，
+      // 而 Number(null) 是 0，会被误判成「刚好隔了 0 天」。
+      daysSinceUserLetter: lastUserAt ? (atSeconds - lastUserAt) / 86400 : undefined,
+      lastHerReply: lastReply?.reply_text ?? "",
+      daysSinceLastProactive: lastProactiveAt ? (atSeconds - lastProactiveAt) / 86400 : undefined,
+      unansweredProactive: lastProactiveAt && lastUserAt <= lastProactiveAt ? 1 : 0,
+      proactive24h: countSince(atSeconds - 86400),
+      proactive7d: countSince(atSeconds - 7 * 86400),
+    };
+  }
+
+  /** 只判定不生成 —— 设置页与接口都用它（便宜、可解释）。 */
+  function proactiveLetterVerdict(atSeconds = nowSeconds()) {
+    const settings = readProactiveLetterSettings();
+    const verdict = evaluateProactiveLetter(settings, proactiveLetterContext(atSeconds));
+    return { settings, verdict, label: proactiveReasonLabel(verdict.reason) };
+  }
+
+  async function writeProactiveLetter() {
+    const { verdict } = proactiveLetterVerdict();
+    if (!verdict.ok) return { ...verdict, label: proactiveReasonLabel(verdict.reason) };
+    if (proactiveLetterBusy) return { ok: false, reason: "busy", label: "她正在写" };
+    proactiveLetterBusy = true;
+    try {
+      // 先扣：机会一旦用掉就不退还 —— 先落一行占位（用 LLM_PROCESSING，免得被回信 worker 当待生成信件捡走），
+      // 生成失败也只标记失败，不会重发。
+      const createdAt = nowSeconds();
+      const id = randomUUID();
+      db.prepare(`
+        INSERT INTO letters(id, user_id, person, content, status, source, created_at, available_at, audit_status, reply_label)
+        VALUES(?, ?, ?, '', ?, 'proactive', ?, ?, 2, ?)
+      `).run(id, localUser.id, localUser.person, STATUS.LLM_PROCESSING, createdAt, createdAt, PROACTIVE_REPLY_LABEL);
+      console.log(`[proactive-letter] generating id=${id} trigger=${verdict.trigger?.kind ?? "silence"}`);
+      try {
+        const reply = await proactiveGenerator({
+          person: localUser.person,
+          reasonText: verdict.reasonText,
+          id,
+          root,
+          tempDir,
+        });
+        if (!reply.trim()) throw new Error("生成器返回空正文");
+        // reply_type 必须与「普通回信」一致地置为 1（文字），否则 visibleLetter 会把它当「还没回复」——
+        // 游戏端只有 replyType>0 才认为她回了信，漏置时详情页会一直显示「林离回信中…」。
+        db.prepare("UPDATE letters SET status = ?, reply_type = 1, reply_text = ?, replied_at = ?, error = NULL WHERE id = ?")
+          .run(STATUS.REPLIED, reply.trim(), nowSeconds(), id);
+        bumpLetterRevision();
+        console.log(`[proactive-letter] done id=${id}`);
+        await tryArchiveReply(db.prepare("SELECT * FROM letters WHERE id = ?").get(id));
+        setMemoryStatus(localUser.person, "pending");
+        triggerMemoryRefresh(localUser.person);
+        return { ok: true, reason: PROACTIVE_REASONS.READY, label: proactiveReasonLabel(PROACTIVE_REASONS.READY), letterId: id, trigger: verdict.trigger };
+      } catch (error) {
+        console.error(`[proactive-letter-error] id=${id} message=${error.message}`);
+        db.prepare("UPDATE letters SET status = ?, error = ? WHERE id = ?")
+          .run(STATUS.FAILED, `她主动写信失败：${error.message}`, id);
+        return { ok: false, reason: "failed", label: "她这次没写成", letterId: id };
+      }
+    } finally {
+      proactiveLetterBusy = false;
+    }
+  }
+
+  function scheduleProactiveLetter(delayMs = PROACTIVE_CHECK_INTERVAL_MS) {
+    if (options.worker === false || closing) return;
+    clearTimeout(proactiveLetterTimer);
+    proactiveLetterTimer = setTimeout(async () => {
+      try {
+        const result = await writeProactiveLetter();
+        if (!result.ok) console.log(`[proactive-letter] skip: ${result.reason}`);
+      } catch (error) {
+        console.error(`[proactive-letter-error] check message=${error.message}`);
+      } finally {
+        scheduleProactiveLetter();
+      }
+    }, Math.max(1000, delayMs));
+    // 定时器不该拖住进程退出（程序关闭时靠 clearTimeout 收尾）。
+    proactiveLetterTimer.unref?.();
   }
 
   function corsHeaders(req) {
@@ -3425,7 +3646,7 @@ export async function createOliviaService(options = {}) {
     // 正确做法：serveStatic 启动时扫描 publicRoot（只留必要的排除项），或把清单抽成单一常量
     //   并补一条「与 public/ 实际文件比对」的测试，让漏登记在测试期就暴露。
     // 何时回来收拾：下一次新增/删除 public/ 前端文件时，或静态服务改为目录扫描的那一版。
-    if (!["index.html", "app.js", "file-picker-guard.js", "game-lyrics.js", "game-letter-export.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "folder-manager.js", "library-health-panel.js", "game-favorites.js", "game-letter-timeline.js", "update-download-ui.js", "tab-notices.js", "patch-loss-notice.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "diagnostics-panel.js", "twin-groups-panel.js", "game-log-panel.js", "getting-started.js", "game-stability-panel.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
+    if (!["index.html", "app.js", "file-picker-guard.js", "proactive-settings.js", "game-lyrics.js", "game-letter-export.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "folder-manager.js", "library-health-panel.js", "game-favorites.js", "game-letter-timeline.js", "update-download-ui.js", "tab-notices.js", "patch-loss-notice.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "diagnostics-panel.js", "twin-groups-panel.js", "game-log-panel.js", "getting-started.js", "game-stability-panel.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
       throw httpError(404, "文件不存在");
     const file = join(publicRoot, relative);
     const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".png": "image/png" };
@@ -4066,6 +4287,51 @@ export async function createOliviaService(options = {}) {
       const at = nowSeconds();
       const count = Number(db.prepare("SELECT COUNT(*) count FROM letters WHERE user_id = ? AND status = ? AND available_at <= ? AND is_read = 0").get(user.id, STATUS.REPLIED, at).count);
       return ok(req, res, { unreadCount: count });
+    }
+
+    if (req.method === "GET" && path === "/toy/letter/proactive") {
+      const { settings, verdict, label } = proactiveLetterVerdict();
+      return ok(req, res, {
+        enabled: settings.enabled,
+        settings: {
+          maxPerDay: settings.maxPerDay,
+          maxPerWeek: settings.maxPerWeek,
+          minSilenceDays: settings.minSilenceDays,
+          minGapDays: settings.minGapDays,
+          routine: proactiveRoutinePayload(settings),
+        },
+        defaults: { ...PROACTIVE_DEFAULTS, routine: PROACTIVE_DEFAULT_ROUTINE },
+        verdict: { ok: verdict.ok, reason: verdict.reason, label, trigger: verdict.trigger ?? null },
+      });
+    }
+
+    if (req.method === "POST" && path === "/toy/letter/proactive") {
+      const body = await readJson(req);
+      const saved = saveProactiveLetterSettings(body);
+      if (!saved.ok)
+        throw httpError(400, `设置里有不合法的值：${saved.invalid.join("、")}`, -10402);
+      const { verdict, label } = proactiveLetterVerdict();
+      return ok(req, res, {
+        enabled: saved.settings.enabled,
+        settings: {
+          maxPerDay: saved.settings.maxPerDay,
+          maxPerWeek: saved.settings.maxPerWeek,
+          minSilenceDays: saved.settings.minSilenceDays,
+          minGapDays: saved.settings.minGapDays,
+          routine: proactiveRoutinePayload(saved.settings),
+        },
+        verdict: { ok: verdict.ok, reason: verdict.reason, label, trigger: verdict.trigger ?? null },
+      });
+    }
+
+    if (req.method === "POST" && path === "/toy/letter/proactive/check") {
+      const result = await writeProactiveLetter();
+      return ok(req, res, {
+        ok: result.ok,
+        reason: result.reason,
+        label: result.label ?? proactiveReasonLabel(result.reason),
+        letterId: result.letterId ?? null,
+      });
     }
 
     if (req.method === "POST" && path === "/toy/letter/resend") {
@@ -4958,6 +5224,7 @@ export async function createOliviaService(options = {}) {
       return ok(req, res, { delaySeconds: REPLY_DELAY_SECONDS, defaultDelaySeconds: REPLY_DELAY_SECONDS });
     }
 
+
     if (req.method === "POST" && path === "/admin/api/debug/quota/reset") {
       const user = getLocalUser();
       const quota = resetTodayQuota(user.id);
@@ -5657,6 +5924,8 @@ export async function createOliviaService(options = {}) {
   triggerPendingMemoryRefreshes();
   resetMemoryRetryTimer();
   wakeWorker();
+  // 主动来信：启动后按轮询间隔看一次「她能不能先写一封」（判定很便宜，只有判定通过才真的调模型）。
+  scheduleProactiveLetter(PROACTIVE_CHECK_INTERVAL_MS);
   return {
     db,
     lyrics, lyricsPlayback,
@@ -5668,6 +5937,10 @@ export async function createOliviaService(options = {}) {
     server,
     STATUS,
     drainWorker,
+    writeProactiveLetter,
+    proactiveLetterVerdict,
+    readProactiveLetterSettings,
+    saveProactiveLetterSettings,
     async listen(port = 27149, host = "127.0.0.1") {
       await new Promise((resolvePromise, reject) => {
         server.once("error", reject);
@@ -5730,6 +6003,7 @@ export async function createOliviaService(options = {}) {
       const nameCorrectionsClosed = songNameCorrections.close();
       const previewSourcesClosed = resolveSongPreview.close?.();
       clearTimeout(workerTimer);
+      clearTimeout(proactiveLetterTimer);
       clearTimeout(memoryRetryTimer);
       clearTimeout(midiLibrarySyncTimer);
       clearTimeout(durationRepairTimer);

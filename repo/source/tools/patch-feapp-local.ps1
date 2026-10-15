@@ -39,7 +39,7 @@ if ($mainFiles.Count -ne 1) { throw "expected one main-*.js, got $($mainFiles.Co
 $utf8 = New-Object System.Text.UTF8Encoding $false
 $mainPath = $mainFiles[0].FullName
 $text = [IO.File]::ReadAllText($mainPath, $utf8)
-$patchMarker = '/*OliviaSoulPatch:mail-music-v69*/'
+$patchMarker = '/*OliviaSoulPatch:mail-music-v70*/'
 if ($text.Contains($patchMarker)) { throw "original feapp already contains current patch" }
 $text = $patchMarker + $text
 $playerCommandUrl = $ServiceUrl.TrimEnd("/") + "/toy/player-command"

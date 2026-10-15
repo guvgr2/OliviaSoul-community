@@ -245,7 +245,9 @@ function Build-Memory {
         [Parameter(Mandatory = $true)][string]$Person,
         [Parameter(Mandatory = $true)][int]$N,
         [string]$ArchivePath = "",
-        [string]$OpeningPath = ""
+        [string]$OpeningPath = "",
+        # 主动写信：末段从「要回的来信」换成「这次由你先写」。默认关闭，回信路径完全不变。
+        [switch]$Proactive
     )
     $arch = $ArchivePath
     if ([string]::IsNullOrWhiteSpace($arch)) { $arch = Join-Path $Root ("信件往来\{0}.md" -f $Person) }
@@ -310,11 +312,22 @@ function Build-Memory {
         }
     }
 
-    [void]$sb.AppendLine("## 要回的来信（往来 $("{0:D2}" -f $N)）")
-    [void]$sb.AppendLine()
-    [void]$sb.AppendLine("#### 我（信件）")
-    [void]$sb.AppendLine()
-    [void]$sb.AppendLine($cur[0].Him)
+    if ($Proactive) {
+        [void]$sb.AppendLine("## 这次由你先写信（往来 $("{0:D2}" -f $N)）")
+        [void]$sb.AppendLine()
+        [void]$sb.AppendLine("没有他的新来信。下面是你想先写一封的由头。")
+        [void]$sb.AppendLine()
+        [void]$sb.AppendLine("#### 由头")
+        [void]$sb.AppendLine()
+        [void]$sb.AppendLine($cur[0].Reason)
+    }
+    else {
+        [void]$sb.AppendLine("## 要回的来信（往来 $("{0:D2}" -f $N)）")
+        [void]$sb.AppendLine()
+        [void]$sb.AppendLine("#### 我（信件）")
+        [void]$sb.AppendLine()
+        [void]$sb.AppendLine($cur[0].Him)
+    }
 
     $text = $sb.ToString().TrimEnd()
     Write-Utf8 (Join-Path $Root ("_probe\mem_{0}_{1:D2}.md" -f $Person, $N)) $text
@@ -327,7 +340,9 @@ function Build-FactMemory {
         [Parameter(Mandatory = $true)][string]$Person,
         [Parameter(Mandatory = $true)][int]$N,
         [string]$ArchivePath = "",
-        [string]$OpeningPath = ""
+        [string]$OpeningPath = "",
+        # 同 Build-Memory：主动写信时末段是「由头」。默认关闭。
+        [switch]$Proactive
     )
     $arch = $ArchivePath
     if ([string]::IsNullOrWhiteSpace($arch)) { $arch = Join-Path $Root ("信件往来\{0}.md" -f $Person) }
@@ -365,10 +380,19 @@ function Build-FactMemory {
         }
     }
 
-    [void]$sb.AppendLine("## 要回的来信（往来 $("{0:D2}" -f $N)）")
-    [void]$sb.AppendLine()
-    [void]$sb.AppendLine("#### 我（信件）")
-    [void]$sb.AppendLine()
-    [void]$sb.AppendLine($current[0].Him)
+    if ($Proactive) {
+        [void]$sb.AppendLine("## 这次由你先写信（往来 $("{0:D2}" -f $N)）")
+        [void]$sb.AppendLine()
+        [void]$sb.AppendLine("#### 由头")
+        [void]$sb.AppendLine()
+        [void]$sb.AppendLine($current[0].Reason)
+    }
+    else {
+        [void]$sb.AppendLine("## 要回的来信（往来 $("{0:D2}" -f $N)）")
+        [void]$sb.AppendLine()
+        [void]$sb.AppendLine("#### 我（信件）")
+        [void]$sb.AppendLine()
+        [void]$sb.AppendLine($current[0].Him)
+    }
     return $sb.ToString().TrimEnd()
 }

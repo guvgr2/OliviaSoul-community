@@ -24,7 +24,7 @@ function Step-Mark([string]$Name) {
 }
 
 $baseVersion = "2008.2.7"
-$version = "2008.2.7-linli9-1.2.1"
+$version = "2008.2.7-linli9-1.2.2"
 $packagePath = Join-Path $project "package.json"
 $packageText = [IO.File]::ReadAllText($packagePath, $utf8NoBom)
 $package = $packageText | ConvertFrom-Json
@@ -366,11 +366,27 @@ Copy-PublicFile (Join-Path $ffmpegRoot.FullName "bin\ffmpeg.exe") (Join-Path $st
 Copy-PublicFile (Join-Path $ffmpegRoot.FullName "bin\ffprobe.exe") (Join-Path $stage "runtime\ffmpeg\bin\ffprobe.exe")
 Copy-PublicFile (Join-Path $ffmpegRoot.FullName "LICENSE.txt") (Join-Path $stage "runtime\ffmpeg\LICENSE.txt")
 
-foreach ($name in @(
+$appFiles = @(
     "server.js", "transcription.js", "remote-memory.js", "soul-bundle.js", "model-config.js", "model-transport.js", "model-families.json",
-    "data-migration.js", "storage-paths.js", "storage-migration.js", "update-download.js", "update-network.js"
-)) {
+    "data-migration.js", "storage-paths.js", "storage-migration.js", "update-download.js", "update-network.js",
+    # --- 主动来信新增：决策引擎。server.js 在**顶层** import 它，漏了就是「装完程序起不来」---
+    "proactive-letters.js"
+)
+foreach ($name in $appFiles) {
     Copy-PublicFile (Join-Path $project $name) (Join-Path $stage "app\$name")
+}
+# 阻断式反向检查（2026-10-15 真实事故后补）：midi（下面 :40x）、desktop（:42x）、harness 脚本
+# （:44x）三处清单早就有这道检查，唯独这份**顶层**清单没有 —— 而顶层模块是 server.js 直接
+# import 的，漏一个不是「少个文件」，是「装完程序启动即崩」：用户侧看到的是
+# 「本地服务启动失败 / Node 服务已退出，退出码：1」（ERR_MODULE_NOT_FOUND）。
+# 那次漏的正是 proactive-letters.js，而门禁全绿 —— 因为单元测试和「全新安装冒烟」
+# 跑的都是源码目录，只有这道检查看的是产物。
+# 注意只比 .js：清单里还混着 model-families.json 这种非 js 文件。
+$appJsNames = @($appFiles | Where-Object { $_ -like "*.js" })
+$appJsMissing = @(Get-ChildItem -LiteralPath $project -Filter "*.js" -File |
+    Where-Object { $appJsNames -notcontains $_.Name } | ForEach-Object { $_.Name })
+if ($appJsMissing.Count -gt 0) {
+    throw ("local-service 顶层有 .js 没进打包清单：{0}（产物里不会有它，而 server.js 在顶层 import ⇒ 装完程序启动即失败）" -f ($appJsMissing -join "、"))
 }
 Copy-PublicFile (Join-Path $project "package.json") (Join-Path $stage "app\package.json")
 Ensure-Directory (Join-Path $stage "app\lyrics")
@@ -431,7 +447,7 @@ if ($desktopMissing.Count -gt 0) { Write-Warning "desktop 目录里有未列入�
 # The release intentionally excludes Godot, FluidSynth, SoundFont and MIDI rendering bootstrap files.
 
 $scriptTarget = Join-Path $stage "resources\workspace-template\.cursor\skills\fit-letters\scripts"
-foreach ($name in @("deepseek-reply.ps1", "harness-live.ps1", "harness-4step.ps1", "history-retrieval.ps1", "refresh-live-memory.ps1", "memory-lib.ps1", "ds-call.ps1", "model-call.ps1", "probe-prune.ps1", "score-temp.ps1", "sqlite-memory-load.cjs")) {
+foreach ($name in @("deepseek-reply.ps1", "harness-live.ps1", "harness-proactive.ps1", "harness-4step.ps1", "history-retrieval.ps1", "refresh-live-memory.ps1", "memory-lib.ps1", "ds-call.ps1", "model-call.ps1", "probe-prune.ps1", "score-temp.ps1", "sqlite-memory-load.cjs")) {
     Copy-PublicFile (Join-Path $repository ".cursor\skills\fit-letters\scripts\$name") (Join-Path $scriptTarget $name)
 }
 # B2：家族表的单一真相源，必须和 harness 脚本一起进 UserData（model-call.ps1 读同目录这份）。

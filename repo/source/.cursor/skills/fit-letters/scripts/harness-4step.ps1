@@ -22,6 +22,9 @@ param(
     [switch]$InitializeState,
     [switch]$AllowStateBootstrap,
     [switch]$StopAfterSafe,
+    # 主动写信（由头驱动）：归档末段是「由头」而不是「要回的来信」，
+    # prompt 里注入 {{proactiveNote}}。不传时全链路与回信完全一致。
+    [switch]$Proactive,
     [switch]$Quiet
 )
 
@@ -99,8 +102,8 @@ $arch = Join-Path $Root ("{0}\{1}.md" -f $archDir, $Person)
 if (-not [string]::IsNullOrWhiteSpace($ArchivePath)) { $arch = $ArchivePath }
 $openingPath = Join-Path $HarnessDir ((-join @([char]0x5F00, [char]0x4FE1)) + ".md")
 if (-not (Test-Path -LiteralPath $openingPath)) { $openingPath = Join-Path $Root ("harness\" + (-join @([char]0x5F00, [char]0x4FE1)) + ".md") }
-$ctx = Build-Memory -Root $Root -Person $Person -N $N -ArchivePath $arch -OpeningPath $openingPath
-$factCtx = Build-FactMemory -Root $Root -Person $Person -N $N -ArchivePath $arch -OpeningPath $openingPath
+$ctx = Build-Memory -Root $Root -Person $Person -N $N -ArchivePath $arch -OpeningPath $openingPath -Proactive:$Proactive
+$factCtx = Build-FactMemory -Root $Root -Person $Person -N $N -ArchivePath $arch -OpeningPath $openingPath -Proactive:$Proactive
 if ([string]::IsNullOrWhiteSpace($HistoryFile)) {
     $historySnapshot = New-HistorySnapshotFromArchive -ArchivePath $arch -Person $Person -BeforeN $N
 }
@@ -109,6 +112,11 @@ else {
     $historySnapshot = Read-HistorySnapshot -Path $HistoryFile
     if ([string]$historySnapshot.person -ne $Person) { throw "history snapshot person mismatch" }
 }
+# 主动写信：给 prompt 的补充说明。回信路径下是空串，{{proactiveNote}} 展开后不留痕。
+$proactiveNote = ""
+if ($Proactive) {
+    $proactiveNote = "【本次是她主动写信】没有他的新来信。文末的「由头」是这次想写信的原因，不是他说的话；他此前说过什么，只看上面的往来原文。"
+}
 if (-not [string]::IsNullOrWhiteSpace($PreviousReplyOverrideFile)) {
     if ($N -lt 2) { throw "previous reply override requires N >= 2" }
     if (-not [IO.Path]::IsPathRooted($PreviousReplyOverrideFile)) { $PreviousReplyOverrideFile = Join-Path $Root $PreviousReplyOverrideFile }
@@ -116,6 +124,7 @@ if (-not [string]::IsNullOrWhiteSpace($PreviousReplyOverrideFile)) {
     $overrideReply = (Read-Utf8 $PreviousReplyOverrideFile).Trim()
     $linliHeading = "#### " + (-join @([char]0x6797, [char]0x79BB))
     $targetHeading = "## " + (-join @([char]0x8981, [char]0x56DE, [char]0x7684, [char]0x6765, [char]0x4FE1))
+    if ($Proactive) { $targetHeading = "## " + (-join @([char]0x8FD9, [char]0x6B21, [char]0x7531, [char]0x4F60, [char]0x5148, [char]0x5199)) }
     $replyHeadingStart = $ctx.LastIndexOf($linliHeading)
     $targetHeadingStart = $ctx.IndexOf($targetHeading, $replyHeadingStart)
     if ($replyHeadingStart -lt 0 -or $targetHeadingStart -lt 0) { throw "cannot locate previous reply in memory context" }
@@ -183,7 +192,7 @@ if ($stateBootstrapRequired) {
 if (-not [string]::IsNullOrWhiteSpace($PrecheckFile)) { $precheckPrompt = $PrecheckFile }
 $p1 = Get-HarnessPrompt $precheckPrompt
 if ([string]::IsNullOrWhiteSpace($ReuseSafeTag)) {
-    $map1 = @{ ctx = $ctx; rules = $rules; previousState = $previousState; relationshipMemory = $relationshipMemory }
+    $map1 = @{ ctx = $ctx; rules = $rules; previousState = $previousState; relationshipMemory = $relationshipMemory; proactiveNote = $proactiveNote }
     $sysSafe = Expand-Harness $p1.System $map1
     $userSafe = Expand-Harness $p1.User $map1
     Write-Output ("STEP1 safe " + $Person + " " + $nn)
@@ -270,6 +279,7 @@ for ($historyRound = 1; $historyRound -le 2; $historyRound++) {
     $historyMap = @{
         safe = $safe
         navigation = $ctx
+        proactiveNote = $proactiveNote
         facts = $factCtx
         historyResults = $resultText
         budget = $budgetText
@@ -291,6 +301,7 @@ for ($historyRound = 1; $historyRound -le 2; $historyRound++) {
         $finishRepairMap = @{
             safe = $safe
             navigation = $ctx
+        proactiveNote = $proactiveNote
             facts = $factCtx
             historyResults = "暂定账本正在判断一项历史真伪，当前来信自己的引文不是证据，你尚未取得完整历史原文，不能 finish。必须 read 或 neighbors；没有候选时先 search，或按账本指出的往来顺序直接 read。`n" + $repairContext
             budget = $budgetText
@@ -341,6 +352,7 @@ for ($historyRound = 1; $historyRound -le 2; $historyRound++) {
         $repairMap = @{
             safe = $safe
             navigation = $ctx
+        proactiveNote = $proactiveNote
             facts = $factCtx
             historyResults = "档案室拒绝上一请求：$rejection。只修复一次；若不能合法检索请 finish。"
             budget = $budgetText
@@ -385,7 +397,7 @@ if ($historyEvidence.Count -gt 0) {
     $provisionalSafe = $safe
     Save-Step "1safe_provisional" $provisionalSafe
     $reconcilePrompt = Get-HarnessPrompt ("02-" + (-join @([char]0x8D26, [char]0x672C, [char]0x6821, [char]0x6B63)) + ".md")
-    $reconcileMap = @{ safe = $provisionalSafe; facts = $factCtx; evidence = $evidenceText }
+    $reconcileMap = @{ safe = $provisionalSafe; facts = $factCtx; evidence = $evidenceText; proactiveNote = $proactiveNote }
     Write-Output ("STEP2 reconcile " + $Person + " " + $nn)
     Set-DsThinking -On $false
     $safe = Invoke-Ds `
@@ -444,7 +456,7 @@ Lap "T2history"
 
 if ([string]::IsNullOrWhiteSpace($DraftFile)) {
     $p3 = Get-HarnessPrompt ("03-" + (-join @([char]0x4E2D, [char]0x6BB5, [char]0x751F, [char]0x6210)) + ".md")
-    $map3 = @{ fields = $fields; safe = $safe; rules = $rules; persona = $persona; ctx = $factCtx; evidence = $evidenceText }
+    $map3 = @{ fields = $fields; safe = $safe; rules = $rules; persona = $persona; ctx = $factCtx; evidence = $evidenceText; proactiveNote = $proactiveNote }
     $sysDraft = Expand-Harness $p3.System $map3
     $userDraft = Expand-Harness $p3.User $map3
     Write-Output ("STEP3 draft " + $Person + " " + $nn)
@@ -460,7 +472,7 @@ Save-Step "3draft" $draft
 Lap "T3draft"
 
 $p4 = Get-HarnessPrompt ("04-" + (-join @([char]0x5C3E, [char]0x7AEF, [char]0x68C0, [char]0x67E5)) + ".md")
-$map4 = @{ fields = $fields; safe = $safe; persona = $persona; draft = $draft; ctx = $factCtx; evidence = $evidenceText }
+$map4 = @{ fields = $fields; safe = $safe; persona = $persona; draft = $draft; ctx = $factCtx; evidence = $evidenceText; proactiveNote = $proactiveNote }
 $sysCheck = Expand-Harness $p4.System $map4
 $userCheck = Expand-Harness $p4.User $map4
 Write-Output ("STEP4 check " + $Person + " " + $nn)
@@ -483,13 +495,13 @@ if ($bad.Count -eq 0) {
 else {
     $check = [string]::Join("`n", $bad)
     $p5 = Get-HarnessPrompt ("05-" + (-join @([char]0x53CD, [char]0x9988, [char]0x91CD, [char]0x5199)) + ".md")
-    $map5 = @{ fields = $fields; safe = $safe; check = $check; rules = $rules; persona = $persona; draft = $draft; ctx = $factCtx; evidence = $evidenceText }
+    $map5 = @{ fields = $fields; safe = $safe; check = $check; rules = $rules; persona = $persona; draft = $draft; ctx = $factCtx; evidence = $evidenceText; proactiveNote = $proactiveNote }
     $sysFix = Expand-Harness $p5.System $map5
     $userFix = Expand-Harness $p5.User $map5
     Write-Output ("STEP5 rewrite " + $Person + " " + $nn)
     $final = Invoke-Ds -System $sysFix -User $userFix
     Save-Step "5rewrite" $final
-    $recheckMap = @{ fields = $fields; safe = $safe; persona = $persona; draft = $final; ctx = $factCtx; evidence = $evidenceText }
+    $recheckMap = @{ fields = $fields; safe = $safe; persona = $persona; draft = $final; ctx = $factCtx; evidence = $evidenceText; proactiveNote = $proactiveNote }
     Write-Output ("STEP5 recheck " + $Person + " " + $nn)
     $recheck = Invoke-Ds `
         -System (Expand-Harness $p4.System $recheckMap) `

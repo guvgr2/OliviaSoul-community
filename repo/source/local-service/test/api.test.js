@@ -888,7 +888,7 @@ test("v28 客户端补丁终止旧会话并按播放模式推进播单", async (
   // return row.querySelector(…)` 在 row 为 null 时自己抛 TypeError）；
   // 脚本内容变了就升 marker（理由见下面那条 v64 注释），仍是 FE v59 那套注入、文档里写「FE v59 或更高」依然成立）；
   // 这里钉住它，改补丁版本时测试会提醒你同步文档
-  assert.match(patchScript, /OliviaSoulPatch:mail-music-v69/u);
+  assert.match(patchScript, /OliviaSoulPatch:mail-music-v70/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v32/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v30/u);
   assert.match(patchStatus, /OliviaSoulPatch:mail-music-v29/u);
@@ -4263,7 +4263,7 @@ test("管理前端包含视频维护、上方插入和本地服务状态", async
   assert.doesNotMatch(patch, /\$listWaitingCondition|\$listWaitingReply|\$waitingCondition/u);
   assert.match(patch, /\$pollingStateTo/u);
   assert.match(patch, /\$processingIconTo/u);
-  assert.match(patch, /OliviaSoulPatch:mail-music-v69/u);
+  assert.match(patch, /OliviaSoulPatch:mail-music-v70/u);
   assert.match(patch, /admin\/game-letter-export\.js/u);
   assert.match(patch, /admin\/game-favorites\.js/u);
   assert.match(patch, /window\.OliviaSoulPlayFolder=OliviaSoulPlayFolder/u);

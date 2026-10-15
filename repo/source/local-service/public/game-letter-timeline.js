@@ -146,8 +146,10 @@
 
   function detail(item) {
     const blocks = [];
+    // 她主动写来的信没有你的来信 —— 这里不能显示「（这封信没有正文）」，
+    // 那会让「她先写来的信」看起来像坏了。
     blocks.push(h('div', {
-      text: item.content || '（这封信没有正文）',
+      text: item.content || (item.proactive ? '（这次是她先写来的，没有你的来信）' : '（这封信没有正文）'),
       style: { font: `400 14px/1.9 ${FONT}`, color: 'var(--tp-text-body)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
     }));
     if (item.replyText) {
