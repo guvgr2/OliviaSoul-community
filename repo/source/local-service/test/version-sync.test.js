@@ -55,9 +55,17 @@ test("6 处版本号完全一致", () => {
   const csprojVersion = /<Version>([^<]+)<\/Version>/u.exec(csproj)?.[1];
   assert.equal(csprojVersion, expected, "OliviaSoul.csproj 的 <Version> 与 package.json 不一致");
 
+  // 2026-10-17 S2：build-release.ps1 的 $version 已改成**从 package.json 现读**
+  // （`$version = [string]$package.version`），不再是写死的第二份版本串。
+  // 断言随之从「两处值相等」改成「形态是现读」：
+  //   · 现读行必须恰好 1 次（少 = 又退回了写死/丢了单一来源）；
+  //   · 不得再出现 `$version = "..."` 字面量（出现 = 有人把副本加回来了）。
+  // 这样即使将来 package.json 升号，本套件也不会因为「脚本里还是旧号」而红 —— 那正是 S2 的病灶。
   const build = readFileSync(join(root, "packaging", "build-release.ps1"), "utf8");
-  const buildVersion = /^\$version\s*=\s*"([^"]+)"/mu.exec(build)?.[1];
-  assert.equal(buildVersion, expected, "build-release.ps1 的 $version 与 package.json 不一致");
+  const liveAssignments = (build.match(/^\$version\s*=\s*\[string\]\$package\.version\s*$/gmu) ?? []).length;
+  assert.equal(liveAssignments, 1, "build-release.ps1 必须恰好有一处 `$version = [string]$package.version`（从 package.json 现读）");
+  const literalAssignments = (build.match(/^\$version\s*=\s*"/gmu) ?? []).length;
+  assert.equal(literalAssignments, 0, "build-release.ps1 不应再出现写死的 `$version = \"...\"` 副本（单一来源已被破坏）");
 
   const feedback = readFileSync(join(root, "public", "listen-naming-feedback.js"), "utf8");
   const feedbackVersion = /APP_VERSION\s*=\s*"([^"]+)"/u.exec(feedback)?.[1];

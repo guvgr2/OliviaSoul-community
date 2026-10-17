@@ -134,11 +134,60 @@ describe("规则表与单一来源", () => {
     assert.equal(RULE_FILES.length, 8, `规则表应覆盖 8 个文件，实际 ${RULE_FILES.length}`);
     const live = DEFAULT_RULES.filter((rule) => (rule.mode ?? "live") === "live");
     assert.ok(live.length >= 11, `活动规则应至少 11 条，实际 ${live.length}`);
+    // 2026-10-17 S2：build-release.ps1 的 $version 已从 package.json 现读，规则改为钉「形态」，
+    // 它**没有** %V%（noToken）—— 唯一合法例外。除此之外任何规则缺 %V% 都算错。
     for (const rule of live) {
+      if (rule.noToken) {
+        assert.ok(!rule.pattern.includes("%V%"), `noToken 规则「${rule.id}」不应含 %V%`);
+        continue;
+      }
       assert.ok(rule.pattern.includes("%V%"), `规则「${rule.id}」缺少 %V% 占位符`);
     }
+    const noToken = live.filter((rule) => rule.noToken);
+    assert.equal(noToken.length, 1, `noToken 规则应恰好 1 条（build-release.ps1 的现读形态），实际 ${noToken.length}`);
     const history = DEFAULT_RULES.filter((rule) => rule.mode === "history");
     assert.equal(history.length, 1, "历史规则应恰好 1 条（发布说明.md 的历史节标题）");
+  });
+
+  test("noToken 规则不产 edit、不进替换清单（它钉的是形态不是版本串）", () => {
+    const root = makeFixture();
+    const plan = planVersionBump({ root, targetVersion: NEXT });
+    assert.equal(plan.ok, true, JSON.stringify(plan.problems, null, 2));
+    for (const edit of plan.edits) {
+      assert.notEqual(edit.ruleId, "packaging/build-release.ps1 的 $version", "现读形态校验不该进替换清单");
+    }
+    // 该规则只做计数校验：正常副本上它命中 1 次（现读行）且不产 edit
+    assert.equal(
+      plan.edits.filter((edit) => edit.file === "packaging/build-release.ps1").length,
+      0,
+      "build-release.ps1 不该出现在替换清单里（$version 是现读的）",
+    );
+    assert.ok(
+      !plan.pending.some((entry) => entry.file === "packaging/build-release.ps1"),
+      "build-release.ps1 不该进 pending",
+    );
+    // 但计数校验仍然生效：把现读行改回写死 ⇒ 该规则 0 命中 ⇒ 非零退出且不写盘
+    const target = join(root, "packaging", "build-release.ps1");
+    const text = readFileSync(target, "utf8");
+    const broken = text.replace(
+      /^\$version[ \t]*=[ \t]*\[string\]\$package\.version[ \t]*$/mu,
+      '$version = "2008.2.7-linli9-9.9.9"',
+    );
+    assert.notEqual(broken, text, "替换应当生效（前提：现读行确实存在）");
+    writeFileSync(target, broken, "utf8");
+    const before = hashAll(root);
+    const badPlan = planVersionBump({ root, targetVersion: NEXT });
+    assert.equal(badPlan.ok, false, "现读形态被破坏时必须失败（0 命中）");
+    assert.ok(
+      badPlan.problems.some((item) => item.ruleId === "packaging/build-release.ps1 的 $version" && item.code === "rule-no-match"),
+      `应报该规则 0 命中，实际：${JSON.stringify(badPlan.problems)}`,
+    );
+    assert.equal(
+      badPlan.edits.filter((edit) => edit.file === "packaging/build-release.ps1").length,
+      0,
+      "build-release.ps1 不该进替换清单（写死的副本与规则形态不符，本来就不会被替换）",
+    );
+    assert.deepEqual(hashAll(root), before, "失败时不许写盘");
   });
 
   test("package-lock.json 的期望命中数是 2（与 build-release.ps1 的 $lockVersionCount 校验一致）", () => {
@@ -284,12 +333,16 @@ describe("扫描（-Check / 只报不改）", () => {
       "package-lock.json:3",
       "package-lock.json:9",
       "native-host/OliviaSoul.csproj:15",
-      "packaging/build-release.ps1:27",
       "public/listen-naming-feedback.js:15",
     ]) {
       assert.ok(places.includes(expected), `缺少版本位置 ${expected}（实际：${places.join("、")}）`);
     }
-    assert.ok(plan.edits.length >= 10, `活动位置应至少 10 处，实际 ${plan.edits.length}`);
+    // S2：build-release.ps1 的 $version 已从 package.json 现读 ⇒ 不再有 :27 这个替换位置。
+    // 活动位置 = 5 处代码位置（package.json 1 + lock 2 + csproj 1 + feedback 1）
+    // + 3 份打包文档的「至少 N 处」（使用说明 3 条、发布说明 2 条、API 说明 1 条 = 8 条规则
+    //   展开成若干命中，因为都是 {min:N} 区间、逐命中产 edit）⇒ 合计 13。
+    // 钉死 13 而不是「至少 10」：防的是有人把现读改回写死后又悄悄多出一处。
+    assert.equal(plan.edits.length, 13, `活动位置应恰好 13 处（S2 后 build-release.ps1 改为现读），实际 ${plan.edits.length}`);
     // 逐处的「命中的那一行」确实含当前版本串（不依赖相邻行的假设）
     for (const edit of plan.edits) {
       const line = readFileSync(join(root, edit.file), "utf8").split("\n")[edit.line - 1];
@@ -355,6 +408,16 @@ describe("替换（-Version）", () => {
       const after = readFileSync(join(root, entry.file), "utf8");
       assertOnlyVersionChanged(originals.get(entry.file), after, plan.oldVersion, NEXT, entry.file);
     }
+    // S2：build-release.ps1 的 $version 行是**现读**、不含版本串 ⇒ 替换后它必须原样不动
+    // （既不进 pending，也不该被顺手改掉）。这里显式钉住，防止将来有人把规则改回带 %V%。
+    const buildAfter = readFileSync(join(root, "packaging", "build-release.ps1"), "utf8");
+    assert.match(buildAfter, /^\$version[ \t]*=[ \t]*\[string\]\$package\.version[ \t]*$/mu, "现读行必须保持原样");
+    assert.ok(!buildAfter.includes(NEXT), "build-release.ps1 里不该出现新版本串（$version 是现读的）");
+    // S2 后 build-release.ps1 已不进 pending（没有可替换的版本串）⇒ 不被写盘、字节不变
+    assert.ok(
+      !plan.pending.some((entry) => entry.file === "packaging/build-release.ps1"),
+      "build-release.ps1 不该进 pending（现读形态没有版本串可换）",
+    );
 
     // 重新扫描：不能再有需要更新的位置
     const rescan = planVersionBump({ root, targetVersion: NEXT });
@@ -420,12 +483,17 @@ describe("替换（-Version）", () => {
     assert.equal(result.exitCode, 0);
     for (const relative of RULE_FILES) {
       const after = readFileSync(join(root, relative), "utf8");
+      // S2：build-release.ps1 的 $version 是现读 ⇒ 该文件根本没有版本串可换，
+      // 「至少一行变化」对它不适用。跳过它，单独在下面钉现读形态。
+      if (relative === "packaging/build-release.ps1") continue;
       assertOnlyVersionChanged(snapshots.get(relative), after, CURRENT, NEXT, relative);
     }
     // baseVersion 那行本身不是版本串，行内替换也不会碰到它
     const build = readFileSync(join(root, "packaging", "build-release.ps1"), "utf8");
     assert.match(build, /^\$baseVersion[ \t]*=[ \t]*"2008\.2\.7"/mu);
     assert.ok(!build.includes("2008.2.7-linli9-2008"), "不许把 baseVersion 拼进版本串");
+    assert.match(build, /^\$version[ \t]*=[ \t]*\[string\]\$package\.version[ \t]*$/mu, "现读形态必须保持");
+    assert.equal(build, snapshots.get("packaging/build-release.ps1"), "build-release.ps1 应一字节未变（现读、无可替换版本串）");
   });
 
   test("幂等：同一版本再跑一次 0 改动、退出码 0", () => {

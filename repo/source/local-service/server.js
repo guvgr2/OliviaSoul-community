@@ -74,6 +74,7 @@ import {
   PROACTIVE_DEFAULT_ROUTINE,
   PROACTIVE_REASONS,
   evaluateProactiveLetter,
+  nearTermTierDecision,
   normalizeProactiveSettings,
   normalizeRoutine,
   proactiveReasonLabel,
@@ -191,7 +192,7 @@ function externalLinkAllowed(url) {
 function openExternalLink(url) {
   const target = String(url ?? "").trim();
   if (!externalLinkAllowed(target)) {
-    const error = httpError(400, "只允许打开白名单里的 https 地址", "EXTERNAL_LINK_BLOCKED");
+    const error = httpError(400, "只允许打开白名单里的 https 地址", ERR.COMMON_EXTERNAL_LINK_BLOCKED);
     error.externalLinkBlocked = true;
     throw error;
   }
@@ -360,26 +361,191 @@ function exchangeTimestamp(exchange, fallback) {
 
 function assertPerson(person) {
   if (typeof person !== "string" || !person.trim() || person !== person.trim())
-    throw httpError(400, "person 不能为空");
+    throw httpError(400, "person 不能为空", ERR.COMMON_PERSON_EMPTY);
   if (person === "." || person === ".." || /[<>:"/\\|?*\x00-\x1F]/u.test(person))
-    throw httpError(400, "person 含非法字符");
+    throw httpError(400, "person 含非法字符", ERR.COMMON_PERSON_INVALID);
   return person;
 }
 
 function normalizeOfflineIdentity(value) {
   const uid = String(value.uid ?? "").trim();
   const nickname = String(value.nickname ?? "").trim();
-  if (!/^\d{1,18}$/u.test(uid)) throw httpError(400, "UID 必须是 1–18 位数字");
-  if (!nickname || nickname.length > 32) throw httpError(400, "用户名长度必须是 1–32 个字符");
+  if (!/^\d{1,18}$/u.test(uid)) throw httpError(400, "UID 必须是 1–18 位数字", ERR.COMMON_IDENTITY_UID_INVALID);
+  if (!nickname || nickname.length > 32) throw httpError(400, "用户名长度必须是 1–32 个字符", ERR.COMMON_IDENTITY_NICKNAME_LENGTH);
   if (/[\x00-\x1F\x7F]/u.test(nickname) || CONTROL_CHARS.test(nickname))
-    throw httpError(400, "用户名包含不可用字符");
+    throw httpError(400, "用户名包含不可用字符", ERR.COMMON_IDENTITY_NICKNAME_CHARS);
   return { uid, nickname };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 错误号表（2026-10-17 建立）
+//
+// 为什么要有它：用户要求「程序报错一定要有能让程序快速识别的报错号和方便用户查看的
+// 显式报错」。建立前实测 144 处 httpError 调用里 **132 处吃默认 code = -1** —— 响应体
+// 里虽然有 code 字段，但 132 种错共用一个号，程序无法区分、日志无法检索。
+//
+// 三条硬约定（改这块前必读）：
+//   1. **每处 httpError 都必须给号** —— 号取自本表，不得再写裸字符串或数字字面量。
+//      由 `test\error-codes.test.js` 静态扫描钉死，漏一个就红。
+//   2. **号是稳定的契约** —— 外部（游戏端注入脚本、姊妹项目、用户报障）会拿它判断
+//      分支。改号等于改接口，必须同步测试与调用方。**不要复用已废弃的号**。
+//   3. **一个号只对应一种错** —— 若两处报错语义不同（例如「文件不存在」与「格式不对」），
+//      必须是两个号，否则又变回「看不出是哪种」。
+//
+// 命名：`<模块>_<具体>`，全大写下划线。模块前缀见下方分组注释。
+// ─────────────────────────────────────────────────────────────────────────────
+const ERR = {
+  // ── 通用（请求体、来源、路由）
+  COMMON_BODY_TOO_LARGE: "COMMON_BODY_TOO_LARGE",
+  COMMON_BODY_INVALID_JSON: "COMMON_BODY_INVALID_JSON",
+  COMMON_ORIGIN_UNTRUSTED: "COMMON_ORIGIN_UNTRUSTED",
+  COMMON_ROUTE_NOT_FOUND: "COMMON_ROUTE_NOT_FOUND",
+  COMMON_METHOD_NOT_ALLOWED: "COMMON_METHOD_NOT_ALLOWED",
+  COMMON_FILE_NOT_FOUND: "COMMON_FILE_NOT_FOUND",
+  COMMON_PERSON_EMPTY: "COMMON_PERSON_EMPTY",
+  COMMON_PERSON_INVALID: "COMMON_PERSON_INVALID",
+  COMMON_IDENTITY_UID_INVALID: "COMMON_IDENTITY_UID_INVALID",
+  COMMON_IDENTITY_NICKNAME_LENGTH: "COMMON_IDENTITY_NICKNAME_LENGTH",
+  COMMON_IDENTITY_NICKNAME_CHARS: "COMMON_IDENTITY_NICKNAME_CHARS",
+  COMMON_EXTERNAL_LINK_BLOCKED: "COMMON_EXTERNAL_LINK_BLOCKED",
+  COMMON_EXPORT_NAME_COLLISION: "COMMON_EXPORT_NAME_COLLISION",
+
+  // ── 信件（/toy/letter/* 与回信链路）
+  LETTER_CONTENT_EMPTY: "LETTER_CONTENT_EMPTY",
+  LETTER_DAILY_QUOTA_EXCEEDED: "LETTER_DAILY_QUOTA_EXCEEDED",
+  LETTER_NOT_FOUND: "LETTER_NOT_FOUND",
+  LETTER_REPLY_NOT_FOUND: "LETTER_REPLY_NOT_FOUND",
+  LETTER_REPLY_VIDEO_NOT_FOUND: "LETTER_REPLY_VIDEO_NOT_FOUND",
+  LETTER_NOT_RETRIABLE: "LETTER_NOT_RETRIABLE",
+  LETTER_EXPORT_EMPTY: "LETTER_EXPORT_EMPTY",
+  LETTER_TIMELINE_STATUS_INVALID: "LETTER_TIMELINE_STATUS_INVALID",
+  LETTER_TIMELINE_ARCHIVED_INVALID: "LETTER_TIMELINE_ARCHIVED_INVALID",
+  LETTER_SETTINGS_INVALID: "LETTER_SETTINGS_INVALID",
+  LETTER_ARCHIVE_SECTION_BROKEN: "LETTER_ARCHIVE_SECTION_BROKEN",
+  LETTER_ARCHIVE_DATE_GROUP_MISSING: "LETTER_ARCHIVE_DATE_GROUP_MISSING",
+  LETTER_EXCHANGE_LIST_INVALID: "LETTER_EXCHANGE_LIST_INVALID",
+  LETTER_EXCHANGE_TOO_MANY: "LETTER_EXCHANGE_TOO_MANY",
+  LETTER_EXCHANGE_DATE_INVALID: "LETTER_EXCHANGE_DATE_INVALID",
+  LETTER_EXCHANGE_TIME_INVALID: "LETTER_EXCHANGE_TIME_INVALID",
+  LETTER_EXCHANGE_REPLY_MISSING: "LETTER_EXCHANGE_REPLY_MISSING",
+  LETTER_EXCHANGE_NOT_FOUND: "LETTER_EXCHANGE_NOT_FOUND",
+  LETTER_EXCHANGE_ID_DUPLICATE: "LETTER_EXCHANGE_ID_DUPLICATE",
+  LETTER_MEMORY_BUSY: "LETTER_MEMORY_BUSY",
+
+  // ── 信件导入（游戏端「一键导出」的 json）
+  LETTER_IMPORT_EMPTY: "LETTER_IMPORT_EMPTY",
+  LETTER_IMPORT_NOT_JSON: "LETTER_IMPORT_NOT_JSON",
+  LETTER_IMPORT_NOT_OBJECT: "LETTER_IMPORT_NOT_OBJECT",
+  LETTER_IMPORT_SCHEMA_MISMATCH: "LETTER_IMPORT_SCHEMA_MISMATCH",
+  LETTER_IMPORT_VERSION_UNSUPPORTED: "LETTER_IMPORT_VERSION_UNSUPPORTED",
+  LETTER_IMPORT_NO_LIST: "LETTER_IMPORT_NO_LIST",
+  LETTER_IMPORT_LIST_EMPTY: "LETTER_IMPORT_LIST_EMPTY",
+  LETTER_IMPORT_ITEM_NOT_OBJECT: "LETTER_IMPORT_ITEM_NOT_OBJECT",
+  LETTER_IMPORT_ITEM_NO_ID: "LETTER_IMPORT_ITEM_NO_ID",
+  LETTER_IMPORT_ITEM_ID_TOO_LONG: "LETTER_IMPORT_ITEM_ID_TOO_LONG",
+  LETTER_IMPORT_ITEM_EMPTY: "LETTER_IMPORT_ITEM_EMPTY",
+  LETTER_IMPORT_PREVIEW_NOT_FOUND: "LETTER_IMPORT_PREVIEW_NOT_FOUND",
+
+  // ── 记忆包（.soul 导出/导入）
+  SOUL_EMPTY: "SOUL_EMPTY",
+  SOUL_FILE_TOO_LARGE: "SOUL_FILE_TOO_LARGE",
+  SOUL_FORMAT_INVALID: "SOUL_FORMAT_INVALID",
+  SOUL_TRUNCATED: "SOUL_TRUNCATED",
+  SOUL_MANIFEST_TOO_LARGE: "SOUL_MANIFEST_TOO_LARGE",
+  SOUL_MANIFEST_INVALID: "SOUL_MANIFEST_INVALID",
+  SOUL_VERSION_UNSUPPORTED: "SOUL_VERSION_UNSUPPORTED",
+  SOUL_CHECKSUM_MISMATCH: "SOUL_CHECKSUM_MISMATCH",
+  SOUL_VIDEO_LIST_INVALID: "SOUL_VIDEO_LIST_INVALID",
+  SOUL_VIDEO_LINK_INVALID: "SOUL_VIDEO_LINK_INVALID",
+  SOUL_VIDEO_LETTER_ID_INVALID: "SOUL_VIDEO_LETTER_ID_INVALID",
+  SOUL_VIDEO_SIZE_INVALID: "SOUL_VIDEO_SIZE_INVALID",
+  SOUL_VIDEO_DATA_TRUNCATED: "SOUL_VIDEO_DATA_TRUNCATED",
+  SOUL_VIDEO_NOT_MP4: "SOUL_VIDEO_NOT_MP4",
+  SOUL_TRAILING_DATA: "SOUL_TRAILING_DATA",
+  SOUL_VIDEO_LETTER_NOT_FOUND: "SOUL_VIDEO_LETTER_NOT_FOUND",
+  SOUL_VIDEO_BACKUP_MISSING: "SOUL_VIDEO_BACKUP_MISSING",
+  SOUL_MEMORY_JSON_INVALID: "SOUL_MEMORY_JSON_INVALID",
+  SOUL_MEMORY_ORDER_INVALID: "SOUL_MEMORY_ORDER_INVALID",
+  SOUL_MEMORY_SCAN_FAILED: "SOUL_MEMORY_SCAN_FAILED",
+
+  // ── 视频（回信视频上传/校验）
+  VIDEO_NOT_MP4: "VIDEO_NOT_MP4",
+  VIDEO_TOO_LARGE: "VIDEO_TOO_LARGE",
+  VIDEO_FORMAT_INVALID: "VIDEO_FORMAT_INVALID",
+
+  // ── 曲库作品（/toy/media/songs/*）
+  MIDI_SONG_NOT_FOUND: "MIDI_SONG_NOT_FOUND",
+  MIDI_SONG_METADATA_INVALID: "MIDI_SONG_METADATA_INVALID",
+  MIDI_SONG_NAME_INVALID: "MIDI_SONG_NAME_INVALID",
+  MIDI_SONG_MAPPING_INVALID: "MIDI_SONG_MAPPING_INVALID",
+  MIDI_MEDIA_TOO_LARGE: "MIDI_MEDIA_TOO_LARGE",
+  MIDI_LIBRARY_PATH_MISSING: "MIDI_LIBRARY_PATH_MISSING",
+  MIDI_LIBRARY_PREVIEW_NOT_FOUND: "MIDI_LIBRARY_PREVIEW_NOT_FOUND",
+
+  // ── 歌单
+  FOLDER_NAME_EMPTY: "FOLDER_NAME_EMPTY",
+  FOLDER_NAME_TOO_LONG: "FOLDER_NAME_TOO_LONG",
+  FOLDER_NAME_CHARS_INVALID: "FOLDER_NAME_CHARS_INVALID",
+  FOLDER_NAME_COLLISION: "FOLDER_NAME_COLLISION",
+  FOLDER_NOT_FOUND: "FOLDER_NOT_FOUND",
+  FOLDER_METHOD_NOT_ALLOWED: "FOLDER_METHOD_NOT_ALLOWED",
+  FOLDER_ITEM_NOT_IN_FOLDER: "FOLDER_ITEM_NOT_IN_FOLDER",
+  FOLDER_ITEM_INCOMPLETE: "FOLDER_ITEM_INCOMPLETE",
+  FOLDER_IMPORT_NOT_QR: "FOLDER_IMPORT_NOT_QR",
+  FOLDER_IMPORT_VERSION_UNKNOWN: "FOLDER_IMPORT_VERSION_UNKNOWN",
+  FOLDER_IMPORT_NO_SONGS: "FOLDER_IMPORT_NO_SONGS",
+  FOLDER_DIRECTION_INVALID: "FOLDER_DIRECTION_INVALID",
+
+  // ── 播单 / 播放器
+  PLAYLIST_ITEM_INCOMPLETE: "PLAYLIST_ITEM_INCOMPLETE",
+  PLAYER_COMMAND_INVALID: "PLAYER_COMMAND_INVALID",
+  PLAYER_SONG_URL_MISMATCH: "PLAYER_SONG_URL_MISMATCH",
+  PLAYER_SONG_SWITCHED: "PLAYER_SONG_SWITCHED",
+  PLAYER_SESSION_SWITCHED: "PLAYER_SESSION_SWITCHED",
+  PLAYER_SESSION_ENDED: "PLAYER_SESSION_ENDED",
+  PLAYER_SEEK_INVALID: "PLAYER_SEEK_INVALID",
+  PLAYER_VOLUME_INVALID: "PLAYER_VOLUME_INVALID",
+  PLAYER_STATE_EVENT_INVALID: "PLAYER_STATE_EVENT_INVALID",
+  PLAYER_TIME_INVALID: "PLAYER_TIME_INVALID",
+  PLAYER_URL_INVALID: "PLAYER_URL_INVALID",
+  PLAYER_URL_NOT_LOCAL: "PLAYER_URL_NOT_LOCAL",
+  PLAYER_MEDIA_UNAVAILABLE: "PLAYER_MEDIA_UNAVAILABLE",
+
+  // ── 模型 / 设置（/admin/api/*）
+  MODEL_PROVIDER_INVALID: "MODEL_PROVIDER_INVALID",
+  MODEL_CONFIG_INVALID: "MODEL_CONFIG_INVALID",
+  MODEL_CONFIG_SUPERSEDED: "MODEL_CONFIG_SUPERSEDED",
+  MODEL_LIST_QUERY_FAILED: "MODEL_LIST_QUERY_FAILED",
+  MODEL_TEST_FAILED: "MODEL_TEST_FAILED",
+  MODEL_CONNECTIVITY_FAILED: "MODEL_CONNECTIVITY_FAILED",
+  MODEL_LETTER_TEXT_EMPTY: "MODEL_LETTER_TEXT_EMPTY",
+  MODEL_RECOGNIZE_TIMEOUT: "MODEL_RECOGNIZE_TIMEOUT",
+  MODEL_RECOGNIZE_FAILED: "MODEL_RECOGNIZE_FAILED",
+  MODEL_LOCAL_PROCESS_REMOVED: "MODEL_LOCAL_PROCESS_REMOVED",
+  SETTING_REPLY_DELAY_INVALID: "SETTING_REPLY_DELAY_INVALID",
+  SETTING_DAILY_LIMIT_INVALID: "SETTING_DAILY_LIMIT_INVALID",
+  SETTING_UPDATE_CHANNEL_INVALID: "SETTING_UPDATE_CHANNEL_INVALID",
+  SETTING_DOWNLOAD_JOB_MISSING: "SETTING_DOWNLOAD_JOB_MISSING",
+  SETTING_IMPORT_PREVIEW_NOT_FOUND: "SETTING_IMPORT_PREVIEW_NOT_FOUND",
+  SETTING_IMPORT_PREVIEW_BLOCKED: "SETTING_IMPORT_PREVIEW_BLOCKED",
+
+  // ── 数据搬迁（历史号，已在使用中，保持不变）
+  MIGRATION_PREVIEW_JOB_NOT_FOUND: "MIGRATION_PREVIEW_JOB_NOT_FOUND",
+  MIGRATION_CONFIRMATION_REQUIRED: "MIGRATION_CONFIRMATION_REQUIRED",
+  MIGRATION_PREVIEW_NOT_FOUND: "MIGRATION_PREVIEW_NOT_FOUND",
+  MIGRATION_PREVIEW_EXPIRED: "MIGRATION_PREVIEW_EXPIRED",
+};
+
 function httpError(status, message, code = -1) {
-  const error = new Error(message);
+  // 用户眼前要**看得见**号：报障时一句话就能定位到代码位置，不必靠复述中文去日志里比对。
+  // 拼在 message 里（而不是只留在响应体的 code 字段），是因为前端 20 个文件都是
+  // `throw new Error(body.message)` 直接上屏 —— 这里拼一次，所有路径自动带号。
+  // 号缺失、或就是默认 -1（= 没登记号的路径）时不拼，避免污染。
+  const suffix = typeof code === "string" && code && code !== "-1" ? `（${code}）` : "";
+  const error = new Error(`${message}${suffix}`);
   error.status = status;
   error.code = code;
+  error.rawMessage = message;
   return error;
 }
 
@@ -437,7 +603,7 @@ async function readJson(req) {
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 2 * 1024 * 1024) throw httpError(413, "请求体过大");
+    if (size > 2 * 1024 * 1024) throw httpError(413, "请求体过大", ERR.COMMON_BODY_TOO_LARGE);
     chunks.push(chunk);
   }
   const text = Buffer.concat(chunks).toString("utf8");
@@ -469,11 +635,11 @@ function parseArchiveExchanges(content) {
     const end = sections[index + 1]?.index ?? text.length;
     const block = text.slice(start, end);
     const pair = /^\s*#### 我（信件）\s*\n+([\s\S]*?)\n+#### 林离（(回信|视频回复)）\s*\n+([\s\S]*?)(?=\n---\s*(?:\n|$)|\n## \d{4}-|$)/u.exec(block);
-    if (!pair) throw httpError(400, `往来 ${section[1]} 结构不完整`);
+    if (!pair) throw httpError(400, `往来 ${section[1]} 结构不完整`, ERR.LETTER_ARCHIVE_SECTION_BROKEN);
     const before = text.slice(0, section.index);
     const dates = [...before.matchAll(/^## (\d{4}-\d{2}-\d{2}|未注明日期)\s*$/gmu)];
     const dateHeading = dates.at(-1)?.[1];
-    if (!dateHeading) throw httpError(400, `往来 ${section[1]} 缺少日期分组`);
+    if (!dateHeading) throw httpError(400, `往来 ${section[1]} 缺少日期分组`, ERR.LETTER_ARCHIVE_DATE_GROUP_MISSING);
     return {
       date: dateHeading === "未注明日期" ? "" : dateHeading,
       time: section[2] || "12:00",
@@ -512,17 +678,17 @@ function historySnapshotId(payload) {
 }
 
 function normalizeExchanges(exchanges) {
-  if (!Array.isArray(exchanges)) throw httpError(400, "信件列表格式不正确");
-  if (exchanges.length > 500) throw httpError(400, "一次最多保存 500 组往来");
+  if (!Array.isArray(exchanges)) throw httpError(400, "信件列表格式不正确", ERR.LETTER_EXCHANGE_LIST_INVALID);
+  if (exchanges.length > 500) throw httpError(400, "一次最多保存 500 组往来", ERR.LETTER_EXCHANGE_TOO_MANY);
   return exchanges.map((exchange, index) => {
     const date = String(exchange.date ?? "").trim();
     const time = String(exchange.time ?? "").trim() || "12:00";
     const incoming = String(exchange.incoming ?? "").trim();
     const reply = String(exchange.reply ?? "").trim();
     const replyLabel = exchange.replyLabel === "视频回复" ? "视频回复" : "回信";
-    if (date && !/^\d{4}-\d{2}-\d{2}$/u.test(date)) throw httpError(400, `往来 ${index + 1} 日期格式不正确`);
-    if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(time)) throw httpError(400, `往来 ${index + 1} 时间格式不正确`);
-    if (!reply) throw httpError(400, `往来 ${index + 1} 缺少林离回信`);
+    if (date && !/^\d{4}-\d{2}-\d{2}$/u.test(date)) throw httpError(400, `往来 ${index + 1} 日期格式不正确`, ERR.LETTER_EXCHANGE_DATE_INVALID);
+    if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(time)) throw httpError(400, `往来 ${index + 1} 时间格式不正确`, ERR.LETTER_EXCHANGE_TIME_INVALID);
+    if (!reply) throw httpError(400, `往来 ${index + 1} 缺少林离回信`, ERR.LETTER_EXCHANGE_REPLY_MISSING);
     return { date, time, incoming, reply, replyLabel };
   });
 }
@@ -830,7 +996,7 @@ export function validateHarnessReply(stdout, reply, doneMarker = "HARNESS LIVE D
   return normalized;
 }
 
-async function deepSeekGenerator({ person, content, id, root, tempDir, historySnapshot }) {
+async function deepSeekGenerator({ person, content, id, root, tempDir, historySnapshot, driftTier = -1 }) {
   const harnessVersion = (await readFile(join(root, "harness", "VERSION"), "utf8")).trim();
   if (harnessVersion !== "v18") throw new Error(`Harness 版本不正确：${harnessVersion || "缺失"}`);
   const letterFile = join(tempDir, `${id}.letter.txt`);
@@ -840,13 +1006,16 @@ async function deepSeekGenerator({ person, content, id, root, tempDir, historySn
   await writeFile(historyFile, JSON.stringify(historySnapshot), "utf8");
   try {
     let progressBuffer = "";
-    const processResult = await runProcess("powershell.exe", [
+    const harnessArgs = [
       "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
       join(root, ".cursor", "skills", "fit-letters", "scripts", "harness-live.ps1"),
       "-Person", person, "-Letter", letterFile, "-OutFile", replyFile,
       "-HistoryFile", historyFile,
       "-RulesFile", join(root, "harness", "写法.md"), "-Root", root,
-    ], root, GENERATION_TIMEOUT_MS, undefined, chunk => {
+    ];
+    // 只在档位有效时才传：`-DriftTier -1` 里的 `-1` 会被 PowerShell 当成参数名，条件拼接最稳。
+    if (Number.isInteger(driftTier) && driftTier >= 0) harnessArgs.push("-DriftTier", String(driftTier));
+    const processResult = await runProcess("powershell.exe", harnessArgs, root, GENERATION_TIMEOUT_MS, undefined, chunk => {
       progressBuffer += chunk;
       const lines = progressBuffer.split(/\r?\n/u);
       progressBuffer = lines.pop() ?? "";
@@ -865,7 +1034,7 @@ async function deepSeekGenerator({ person, content, id, root, tempDir, historySn
  * 她主动写一封（没有你的来信）：把「由头」写进临时文件交给 harness-proactive.ps1。
  * 与 deepSeekGenerator 共用同一套「步骤日志 + 完成标记 + 非空校验」，只有入口脚本与完成标记不同。
  */
-async function proactiveLetterGenerator({ person, reasonText, id, root, tempDir }) {
+async function proactiveLetterGenerator({ person, reasonText, id, root, tempDir, driftTier = -1 }) {
   const harnessVersion = (await readFile(join(root, "harness", "VERSION"), "utf8")).trim();
   if (harnessVersion !== "v18") throw new Error(`Harness 版本不正确：${harnessVersion || "缺失"}`);
   const reasonFile = join(tempDir, `${id}.reason.txt`);
@@ -873,12 +1042,14 @@ async function proactiveLetterGenerator({ person, reasonText, id, root, tempDir 
   await writeFile(reasonFile, reasonText, "utf8");
   try {
     let progressBuffer = "";
-    const processResult = await runProcess("powershell.exe", [
+    const proactiveArgs = [
       "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
       join(root, ".cursor", "skills", "fit-letters", "scripts", "harness-proactive.ps1"),
       "-Person", person, "-Reason", reasonFile, "-OutFile", replyFile,
       "-RulesFile", join(root, "harness", "写法.md"), "-Root", root,
-    ], root, GENERATION_TIMEOUT_MS, undefined, chunk => {
+    ];
+    if (Number.isInteger(driftTier) && driftTier >= 0) proactiveArgs.push("-DriftTier", String(driftTier));
+    const processResult = await runProcess("powershell.exe", proactiveArgs, root, GENERATION_TIMEOUT_MS, undefined, chunk => {
       progressBuffer += chunk;
       const lines = progressBuffer.split(/\r?\n/u);
       progressBuffer = lines.pop() ?? "";
@@ -1331,6 +1502,60 @@ export async function createOliviaService(options = {}) {
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `).run(key, String(value));
   const storageRevision = () => Math.max(0, Number(getSetting(STORAGE_REVISION_SETTING)) || 0);
+  /**
+   * 近况层档位（P1 拍板口径）—— 由调用方算好、通过 `-DriftTier` 传给 harness（harness 自己不读库）。
+   *   · 分档按信件数（`thresholdMode: "letters"`）；档位不回退（`allowRollback: false`）。
+   *   · 用户打开「保持她现在的样子」⇒ 返回 -1（不注入），也不写档位记忆。
+   *   · 返回 -1 = 整段不注入；第 0 档虽然编号是 0，但 `inject: false` ⇒ 同样返回 -1。
+   * 档位表与开关 key 都现读 `harness/行为参数.json`，本函数不硬编码任何阈值。
+   *
+   * ⚠️ 三条 2026-10-16 的修正（[审查-4] 代码-1/2/4 + WorkBuddy 同批复核）：
+   *   ① **「不回退」必须在「档 0 ⇒ -1」之前**。原顺序是先 `if (tier <= 0) return -1;` 再读
+   *      `drift_tier_max`，于是「所有档都 inject:false」（= 第 0 档，0–3 封）时函数直接返回 -1、
+   *      历史最高档根本没机会兜住 ⇒ `allowRollback: false` 是**空转**。（姊妹侧 WorkBuddy 先踩到，
+   *      提醒我方复核；实读确认我方同错，已修。）
+   *   ② `Number(t.tier)` 若得 `NaN`，原写法 `tier <= 0` 为 false ⇒ `setSetting("drift_tier_max", NaN)`
+   *      会把字符串 `"NaN"` 落进设置，之后每次读到都只能当 -1（脏值永久化）。改为显式 `Number.isInteger`。
+   *   ③ 原 `catch { return -1 }` 是**静默降级**（无日志/无计数），而脚本侧 `Get-DriftText` 与姊妹侧
+   *      `behavior-params.mjs` 都是 throw ⇒ 两端语义不一致。现在打 `console.warn` 保留可观测性，
+   *      返回值仍为 -1（= 与接入前行为一致、不因为配置坏了就不回信）。
+   *
+   * ⚠️ 为什么把算法抽成纯函数（2026-10-16，[审查-4] 代码-5）：原先这些判据**只能用源码文本断言**守
+   *    （`assert.match(serverSrc, /…/)`），而源码文本断言证明不了行为 —— 审查实测「把下一行改成
+   *    `if (false)` 仍然绿」。抽成 `nearTermTierDecision()` 之后，档位/不回退/NaN/开关这些判据
+   *    全部变成可以对**真实返回值**下断言的行为测试（见 harness-behavior-params.test.js ⑪）。
+   *
+   * ⚠️ TODO(near-term-override): `nearTerm.tierOverride`（账本「关系」≥「密友」⇒ 直接进第 3 档）
+   *    尚未实现 —— 它要解析 `信件往来\<person>.md` 的账本段，属另一条链路；现在只按信件数分档。
+   */
+  // ⚠️ 分档口径（[审查-4] 代码-1，2026-10-16 修）：只算**用户自己写的、且已经回过的信**。
+  //   - `source <> 'proactive'`：她主动写来的信不算 —— 否则她每周最多 1 封、一年约 50 封，
+  //     用户一封不回也会从第 1 档（4–20）自己爬进第 2 档（21–60），档位变成「时间过得久」而不是「往来多」。
+  //   - `status = REPLIED`：被回的那封信在「生成回信」这一刻已经在表里（:3287 是生成时才算档），
+  //     不排除在途信就会比「已回信数」提前 1 封。
+  // 与 行为参数.json 的 nearTerm.tierDataSource 声明逐条对应；契约由 harness-behavior-params 套件钉住。
+  const DRIFT_LETTER_COUNT_SQL =
+    "SELECT COUNT(*) AS n FROM letters WHERE person = ? AND source <> 'proactive' AND status = ?";
+  const resolveDriftTier = person => {
+    try {
+      const params = JSON.parse(readFileSync(join(root, "harness", "行为参数.json"), "utf8"));
+      const nt = params.nearTerm;
+      const decision = nearTermTierDecision({
+        nearTerm: nt,
+        letterCount: Number(db.prepare(DRIFT_LETTER_COUNT_SQL).get(person, STATUS.REPLIED)?.n ?? 0),
+        remembered: getSetting("drift_tier_max"),
+        keepCurrentShape:
+          nt?.userToggle?.key && String(getSetting(nt.userToggle.key) ?? "") === "1",
+      });
+      // 落盘只做「把记忆推到本次判定结果」这一件事（纯函数只算、不写）。
+      if (decision.write !== null) setSetting("drift_tier_max", decision.write);
+      return decision.tier;
+    } catch (error) {
+      // 见上方 ③：保留可观测性，但**不改变返回值语义**（harness 侧读不到配置会 throw，两头都失败）
+      console.warn(`[near-term] 档位配置读不到，本封不注入近况：${person} —— ${error?.message ?? error}`);
+      return -1;
+    }
+  };
   const migrationHashCache = new Map();
   async function sha256Path(path) {
     const info = await stat(path);
@@ -1543,7 +1768,7 @@ export async function createOliviaService(options = {}) {
 
   function assertCurrentModelMutation(generation) {
     if (generation !== modelConfigMutationGeneration)
-      throw httpError(409, "模型配置已被更新的操作取代，请刷新后重试", "MODEL_CONFIG_SUPERSEDED");
+      throw httpError(409, "模型配置已被更新的操作取代，请刷新后重试", ERR.MODEL_CONFIG_SUPERSEDED);
   }
 
   function modelStatusFingerprint(profile) {
@@ -1961,22 +2186,22 @@ export async function createOliviaService(options = {}) {
 
   async function saveReplyVideo(req, row) {
     if (String(req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase() !== "video/mp4")
-      throw httpError(415, "只支持 MP4 视频");
+      throw httpError(415, "只支持 MP4 视频", ERR.VIDEO_NOT_MP4);
     const declaredSize = Number(req.headers["content-length"] ?? 0);
-    if (declaredSize > MAX_VIDEO_BYTES) throw httpError(413, "视频不能超过 512 MB");
+    if (declaredSize > MAX_VIDEO_BYTES) throw httpError(413, "视频不能超过 512 MB", ERR.VIDEO_TOO_LARGE);
     const temporaryPath = join(videosDir, `${row.id}.${randomUUID()}.tmp`);
     const targetPath = join(videosDir, `${row.id}.mp4`);
     let size = 0;
     const limiter = new Transform({
       transform(chunk, encoding, callback) {
         size += chunk.length;
-        if (size > MAX_VIDEO_BYTES) return callback(httpError(413, "视频不能超过 512 MB"));
+        if (size > MAX_VIDEO_BYTES) return callback(httpError(413, "视频不能超过 512 MB", ERR.VIDEO_TOO_LARGE));
         callback(null, chunk);
       },
     });
     try {
       await pipeline(req, limiter, createWriteStream(temporaryPath, { flags: "wx" }));
-      if (size < 12) throw httpError(415, "MP4 文件格式不正确");
+      if (size < 12) throw httpError(415, "MP4 文件格式不正确", ERR.VIDEO_FORMAT_INVALID);
       const handle = await open(temporaryPath, "r");
       const header = Buffer.alloc(12);
       try {
@@ -1984,7 +2209,7 @@ export async function createOliviaService(options = {}) {
       } finally {
         await handle.close();
       }
-      if (header.toString("ascii", 4, 8) !== "ftyp") throw httpError(415, "MP4 文件格式不正确");
+      if (header.toString("ascii", 4, 8) !== "ftyp") throw httpError(415, "MP4 文件格式不正确", ERR.VIDEO_FORMAT_INVALID);
       await rm(targetPath, { force: true });
       await rename(temporaryPath, targetPath);
       db.prepare("UPDATE letters SET reply_video = ?, reply_type = 2 WHERE id = ?")
@@ -1996,7 +2221,7 @@ export async function createOliviaService(options = {}) {
   }
 
   async function serveVideoFile(req, res, filePath, missingMessage = "视频文件不存在") {
-    if (!filePath || !existsSync(filePath)) throw httpError(404, missingMessage);
+    if (!filePath || !existsSync(filePath)) throw httpError(404, missingMessage, ERR.COMMON_FILE_NOT_FOUND);
     const fileSize = (await stat(filePath)).size;
     const range = req.headers.range;
     let start = 0;
@@ -2179,7 +2404,7 @@ export async function createOliviaService(options = {}) {
         return name;
       }
     }
-    throw httpError(409, "导出目录里的同名文件太多了，先清理一下再导出吧");
+    throw httpError(409, "导出目录里的同名文件太多了，先清理一下再导出吧", ERR.COMMON_EXPORT_NAME_COLLISION);
   }
 
   // 未到 available_at 的回信一律按「还没收到」处理：导出物不该剧透还没解锁的回信。
@@ -2353,9 +2578,9 @@ export async function createOliviaService(options = {}) {
       q: String(url.searchParams.get("q") ?? "").trim(),
     };
     if (params.status && !LETTER_TIMELINE_STATES.includes(params.status))
-      throw httpError(400, `status 只能是 ${LETTER_TIMELINE_STATES.join(" / ")}`);
+      throw httpError(400, `status 只能是 ${LETTER_TIMELINE_STATES.join(" / ")}`, ERR.LETTER_TIMELINE_STATUS_INVALID);
     if (params.archived && !["archived", "unarchived", "all"].includes(params.archived))
-      throw httpError(400, "archived 只能是 archived / unarchived / all");
+      throw httpError(400, "archived 只能是 archived / unarchived / all", ERR.LETTER_TIMELINE_ARCHIVED_INVALID);
     if (params.archived === "all") params.archived = "";
     return { params, limit };
   }
@@ -2397,30 +2622,30 @@ export async function createOliviaService(options = {}) {
    */
   function parseLetterImport(text) {
     const raw = String(text ?? "");
-    if (!raw.trim()) throw httpError(400, "导入内容为空，请选择游戏里「一键导出」生成的 json 信件文件");
+    if (!raw.trim()) throw httpError(400, "导入内容为空，请选择游戏里「一键导出」生成的 json 信件文件", ERR.LETTER_IMPORT_EMPTY);
     let parsed;
     try {
       parsed = JSON.parse(raw);
     } catch {
-      throw httpError(400, "不是有效的 JSON 文件（解析失败），请选择游戏里「一键导出」生成的 json 信件文件");
+      throw httpError(400, "不是有效的 JSON 文件（解析失败），请选择游戏里「一键导出」生成的 json 信件文件", ERR.LETTER_IMPORT_NOT_JSON);
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-      throw httpError(400, "文件顶层不是对象，不是 OliviaSoul 的信件导出格式");
+      throw httpError(400, "文件顶层不是对象，不是 OliviaSoul 的信件导出格式", ERR.LETTER_IMPORT_NOT_OBJECT);
     if (parsed.schema !== LETTER_IMPORT_SCHEMA)
-      throw httpError(400, `不是 OliviaSoul 的信件导出文件（schema 应为 ${LETTER_IMPORT_SCHEMA}，实际为 ${JSON.stringify(parsed.schema ?? null)}）`);
+      throw httpError(400, `不是 OliviaSoul 的信件导出文件（schema 应为 ${LETTER_IMPORT_SCHEMA}，实际为 ${JSON.stringify(parsed.schema ?? null)}）`, ERR.LETTER_IMPORT_SCHEMA_MISMATCH);
     if (Number(parsed.version) !== LETTER_IMPORT_VERSION)
-      throw httpError(400, `不支持的信件导出格式版本 ${JSON.stringify(parsed.version ?? null)}（当前只支持 v${LETTER_IMPORT_VERSION}）`);
-    if (!Array.isArray(parsed.letters)) throw httpError(400, "文件里没有 letters 列表");
-    if (!parsed.letters.length) throw httpError(400, "文件里没有信件（letters 是空的）");
+      throw httpError(400, `不支持的信件导出格式版本 ${JSON.stringify(parsed.version ?? null)}（当前只支持 v${LETTER_IMPORT_VERSION}）`, ERR.LETTER_IMPORT_VERSION_UNSUPPORTED);
+    if (!Array.isArray(parsed.letters)) throw httpError(400, "文件里没有 letters 列表", ERR.LETTER_IMPORT_NO_LIST);
+    if (!parsed.letters.length) throw httpError(400, "文件里没有信件（letters 是空的）", ERR.LETTER_IMPORT_LIST_EMPTY);
     const letters = parsed.letters.map((entry, index) => {
       const position = index + 1;
       if (!entry || typeof entry !== "object" || Array.isArray(entry))
-        throw httpError(400, `第 ${position} 封信不是对象`);
+        throw httpError(400, `第 ${position} 封信不是对象`, ERR.LETTER_IMPORT_ITEM_NOT_OBJECT);
       const letterId = String(entry.letterId ?? "").trim();
-      if (!letterId) throw httpError(400, `第 ${position} 封信缺少 letterId`);
-      if (letterId.length > 128) throw httpError(400, `第 ${position} 封信的 letterId 过长`);
+      if (!letterId) throw httpError(400, `第 ${position} 封信缺少 letterId`, ERR.LETTER_IMPORT_ITEM_NO_ID);
+      if (letterId.length > 128) throw httpError(400, `第 ${position} 封信的 letterId 过长`, ERR.LETTER_IMPORT_ITEM_ID_TOO_LONG);
       const incoming = typeof entry.incoming === "string" ? entry.incoming : "";
-      if (!incoming.trim()) throw httpError(400, `第 ${position} 封信（${letterId}）的正文是空的`);
+      if (!incoming.trim()) throw httpError(400, `第 ${position} 封信（${letterId}）的正文是空的`, ERR.LETTER_IMPORT_ITEM_EMPTY);
       const date = typeof entry.date === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(entry.date) ? entry.date : "";
       const time = typeof entry.time === "string" && /^\d{2}:\d{2}$/u.test(entry.time) ? entry.time : "";
       return {
@@ -2566,7 +2791,7 @@ export async function createOliviaService(options = {}) {
 
   async function buildMemoryExport(user) {
     const oldestFirst = memoryRows(user.id);
-    if (!oldestFirst.length) throw httpError(409, "暂无记忆");
+    if (!oldestFirst.length) throw httpError(409, "暂无记忆", ERR.SOUL_EMPTY);
     const oldHashes = oldestFirst.slice(0, Math.max(0, oldestFirst.length - 10)).map(row => row.content_md5);
     const bulk = memoryBulk(user.id);
     return {
@@ -2598,7 +2823,7 @@ export async function createOliviaService(options = {}) {
       const row = rowsById.get(exchange.letterId);
       if (!row) continue;
       const filePath = join(videosDir, row.reply_video);
-      if (!existsSync(filePath)) throw httpError(409, `往来 ${exchange.contentMd5.slice(0, 8)} 的视频备份不存在`);
+      if (!existsSync(filePath)) throw httpError(409, `往来 ${exchange.contentMd5.slice(0, 8)} 的视频备份不存在`, ERR.SOUL_VIDEO_BACKUP_MISSING);
       files.push({ letterId: row.id, contentMd5: exchange.contentMd5, filePath });
     }
     const bundle = await prepareSoulBundle(memory, files);
@@ -2621,13 +2846,13 @@ export async function createOliviaService(options = {}) {
 
   async function receiveSoulArchive(req) {
     const declaredSize = Number(req.headers["content-length"] ?? 0);
-    if (declaredSize > MAX_SOUL_BYTES) throw httpError(413, ".soul 文件不能超过 10 GB");
+    if (declaredSize > MAX_SOUL_BYTES) throw httpError(413, ".soul 文件不能超过 10 GB", ERR.SOUL_FILE_TOO_LARGE);
     const temporaryPath = join(tempDir, `${randomUUID()}.soul.tmp`);
     let size = 0;
     const limiter = new Transform({
       transform(chunk, encoding, callback) {
         size += chunk.length;
-        if (size > MAX_SOUL_BYTES) return callback(httpError(413, ".soul 文件不能超过 10 GB"));
+        if (size > MAX_SOUL_BYTES) return callback(httpError(413, ".soul 文件不能超过 10 GB", ERR.SOUL_FILE_TOO_LARGE));
         callback(null, chunk);
       },
     });
@@ -2641,32 +2866,32 @@ export async function createOliviaService(options = {}) {
   }
 
   async function parseSoulArchive(filePath, fileSize) {
-    if (fileSize < 16) throw httpError(400, ".soul 文件格式不正确");
+    if (fileSize < 16) throw httpError(400, ".soul 文件格式不正确", ERR.SOUL_FORMAT_INVALID);
     const handle = await open(filePath, "r");
     try {
       const header = Buffer.alloc(16);
       if ((await handle.read(header, 0, header.length, 0)).bytesRead !== header.length)
-        throw httpError(400, ".soul 文件不完整");
-      if (!header.subarray(0, 8).equals(SOUL_MAGIC)) throw httpError(400, ".soul 文件格式不正确");
+        throw httpError(400, ".soul 文件不完整", ERR.SOUL_TRUNCATED);
+      if (!header.subarray(0, 8).equals(SOUL_MAGIC)) throw httpError(400, ".soul 文件格式不正确", ERR.SOUL_FORMAT_INVALID);
       const manifestLengthValue = header.readBigUInt64LE(8);
-      if (manifestLengthValue > BigInt(MAX_SOUL_MANIFEST_BYTES)) throw httpError(400, ".soul 信件清单过大");
+      if (manifestLengthValue > BigInt(MAX_SOUL_MANIFEST_BYTES)) throw httpError(400, ".soul 信件清单过大", ERR.SOUL_MANIFEST_TOO_LARGE);
       const manifestLength = Number(manifestLengthValue);
-      if (16 + manifestLength > fileSize) throw httpError(400, ".soul 文件不完整");
+      if (16 + manifestLength > fileSize) throw httpError(400, ".soul 文件不完整", ERR.SOUL_TRUNCATED);
       const manifestBuffer = Buffer.alloc(manifestLength);
       if ((await handle.read(manifestBuffer, 0, manifestLength, 16)).bytesRead !== manifestLength)
-        throw httpError(400, ".soul 文件不完整");
+        throw httpError(400, ".soul 文件不完整", ERR.SOUL_TRUNCATED);
       let manifest;
       try {
         manifest = JSON.parse(manifestBuffer.toString("utf8"));
       } catch {
-        throw httpError(400, ".soul 信件清单格式不正确");
+        throw httpError(400, ".soul 信件清单格式不正确", ERR.SOUL_MANIFEST_INVALID);
       }
       if (manifest?.schema !== "olivia-soul.bundle" || ![1, 2].includes(manifest.version))
-        throw httpError(400, "不支持的 .soul 文件版本");
+        throw httpError(400, "不支持的 .soul 文件版本", ERR.SOUL_VERSION_UNSUPPORTED);
       const payload = parseStandardMemoryJson(JSON.stringify(manifest.memory));
-      if (!payload) throw httpError(400, ".soul 信件信息校验失败");
+      if (!payload) throw httpError(400, ".soul 信件信息校验失败", ERR.SOUL_CHECKSUM_MISMATCH);
       if (!Array.isArray(manifest.videos) || manifest.videos.length > payload.exchanges.length)
-        throw httpError(400, ".soul 视频清单格式不正确");
+        throw httpError(400, ".soul 视频清单格式不正确", ERR.SOUL_VIDEO_LIST_INVALID);
       const exchangeHashes = new Set(payload.exchanges.map(exchange => exchange.contentMd5));
       const exchangeIds = new Set(payload.exchanges.map(exchange => exchange.letterId).filter(Boolean));
       const seenHashes = new Set();
@@ -2678,22 +2903,22 @@ export async function createOliviaService(options = {}) {
         const letterId = String(entry.letterId ?? "");
         const size = Number(entry.size);
         if (!/^[a-f0-9]{32}$/u.test(contentMd5) || !exchangeHashes.has(contentMd5) || seenHashes.has(contentMd5))
-          throw httpError(400, ".soul 视频关联信息不正确");
+          throw httpError(400, ".soul 视频关联信息不正确", ERR.SOUL_VIDEO_LINK_INVALID);
         if (manifest.version === 2 && (!exchangeIds.has(letterId) || seenIds.has(letterId)))
-          throw httpError(400, ".soul 视频信件 ID 不正确");
+          throw httpError(400, ".soul 视频信件 ID 不正确", ERR.SOUL_VIDEO_LETTER_ID_INVALID);
         if (!Number.isSafeInteger(size) || size < 12 || size > MAX_VIDEO_BYTES)
-          throw httpError(400, ".soul 视频大小不正确");
-        if (offset + size > fileSize) throw httpError(400, ".soul 视频数据不完整");
+          throw httpError(400, ".soul 视频大小不正确", ERR.SOUL_VIDEO_SIZE_INVALID);
+        if (offset + size > fileSize) throw httpError(400, ".soul 视频数据不完整", ERR.SOUL_VIDEO_DATA_TRUNCATED);
         const videoHeader = Buffer.alloc(12);
         if ((await handle.read(videoHeader, 0, videoHeader.length, offset)).bytesRead !== videoHeader.length)
-          throw httpError(400, ".soul 视频数据不完整");
-        if (videoHeader.toString("ascii", 4, 8) !== "ftyp") throw httpError(400, ".soul 包含无效 MP4");
+          throw httpError(400, ".soul 视频数据不完整", ERR.SOUL_VIDEO_DATA_TRUNCATED);
+        if (videoHeader.toString("ascii", 4, 8) !== "ftyp") throw httpError(400, ".soul 包含无效 MP4", ERR.SOUL_VIDEO_NOT_MP4);
         seenHashes.add(contentMd5);
         if (letterId) seenIds.add(letterId);
         videos.push({ letterId: letterId || null, contentMd5, size, offset });
         offset += size;
       }
-      if (offset !== fileSize) throw httpError(400, ".soul 文件尾部存在多余数据");
+      if (offset !== fileSize) throw httpError(400, ".soul 文件尾部存在多余数据", ERR.SOUL_TRAILING_DATA);
       return { payload, videos };
     } finally {
       await handle.close();
@@ -2730,7 +2955,7 @@ export async function createOliviaService(options = {}) {
       }
       for (const video of stagedVideos) {
         const exchange = rowsByOldIdentity.get(video.letterId ? `id:${video.letterId}` : `hash:${video.contentMd5}`);
-        if (!exchange) throw httpError(409, "视频对应的信件不存在");
+        if (!exchange) throw httpError(409, "视频对应的信件不存在", ERR.SOUL_VIDEO_LETTER_NOT_FOUND);
         const filename = `${randomUUID()}.mp4`;
         const targetPath = join(videosDir, filename);
         await rename(video.stagedPath, targetPath);
@@ -3102,9 +3327,9 @@ export async function createOliviaService(options = {}) {
     const saved = exchanges.map((exchange, index) => {
       const requestedId = String(exchange.letterId ?? "").trim();
       if (requestedId && !currentById.has(requestedId))
-        throw httpError(409, `往来 ${index + 1} 对应的信件不存在`);
+        throw httpError(409, `往来 ${index + 1} 对应的信件不存在`, ERR.LETTER_EXCHANGE_NOT_FOUND);
       const id = requestedId || randomUUID();
-      if (retainedIds.has(id)) throw httpError(400, `往来 ${index + 1} 的信件 ID 重复`);
+      if (retainedIds.has(id)) throw httpError(400, `往来 ${index + 1} 的信件 ID 重复`, ERR.LETTER_EXCHANGE_ID_DUPLICATE);
       retainedIds.add(id);
       return { ...exchange, letterId: id, contentMd5: exchangeContentMd5(exchange) };
     });
@@ -3162,7 +3387,7 @@ export async function createOliviaService(options = {}) {
   }
 
   async function withMemoryLock(person, action) {
-    if (memoryBusy.has(person)) throw httpError(409, "记忆正在整理，请稍候");
+    if (memoryBusy.has(person)) throw httpError(409, "记忆正在整理，请稍候", ERR.LETTER_MEMORY_BUSY);
     memoryBusy.add(person);
     try {
       return await action();
@@ -3248,6 +3473,7 @@ export async function createOliviaService(options = {}) {
         root,
         tempDir,
         historySnapshot,
+        driftTier: resolveDriftTier(row.person),
       });
       if (!reply.trim()) throw new Error("生成器返回空回信");
       const repliedAt = nowSeconds();
@@ -3419,6 +3645,7 @@ export async function createOliviaService(options = {}) {
           id,
           root,
           tempDir,
+          driftTier: resolveDriftTier(localUser.person),
         });
         if (!reply.trim()) throw new Error("生成器返回空正文");
         // reply_type 必须与「普通回信」一致地置为 1（文字），否则 visibleLetter 会把它当「还没回复」——
@@ -3618,12 +3845,12 @@ export async function createOliviaService(options = {}) {
     try {
       mediaUrl = new URL(String(value ?? ""));
     } catch {
-      throw httpError(400, "播放地址无效");
+      throw httpError(400, "播放地址无效", ERR.PLAYER_URL_INVALID);
     }
     const expectedOrigin = `http://${req.headers.host || "127.0.0.1:27149"}`;
     if (mediaUrl.origin !== expectedOrigin
       || !/^\/toy\/midi\/songs\/[^/]+\/(?:video(?:\.mp4)?|[A-Za-z0-9_-]+\.mp4)$/u.test(mediaUrl.pathname)) {
-      throw httpError(400, "播放器只接受当前本地服务提供的作品地址");
+      throw httpError(400, "播放器只接受当前本地服务提供的作品地址", ERR.PLAYER_URL_NOT_LOCAL);
     }
     return mediaUrl.toString();
   }
@@ -3647,7 +3874,7 @@ export async function createOliviaService(options = {}) {
     //   并补一条「与 public/ 实际文件比对」的测试，让漏登记在测试期就暴露。
     // 何时回来收拾：下一次新增/删除 public/ 前端文件时，或静态服务改为目录扫描的那一版。
     if (!["index.html", "app.js", "file-picker-guard.js", "proactive-settings.js", "game-lyrics.js", "game-letter-export.js", "lyrics-settings.js", "lyrics-settings.css", "listen-naming.css", "song-editor.js", "folder-manager.js", "library-health-panel.js", "game-favorites.js", "game-letter-timeline.js", "update-download-ui.js", "tab-notices.js", "patch-loss-notice.js", "listen-naming.js", "listen-naming-tools.js", "panel-host.js", "listen-naming-player.js", "time-of-day-inspect.js", "update-notes.js", "migrate-ui.js", "diagnostics-panel.js", "twin-groups-panel.js", "game-log-panel.js", "getting-started.js", "game-stability-panel.js", "listen-naming-feedback.js", "dependency-check.js", "legal-notices.js", "logs-page.js", "styles.css", "olivia-soul-gold.png"].includes(relative))
-      throw httpError(404, "文件不存在");
+      throw httpError(404, "文件不存在", ERR.COMMON_FILE_NOT_FOUND);
     const file = join(publicRoot, relative);
     const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".png": "image/png" };
     res.writeHead(200, {
@@ -3671,7 +3898,7 @@ export async function createOliviaService(options = {}) {
     if (WRITE_METHODS.has(req.method) && !writeSourceAllowed(req)) {
       const source = String(req.headers.origin ?? req.headers.referer ?? "");
       console.error(`[write-guard] 拒绝来源 ${source || "(空)"} 的写请求：${req.method} ${path}`);
-      throw httpError(403, "请求来源不被信任");
+      throw httpError(403, "请求来源不被信任", ERR.COMMON_ORIGIN_UNTRUSTED);
     }
     if (path.startsWith("/toy/")) lastClientAt = nowSeconds();
     if (req.method === 'GET' && path === '/toy/command-events')
@@ -3839,13 +4066,13 @@ export async function createOliviaService(options = {}) {
       const id = decodeURIComponent(songMetadataMatch[1]);
       let song = midiStore.getUserSong(id);
       if (!song || song.sourceKind === "upload" || song.jobId)
-        throw httpError(404, "作品不存在", "MIDI_SONG_NOT_FOUND");
+        throw httpError(404, "作品不存在", ERR.MIDI_SONG_NOT_FOUND);
       if (req.method === "POST") {
         const patch = await readJson(req);
         if (!patch || typeof patch !== "object" || Array.isArray(patch)
           || !Object.keys(patch).length
           || Object.keys(patch).some(key => !["name", "permanentName", "timeOfDayMapping"].includes(key)))
-          throw httpError(400, "仅支持修改作品名称和时段对应关系", "MIDI_SONG_METADATA_INVALID");
+          throw httpError(400, "仅支持修改作品名称和时段对应关系", ERR.MIDI_SONG_METADATA_INVALID);
         try {
           song = await songNameCorrections.save(id, patch);
         } catch (error) {
@@ -3896,7 +4123,7 @@ export async function createOliviaService(options = {}) {
       const body = await readJson(req);
       const requestedCmd = String(body.cmd ?? "");
       const supportedCommands = new Set(["play", "pause", "suspend", "resume", "stop", "seek", "setVolume", "setMute", "setLoop", "progress"]);
-      if (!supportedCommands.has(requestedCmd)) throw httpError(400, "播放器命令无效");
+      if (!supportedCommands.has(requestedCmd)) throw httpError(400, "播放器命令无效", ERR.PLAYER_COMMAND_INVALID);
       // g31：前端在播放中上报当前位置。游戏 UI 的「暂停」发 stop 会把 currentTime 归零，
       // 于是续播点记不下来（记录条件是 currentTime > 1）。
       // progress 只更新位置：不改 playbackState、不动 revision —— 避免每几秒触发一轮前端状态同步。
@@ -3923,7 +4150,7 @@ export async function createOliviaService(options = {}) {
         const mediaUrl = validatedLocalPlayerUrl(req, body.url);
         const urlSongId = localPlayerSongIdFromUrl(mediaUrl);
         songId = String(body.songId ?? urlSongId).trim();
-        if (!songId || songId !== urlSongId) throw httpError(400, "作品与播放地址不匹配");
+        if (!songId || songId !== urlSongId) throw httpError(400, "作品与播放地址不匹配", ERR.PLAYER_SONG_URL_MISMATCH);
         const song = midiStore.getUserSong(songId);
         if (!song?.videoPath) throw playbackMediaError(404, song?.removed
           ? "该作品已从曲库移除，请刷新曲库后重试"
@@ -3954,18 +4181,18 @@ export async function createOliviaService(options = {}) {
         command = { cmd, url: playbackUrl.toString(), songId, name, sessionId, loop: false };
       } else {
         songId = String(body.songId ?? "").trim();
-        if (!songId || songId !== localPlayerState.songId) throw httpError(409, "当前作品已经切换");
+        if (!songId || songId !== localPlayerState.songId) throw httpError(409, "当前作品已经切换", ERR.PLAYER_SONG_SWITCHED);
         const sessionId = String(body.sessionId ?? "").trim();
         if (!sessionId || sessionId !== localPlayerState.sessionId)
-          throw httpError(409, "当前演奏会话已经切换");
+          throw httpError(409, "当前演奏会话已经切换", ERR.PLAYER_SESSION_SWITCHED);
         if (cmd === "resume" && localPlayerState.playbackState !== "paused")
-          throw httpError(409, "当前演奏已经结束，无法继续播放");
+          throw httpError(409, "当前演奏已经结束，无法继续播放", ERR.PLAYER_SESSION_ENDED);
         name = localPlayerState.name;
         command = { cmd, songId, sessionId };
         if (requestedCmd === 'suspend') command.preserveSession = true;
         if (cmd === "seek") {
           const offset = Number(body.offset);
-          if (!Number.isFinite(offset) || offset < 0) throw httpError(400, "拖动位置无效");
+          if (!Number.isFinite(offset) || offset < 0) throw httpError(400, "拖动位置无效", ERR.PLAYER_SEEK_INVALID);
           command.offset = localPlayerState.duration > 0
             ? Math.min(offset, localPlayerState.duration)
             : offset;
@@ -3981,7 +4208,7 @@ export async function createOliviaService(options = {}) {
           }
         } else if (cmd === "setVolume") {
           const volume = Number(body.volume);
-          if (!Number.isFinite(volume) || volume < 0 || volume > 100) throw httpError(400, "音量无效");
+          if (!Number.isFinite(volume) || volume < 0 || volume > 100) throw httpError(400, "音量无效", ERR.PLAYER_VOLUME_INVALID);
           command.volume = volume;
         } else if (cmd === "setMute") {
           command.mute = Boolean(body.mute);
@@ -4101,11 +4328,11 @@ export async function createOliviaService(options = {}) {
       if (localPlayerSongIdFromUrl(mediaUrl) !== songId || mediaUrl !== localPlayerState.mediaUrl)
         return ok(req, res, localPlayerState, { "Cache-Control": "no-store" });
       if (body.event !== "timeupdate" && body.event !== "ended")
-        throw httpError(400, "播放状态事件无效");
+        throw httpError(400, "播放状态事件无效", ERR.PLAYER_STATE_EVENT_INVALID);
       const duration = Number(body.duration);
       const currentTime = Number(body.currentTime);
       if (!Number.isFinite(currentTime) || currentTime < 0 || !Number.isFinite(duration) || duration < 0)
-        throw httpError(400, "播放时间无效");
+        throw httpError(400, "播放时间无效", ERR.PLAYER_TIME_INVALID);
       if (body.event === "timeupdate" && localPlayerState.playbackState !== "playing"
         && !(localPlayerState.playbackState === 'paused' && body.paused === true))
         return ok(req, res, localPlayerState, { "Cache-Control": "no-store" });
@@ -4228,10 +4455,10 @@ export async function createOliviaService(options = {}) {
       const user = getLocalUser();
       const quota = letterQuota(user.id);
       if (quota.remaining === 0)
-        throw httpError(429, `今天最多发送 ${quota.limit} 封信`, -10401);
+        throw httpError(429, `今天最多发送 ${quota.limit} 封信`, ERR.LETTER_DAILY_QUOTA_EXCEEDED);
       const body = await readJson(req);
       const content = String(body.content ?? "").trim();
-      if (!content) throw httpError(400, "信件内容不能为空");
+      if (!content) throw httpError(400, "信件内容不能为空", ERR.LETTER_CONTENT_EMPTY);
       const id = randomUUID();
       const createdAt = nowSeconds();
       const delay = Number(getSetting(REPLY_DELAY_SETTING));
@@ -4264,7 +4491,7 @@ export async function createOliviaService(options = {}) {
     if ((req.method === "GET" || req.method === "HEAD") && videoReadMatch) {
       const row = db.prepare("SELECT * FROM letters WHERE id = ? AND user_id = ?").get(decodeURIComponent(videoReadMatch[1]), localUser.id);
       if (!row?.reply_video || row.status !== STATUS.REPLIED || row.available_at > nowSeconds())
-        throw httpError(404, "视频回信不存在");
+        throw httpError(404, "视频回信不存在", ERR.LETTER_REPLY_VIDEO_NOT_FOUND);
       await serveReplyVideo(req, res, row);
       return;
     }
@@ -4272,7 +4499,7 @@ export async function createOliviaService(options = {}) {
     if (req.method === "GET" && path === "/toy/letter/detail") {
       const id = url.searchParams.get("letterId") ?? url.searchParams.get("letter_id");
       const row = db.prepare("SELECT * FROM letters WHERE id = ?").get(id);
-      if (!row) throw httpError(404, "信件不存在");
+      if (!row) throw httpError(404, "信件不存在", ERR.LETTER_NOT_FOUND);
       const value = visibleLetter(row, req);
       if (value.letterStatus === STATUS.REPLIED && !row.is_read) {
         db.prepare("UPDATE letters SET is_read = 1 WHERE id = ?").run(id);
@@ -4293,6 +4520,7 @@ export async function createOliviaService(options = {}) {
       const { settings, verdict, label } = proactiveLetterVerdict();
       return ok(req, res, {
         enabled: settings.enabled,
+        keepCurrentShape: getSetting("keep-current-shape") === "1",
         settings: {
           maxPerDay: settings.maxPerDay,
           maxPerWeek: settings.maxPerWeek,
@@ -4308,11 +4536,19 @@ export async function createOliviaService(options = {}) {
     if (req.method === "POST" && path === "/toy/letter/proactive") {
       const body = await readJson(req);
       const saved = saveProactiveLetterSettings(body);
+      // ⚠️ 先校验、后落盘（2026-10-16 修，[审查-4] 代码-3）：
+      // 原来开关的 setSetting 排在 `if (!saved.ok) throw` **之前** ⇒ 其余设置非法时，
+      // 请求虽然回了 400、开关却已经被改掉了（部分写入）。界面上就是「保存失败，但那个勾选框变了」。
+      // 现在把开关的写入挪到校验通过之后，失败时一个字段都不落盘。
       if (!saved.ok)
-        throw httpError(400, `设置里有不合法的值：${saved.invalid.join("、")}`, -10402);
+        throw httpError(400, `设置里有不合法的值：${saved.invalid.join("、")}`, ERR.LETTER_SETTINGS_INVALID);
+      if (typeof body.keepCurrentShape === "boolean") {
+        setSetting("keep-current-shape", body.keepCurrentShape ? "1" : "0");
+      }
       const { verdict, label } = proactiveLetterVerdict();
       return ok(req, res, {
         enabled: saved.settings.enabled,
+        keepCurrentShape: getSetting("keep-current-shape") === "1",
         settings: {
           maxPerDay: saved.settings.maxPerDay,
           maxPerWeek: saved.settings.maxPerWeek,
@@ -4338,12 +4574,12 @@ export async function createOliviaService(options = {}) {
       const user = getLocalUser();
       const quota = letterQuota(user.id);
       if (quota.remaining === 0)
-        throw httpError(429, `今天最多发送 ${quota.limit} 封信`, -10401);
+        throw httpError(429, `今天最多发送 ${quota.limit} 封信`, ERR.LETTER_DAILY_QUOTA_EXCEEDED);
       const body = await readJson(req);
       const letterId = body.letterId ?? body.letter_id;
       const row = db.prepare("SELECT * FROM letters WHERE id = ?").get(letterId);
-      if (!row) throw httpError(404, "信件不存在");
-      if (row.status !== STATUS.FAILED) throw httpError(409, "只有失败信件可以重试");
+      if (!row) throw httpError(404, "信件不存在", ERR.LETTER_NOT_FOUND);
+      if (row.status !== STATUS.FAILED) throw httpError(409, "只有失败信件可以重试", ERR.LETTER_NOT_RETRIABLE);
       const delay = Number(getSetting(REPLY_DELAY_SETTING));
       db.prepare("UPDATE letters SET status = ?, error = NULL, reply_text = NULL, replied_at = NULL, available_at = ? WHERE id = ?").run(STATUS.PENDING, nowSeconds() + delay, row.id);
       wakeWorker();
@@ -4354,7 +4590,7 @@ export async function createOliviaService(options = {}) {
       const body = await readJson(req);
       const letterId = body.letterId ?? body.letter_id;
       const row = db.prepare("SELECT * FROM letters WHERE id = ?").get(letterId);
-      if (!row) throw httpError(404, "信件不存在");
+      if (!row) throw httpError(404, "信件不存在", ERR.LETTER_NOT_FOUND);
       const shareId = row.share_id ?? randomUUID();
       if (!row.share_id) db.prepare("UPDATE letters SET share_id = ? WHERE id = ?").run(shareId, row.id);
       return ok(req, res, { shareId });
@@ -4365,7 +4601,7 @@ export async function createOliviaService(options = {}) {
       const body = await readJson(req).catch(() => ({}));
       const format = String(body?.format ?? "md").toLowerCase() === "json" ? "json" : "md";
       const rows = letterExportRows(user.id);
-      if (!rows.length) throw httpError(409, "还没有可以导出的信件");
+      if (!rows.length) throw httpError(409, "还没有可以导出的信件", ERR.LETTER_EXPORT_EMPTY);
       const exportedAt = nowSeconds();
       const directory = join(dataDir, "exports");
       await mkdir(directory, { recursive: true });
@@ -4430,7 +4666,7 @@ export async function createOliviaService(options = {}) {
       const user = getLocalUser();
       const body = await readJson(req);
       const preview = db.prepare("SELECT * FROM letter_import_previews WHERE id = ?").get(String(body.previewId ?? ""));
-      if (!preview) throw httpError(404, "导入预览不存在或已经用过了，请重新选择文件");
+      if (!preview) throw httpError(404, "导入预览不存在或已经用过了，请重新选择文件", ERR.LETTER_IMPORT_PREVIEW_NOT_FOUND);
       let stored = {};
       try {
         stored = JSON.parse(preview.payload_json) ?? {};
@@ -4575,7 +4811,7 @@ export async function createOliviaService(options = {}) {
       const rawType = body.itemType ?? body.item_type;
       const itemType = Number.isInteger(Number(rawType)) ? Number(rawType) : playlistTypes[String(rawType ?? "").toUpperCase()] ?? NaN;
       const itemId = String(body.itemId ?? body.item_id ?? body.id ?? body.songId ?? body.song_id ?? body.performanceId ?? body.performance_id ?? "").trim();
-      if (!Number.isInteger(itemType) || !itemId) throw httpError(400, "播单条目不完整");
+      if (!Number.isInteger(itemType) || !itemId) throw httpError(400, "播单条目不完整", ERR.PLAYLIST_ITEM_INCOMPLETE);
       const existing = db.prepare("SELECT * FROM playlist_items WHERE user_id = ? AND item_type = ? AND item_id = ?").get(user.id, itemType, itemId);
       const media = playlistMedia(body);
       if (existing) {
@@ -4637,7 +4873,7 @@ export async function createOliviaService(options = {}) {
       const body = await readJson(req);
       const itemType = Number(body.itemType ?? body.item_type);
       const itemId = String(body.itemId ?? body.item_id ?? "").trim();
-      if (!Number.isInteger(itemType) || !itemId) throw httpError(400, "播单条目不完整");
+      if (!Number.isInteger(itemType) || !itemId) throw httpError(400, "播单条目不完整", ERR.PLAYLIST_ITEM_INCOMPLETE);
       db.prepare("DELETE FROM playlist_items WHERE user_id = ? AND item_type = ? AND item_id = ?").run(user.id, itemType, itemId);
       return ok(req, res, { itemType, itemId });
     }
@@ -4655,11 +4891,11 @@ export async function createOliviaService(options = {}) {
 
     function folderNameOf(value) {
       const name = String(value ?? "").replace(/[\r\n\t]+/gu, " ").trim();
-      if (!name) throw httpError(400, "歌单名不能为空");
-      if ([...name].length > FOLDER_NAME_MAX) throw httpError(400, `歌单名最多 ${FOLDER_NAME_MAX} 个字`);
+      if (!name) throw httpError(400, "歌单名不能为空", ERR.FOLDER_NAME_EMPTY);
+      if ([...name].length > FOLDER_NAME_MAX) throw httpError(400, `歌单名最多 ${FOLDER_NAME_MAX} 个字`, ERR.FOLDER_NAME_TOO_LONG);
       // #68（第四轮 · 审-5 §7.3）：与用户名同口径 —— 原来只挡零宽 / bidi，
       // NUL、BEL、ESC、DEL 能存进 song_folders.name，还会跟着进导出的 .osfolder 文件名。
-      if (/[\x00-\x1F\x7F]/u.test(name) || CONTROL_CHARS.test(name)) throw httpError(400, "歌单名包含不可用字符");
+      if (/[\x00-\x1F\x7F]/u.test(name) || CONTROL_CHARS.test(name)) throw httpError(400, "歌单名包含不可用字符", ERR.FOLDER_NAME_CHARS_INVALID);
       return name;
     }
 
@@ -4680,7 +4916,7 @@ export async function createOliviaService(options = {}) {
         const candidate = `${base} (${index})`;
         if (!taken.has(folderNameKey(candidate))) return candidate;
       }
-      throw httpError(409, "同名歌单太多，换个名字吧");
+      throw httpError(409, "同名歌单太多，换个名字吧", ERR.FOLDER_NAME_COLLISION);
     }
 
     function folderPayload(row, itemCount = null) {
@@ -4846,8 +5082,8 @@ export async function createOliviaService(options = {}) {
       const raw = String(text ?? "").trim();
       const first = raw.indexOf("|");
       const last = raw.lastIndexOf("|");
-      if (first < 0 || last <= first) throw httpError(400, "导入内容不是歌单二维码/文件");
-      if (raw.slice(0, first).trim().toUpperCase() !== FOLDER_EXPORT_TAG) throw httpError(400, "导入内容的格式版本不认识");
+      if (first < 0 || last <= first) throw httpError(400, "导入内容不是歌单二维码/文件", ERR.FOLDER_IMPORT_NOT_QR);
+      if (raw.slice(0, first).trim().toUpperCase() !== FOLDER_EXPORT_TAG) throw httpError(400, "导入内容的格式版本不认识", ERR.FOLDER_IMPORT_VERSION_UNKNOWN);
       const name = raw.slice(first + 1, last).trim() || "导入的歌单";
       const seen = new Set();
       const itemIds = [];
@@ -4857,7 +5093,7 @@ export async function createOliviaService(options = {}) {
         seen.add(itemId);
         itemIds.push(itemId);
       }
-      if (!itemIds.length) throw httpError(400, "导入内容里没有曲目");
+      if (!itemIds.length) throw httpError(400, "导入内容里没有曲目", ERR.FOLDER_IMPORT_NO_SONGS);
       return { name, itemIds };
     }
 
@@ -4905,7 +5141,7 @@ export async function createOliviaService(options = {}) {
           const created = folderCreate(user.id, body.name ?? body.folderName ?? body.folder_name);
           return ok(req, res, { ...folderPayload(created.row, created.added.length), items: [] });
         }
-        throw httpError(405, "歌单接口不支持这个方法");
+        throw httpError(405, "歌单接口不支持这个方法", ERR.FOLDER_METHOD_NOT_ALLOWED);
       }
 
       // 整单导入（扫二维码 / 选 .osfolder 文件）：撞名自动加后缀；
@@ -4935,7 +5171,7 @@ export async function createOliviaService(options = {}) {
       }
 
       const folder = db.prepare("SELECT * FROM song_folders WHERE user_id = ? AND id = ?").get(user.id, parts[0]);
-      if (!folder) throw httpError(404, "歌单不存在");
+      if (!folder) throw httpError(404, "歌单不存在", ERR.FOLDER_NOT_FOUND);
       const tail = parts.slice(1);
 
       if (!tail.length) {
@@ -4952,7 +5188,7 @@ export async function createOliviaService(options = {}) {
           db.prepare("DELETE FROM song_folders WHERE user_id = ? AND id = ?").run(user.id, folder.id);
           return ok(req, res, { id: folder.id, removedItems });
         }
-        throw httpError(405, "歌单接口不支持这个方法");
+        throw httpError(405, "歌单接口不支持这个方法", ERR.FOLDER_METHOD_NOT_ALLOWED);
       }
 
       // 一键导入曲库全部：把曲库里能播的曲子整批灌进来（不能播的只计数，不静默丢）。
@@ -4996,10 +5232,10 @@ export async function createOliviaService(options = {}) {
         const direction = body.direction;
         if (direction !== undefined && direction !== null && direction !== ""
           && direction !== "up" && direction !== "down")
-          throw httpError(400, "direction 只能填 up 或 down");
+          throw httpError(400, "direction 只能填 up 或 down", ERR.FOLDER_DIRECTION_INVALID);
         if (direction === "up" || direction === "down") {
           const at = rows.indexOf(String(body.itemId ?? body.item_id ?? "").trim());
-          if (at < 0) throw httpError(404, "这首歌不在这个歌单里");
+          if (at < 0) throw httpError(404, "这首歌不在这个歌单里", ERR.FOLDER_ITEM_NOT_IN_FOLDER);
           const to = direction === "up" ? at - 1 : at + 1;
           if (to >= 0 && to < rows.length) {
             order = [...rows];
@@ -5036,17 +5272,17 @@ export async function createOliviaService(options = {}) {
           if (removed.length) db.prepare("UPDATE song_folders SET updated_at = ? WHERE user_id = ? AND id = ?").run(nowSeconds(), user.id, folder.id);
           return ok(req, res, { folderId: folder.id, removed, items: folderItemsPayload(user.id, folder.id) });
         }
-        throw httpError(405, "歌单接口不支持这个方法");
+        throw httpError(405, "歌单接口不支持这个方法", ERR.FOLDER_METHOD_NOT_ALLOWED);
       }
 
-      throw httpError(404, "接口不存在");
+      throw httpError(404, "接口不存在", ERR.COMMON_ROUTE_NOT_FOUND);
     }
 
     const videoManageMatch = /^\/admin\/api\/letters\/([^/]+)\/video$/u.exec(path);
     if (videoManageMatch && (req.method === "POST" || req.method === "DELETE")) {
       const id = decodeURIComponent(videoManageMatch[1]);
       const row = db.prepare("SELECT * FROM letters WHERE id = ? AND user_id = ?").get(id, localUser.id);
-      if (!row || row.status !== STATUS.REPLIED || !row.reply_text) throw httpError(404, "对应回信不存在");
+      if (!row || row.status !== STATUS.REPLIED || !row.reply_text) throw httpError(404, "对应回信不存在", ERR.LETTER_REPLY_NOT_FOUND);
       if (req.method === "POST") {
         const updated = await saveReplyVideo(req, row);
         await rebuildArchiveProjection(localUser);
@@ -5079,7 +5315,7 @@ export async function createOliviaService(options = {}) {
       return ok(req, res, {...await refreshStorageStatus(),...summarizeReferencedRoots(),librarySources:summarizeLibrarySources(midiStore.listPublishedUserSongs())});
 
     if (req.method === "POST" && path === "/admin/api/storage/migration/preview") {
-      if (!storageStatus.activePath) throw httpError(409, "尚未取得游戏设置的曲目保存路径");
+      if (!storageStatus.activePath) throw httpError(409, "尚未取得游戏设置的曲目保存路径", ERR.MIDI_LIBRARY_PATH_MISSING);
       return ok(req, res, storageMigration.startPreview({ targetRoot: storageStatus.activePath }));
     }
 
@@ -5128,7 +5364,7 @@ export async function createOliviaService(options = {}) {
       const limiter = new Transform({
         transform(chunk, encoding, callback) {
           size += chunk.length;
-          if (size > MAX_TRANSCRIPTION_UPLOAD_BYTES) return callback(httpError(413, "媒体文件不能超过 4 GB"));
+          if (size > MAX_TRANSCRIPTION_UPLOAD_BYTES) return callback(httpError(413, "媒体文件不能超过 4 GB", ERR.MIDI_MEDIA_TOO_LARGE));
           callback(null, chunk);
         },
       });
@@ -5214,7 +5450,7 @@ export async function createOliviaService(options = {}) {
     if (req.method === "POST" && path === "/admin/api/debug/delay") {
       const seconds = Number((await readJson(req)).seconds);
       if (!Number.isInteger(seconds) || seconds < 0 || seconds > 86400)
-        throw httpError(400, "最小回信延迟必须是 0–86400 的整数秒");
+        throw httpError(400, "最小回信延迟必须是 0–86400 的整数秒", ERR.SETTING_REPLY_DELAY_INVALID);
       setSetting(REPLY_DELAY_SETTING, seconds);
       return ok(req, res, { delaySeconds: seconds, defaultDelaySeconds: REPLY_DELAY_SECONDS });
     }
@@ -5235,7 +5471,7 @@ export async function createOliviaService(options = {}) {
     if (req.method === "POST" && path === "/admin/api/debug/quota/limit") {
       const limit = Number((await readJson(req)).limit);
       if (!Number.isInteger(limit) || limit < 0 || limit > MAX_DAILY_LETTER_LIMIT)
-        throw httpError(400, `每日写信上限必须是 0–${MAX_DAILY_LETTER_LIMIT} 的整数，0 表示当天不能写信`);
+        throw httpError(400, `每日写信上限必须是 0–${MAX_DAILY_LETTER_LIMIT} 的整数，0 表示当天不能写信`, ERR.SETTING_DAILY_LIMIT_INVALID);
       setSetting(DAILY_LETTER_LIMIT_SETTING, limit);
       bumpLetterRevision();
       const quota = letterQuota(getLocalUser().id);
@@ -5266,7 +5502,7 @@ export async function createOliviaService(options = {}) {
       const body = await readJson(req);
       const requested = String(body?.channel ?? "").trim().toLowerCase();
       if (!UPDATE_CHANNELS.includes(requested))
-        throw httpError(400, "更新通道只能是 stable（稳定版）或 beta（测试版）");
+        throw httpError(400, "更新通道只能是 stable（稳定版）或 beta（测试版）", ERR.SETTING_UPDATE_CHANNEL_INVALID);
       setSetting(UPDATE_CHANNEL_SETTING, requested);
       return ok(req, res, { channel: requested, currentTag: updateCurrentTag });
     }
@@ -5280,13 +5516,13 @@ export async function createOliviaService(options = {}) {
 
     if (req.method === "POST" && path === "/admin/api/update/download/cancel") {
       const body = await readJson(req);
-      if (!Object.hasOwn(body, 'jobId')) throw httpError(400, '缺少下载任务标识');
+      if (!Object.hasOwn(body, 'jobId')) throw httpError(400, '缺少下载任务标识', ERR.SETTING_DOWNLOAD_JOB_MISSING);
       return ok(req, res, await updateDownloads.cancel(body.jobId));
     }
 
     if (req.method === "POST" && path === "/admin/api/update/download/pause") {
       const body = await readJson(req);
-      if (!Object.hasOwn(body, 'jobId')) throw httpError(400, '缺少下载任务标识');
+      if (!Object.hasOwn(body, 'jobId')) throw httpError(400, '缺少下载任务标识', ERR.SETTING_DOWNLOAD_JOB_MISSING);
       return ok(req, res, await updateDownloads.pause(body.jobId));
     }
 
@@ -5316,14 +5552,14 @@ export async function createOliviaService(options = {}) {
       return ok(req, res, await detectActiveModel());
 
     if (["/admin/api/local-ai/process", "/admin/api/local-ai/start", "/admin/api/local-ai/stop"].includes(path))
-      throw httpError(410, "本地 AI 进程管理已移除，请先独立启动兼容 API 服务", "LOCAL_AI_PROCESS_REMOVED");
+      throw httpError(410, "本地 AI 进程管理已移除，请先独立启动兼容 API 服务", ERR.MODEL_LOCAL_PROCESS_REMOVED);
 
     if (req.method === "POST" && path === "/admin/api/model/models") {
       const body = await readJson(req);
       const config = await readModelConfig({ root });
       const provider = String(body.provider ?? config.activeProvider).trim();
       const previous = config.profiles[provider];
-      if (!previous) throw httpError(400, "provider 只能是 deepseek 或 local");
+      if (!previous) throw httpError(400, "provider 只能是 deepseek 或 local", ERR.MODEL_PROVIDER_INVALID);
       let call;
       try {
         call = buildModelListRequest({
@@ -5333,7 +5569,7 @@ export async function createOliviaService(options = {}) {
           apiKey: body.apiKey === undefined ? previous.apiKey : body.apiKey,
         });
       } catch (error) {
-        throw httpError(400, safeModelError(error));
+        throw httpError(400, safeModelError(error), ERR.MODEL_CONFIG_INVALID);
       }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 30000);
@@ -5349,7 +5585,7 @@ export async function createOliviaService(options = {}) {
         if (!models.length) throw new Error("接口没有返回可用模型");
         return ok(req, res, { provider, models });
       } catch (error) {
-        throw httpError(502, `模型列表查询失败：${safeModelError(error)}`);
+        throw httpError(502, `模型列表查询失败：${safeModelError(error)}`, ERR.MODEL_LIST_QUERY_FAILED);
       } finally {
         clearTimeout(timer);
       }
@@ -5362,7 +5598,7 @@ export async function createOliviaService(options = {}) {
       const current = await readModelConfig({ root });
       const provider = String(body.provider ?? "").trim();
       const previous = current.profiles[provider];
-      if (!previous) throw httpError(400, "provider 只能是 deepseek 或 local");
+      if (!previous) throw httpError(400, "provider 只能是 deepseek 或 local", ERR.MODEL_PROVIDER_INVALID);
       const suppliedKey = body.apiKey === undefined ? previous.apiKey : String(body.apiKey).trim();
       const apiKey = provider === "deepseek" && !suppliedKey ? previous.apiKey : suppliedKey;
       try {
@@ -5385,7 +5621,7 @@ export async function createOliviaService(options = {}) {
         return ok(req, res, modelConfigPayload(saved));
       } catch (error) {
         if (error.status === 409) throw error;
-        throw httpError(400, safeModelError(error));
+        throw httpError(400, safeModelError(error), ERR.MODEL_CONFIG_INVALID);
       }
     }
 
@@ -5395,17 +5631,17 @@ export async function createOliviaService(options = {}) {
       const provider = String((await readJson(req)).provider ?? "").trim();
       const config = await readModelConfig({ root });
       const profile = config.profiles[provider];
-      if (!profile) throw httpError(400, "provider 只能是 deepseek 或 local");
+      if (!profile) throw httpError(400, "provider 只能是 deepseek 或 local", ERR.MODEL_PROVIDER_INVALID);
       let call;
       try {
         call = buildModelProbeCall(profile);
       } catch (error) {
-        throw httpError(400, safeModelError(error));
+        throw httpError(400, safeModelError(error), ERR.MODEL_CONFIG_INVALID);
       }
       try {
         await executeModelProbe(call);
       } catch (error) {
-        throw httpError(502, `${provider} 模型检测失败，未切换：${safeModelError(error)}${diagnoseModelFailure(error)}`);
+        throw httpError(502, `${provider} 模型检测失败，未切换：${safeModelError(error)}${diagnoseModelFailure(error)}`, ERR.MODEL_TEST_FAILED);
       }
       const saved = await queueModelConfigWrite(async () => {
         assertCurrentModelMutation(operationGeneration);
@@ -5424,7 +5660,7 @@ export async function createOliviaService(options = {}) {
       const current = await readModelConfig({ root });
       const provider = String(body.provider ?? "").trim();
       const previous = current.profiles[provider];
-      if (!previous) throw httpError(400, "provider 只能是 deepseek 或 local");
+      if (!previous) throw httpError(400, "provider 只能是 deepseek 或 local", ERR.MODEL_PROVIDER_INVALID);
       const candidate = {
         provider,
         baseUrl: body.baseUrl ?? previous.baseUrl,
@@ -5436,12 +5672,12 @@ export async function createOliviaService(options = {}) {
       try {
         call = buildModelProbeCall(candidate);
       } catch (error) {
-        throw httpError(400, safeModelError(error));
+        throw httpError(400, safeModelError(error), ERR.MODEL_CONFIG_INVALID);
       }
       try {
         await executeModelProbe(call);
       } catch (error) {
-        throw httpError(502, `${provider} 连通性测试失败，原配置已保留：${safeModelError(error)}${diagnoseModelFailure(error)}`);
+        throw httpError(502, `${provider} 连通性测试失败，原配置已保留：${safeModelError(error)}${diagnoseModelFailure(error)}`, ERR.MODEL_CONNECTIVITY_FAILED);
       }
       try {
         const saved = await queueModelConfigWrite(async () => {
@@ -5454,7 +5690,7 @@ export async function createOliviaService(options = {}) {
         return ok(req, res, { connected: true, provider, config: modelConfigPayload(saved) });
       } catch (error) {
         if (error.status === 409) throw error;
-        throw httpError(400, safeModelError(error));
+        throw httpError(400, safeModelError(error), ERR.MODEL_CONFIG_INVALID);
       }
     }
 
@@ -5463,18 +5699,18 @@ export async function createOliviaService(options = {}) {
       const config = await readModelConfig({ root });
       const provider = String(body.provider ?? config.activeProvider).trim();
       const profile = config.profiles[provider];
-      if (!profile) throw httpError(400, "provider 只能是 deepseek 或 local");
+      if (!profile) throw httpError(400, "provider 只能是 deepseek 或 local", ERR.MODEL_PROVIDER_INVALID);
       let call;
       try {
         call = buildModelProbeCall(profile);
       } catch (error) {
-        throw httpError(400, safeModelError(error));
+        throw httpError(400, safeModelError(error), ERR.MODEL_CONFIG_INVALID);
       }
       try {
         await executeModelProbe(call);
         return ok(req, res, { connected: true, provider });
       } catch (error) {
-        throw httpError(502, `${provider} 连通性测试失败：${safeModelError(error)}${diagnoseModelFailure(error)}`);
+        throw httpError(502, `${provider} 连通性测试失败：${safeModelError(error)}${diagnoseModelFailure(error)}`, ERR.MODEL_CONNECTIVITY_FAILED);
       }
     }
 
@@ -5510,7 +5746,7 @@ export async function createOliviaService(options = {}) {
         return ok(req, res, legacyDeepSeekPayload(saved.profiles.deepseek));
       } catch (error) {
         if (error.status === 409) throw error;
-        throw httpError(400, safeModelError(error));
+        throw httpError(400, safeModelError(error), ERR.MODEL_CONFIG_INVALID);
       }
     }
 
@@ -5531,7 +5767,7 @@ export async function createOliviaService(options = {}) {
       try {
         call = buildModelProbeCall(profile);
       } catch (error) {
-        throw httpError(400, safeModelError(error));
+        throw httpError(400, safeModelError(error), ERR.MODEL_CONFIG_INVALID);
       }
       call.body.stream = false;
       const controller = new AbortController();
@@ -5540,7 +5776,7 @@ export async function createOliviaService(options = {}) {
         await executeChatRequest(call, { fetchImpl: request, signal: controller.signal });
         return ok(req, res, { connected: true });
       } catch (error) {
-        throw httpError(502, `DeepSeek 连通性测试失败：${safeModelError(error)}`);
+        throw httpError(502, `DeepSeek 连通性测试失败：${safeModelError(error)}`, ERR.MODEL_CONNECTIVITY_FAILED);
       } finally {
         clearTimeout(timer);
       }
@@ -5549,7 +5785,7 @@ export async function createOliviaService(options = {}) {
     if (req.method === "POST" && path === "/admin/api/import/ai") {
       const body = await readJson(req);
       const content = String(body.content ?? "").trim();
-      if (!content) throw httpError(400, "请先粘贴要识别的信件全文");
+      if (!content) throw httpError(400, "请先粘贴要识别的信件全文", ERR.MODEL_LETTER_TEXT_EMPTY);
       const config = await readModelConfig({ root });
       const profile = activeModelProfile(config);
       let call;
@@ -5570,7 +5806,7 @@ export async function createOliviaService(options = {}) {
           maxTokens: outputBudgetFor(profile.model),
         });
       } catch (error) {
-        throw httpError(400, `${config.activeProvider} 模型配置不可用：${safeModelError(error)}`);
+        throw httpError(400, `${config.activeProvider} 模型配置不可用：${safeModelError(error)}`, ERR.MODEL_CONFIG_INVALID);
       }
       call.body.stream = false;
       const controller = new AbortController();
@@ -5604,8 +5840,8 @@ export async function createOliviaService(options = {}) {
           exchanges,
         });
       } catch (error) {
-        if (error.name === "AbortError") throw httpError(504, "AI 识别超过 30 分钟，请稍后重试");
-        throw httpError(502, `AI 识别失败（${config.activeProvider}）：${safeModelError(error)}`);
+        if (error.name === "AbortError") throw httpError(504, "AI 识别超过 30 分钟，请稍后重试", ERR.MODEL_RECOGNIZE_TIMEOUT);
+        throw httpError(502, `AI 识别失败（${config.activeProvider}）：${safeModelError(error)}`, ERR.MODEL_RECOGNIZE_FAILED);
       } finally {
         clearTimeout(timer);
       }
@@ -5666,9 +5902,9 @@ export async function createOliviaService(options = {}) {
           oldMemory: body.oldMemory,
           exchanges: body.exchanges,
         })) : null;
-        if (body.source === "json" && !standard) throw httpError(400, "标准记忆 JSON 校验失败");
+        if (body.source === "json" && !standard) throw httpError(400, "标准记忆 JSON 校验失败", ERR.SOUL_MEMORY_JSON_INVALID);
         const order = body.order ?? "oldest-first";
-        if (!["newest-first", "oldest-first"].includes(order)) throw httpError(400, "信件顺序格式不正确");
+        if (!["newest-first", "oldest-first"].includes(order)) throw httpError(400, "信件顺序格式不正确", ERR.SOUL_MEMORY_ORDER_INVALID);
         const payload = standard ?? {
           source: "ai",
           order,
@@ -5677,7 +5913,7 @@ export async function createOliviaService(options = {}) {
         };
         const imported = payload.order === "newest-first" ? [...payload.exchanges].reverse() : payload.exchanges;
         const scan = detectImport(formatArchive(user.person, "", imported));
-        if (scan.blocked) throw httpError(409, `导入内容未通过校验：${scan.findings.join("；")}`);
+        if (scan.blocked) throw httpError(409, `导入内容未通过校验：${scan.findings.join("；")}`, ERR.SOUL_MEMORY_SCAN_FAILED);
         await interruptMemoryRefresh(user.person);
         const existingHashes = new Set(memoryRows(user.id).map(row => row.content_md5));
         const additions = imported.filter(exchange => !existingHashes.has(exchangeContentMd5(exchange)));
@@ -5813,7 +6049,7 @@ export async function createOliviaService(options = {}) {
       const previewId = String(body.previewId ?? "");
       const saved = midiLibraryPreviews.get(previewId);
       if (!saved || nowSeconds() - saved.createdAt > 60 * 60)
-        throw httpError(404, "曲库预览不存在或已过期");
+        throw httpError(404, "曲库预览不存在或已过期", ERR.MIDI_LIBRARY_PREVIEW_NOT_FOUND);
       let result;
       try {
         result = await importPerformanceLibrary(saved.preview, {
@@ -5861,8 +6097,8 @@ export async function createOliviaService(options = {}) {
     if (req.method === "POST" && path === "/admin/api/import/confirm") {
       const body = await readJson(req);
       const preview = db.prepare("SELECT * FROM import_previews WHERE id = ?").get(body.previewId);
-      if (!preview) throw httpError(404, "导入预览不存在");
-      if (preview.blocked) throw httpError(409, "该预览已阻断，不能确认");
+      if (!preview) throw httpError(404, "导入预览不存在", ERR.SETTING_IMPORT_PREVIEW_NOT_FOUND);
+      if (preview.blocked) throw httpError(409, "该预览已阻断，不能确认", ERR.SETTING_IMPORT_PREVIEW_BLOCKED);
       const person = assertPerson(preview.person);
       const rawDir = join(rawArchiveDir, person);
       await mkdir(rawDir, { recursive: true });
@@ -5886,7 +6122,7 @@ export async function createOliviaService(options = {}) {
     }
 
     if (path === "/admin" || path.startsWith("/admin/")) return serveStatic(req, res, path);
-    throw httpError(404, "接口不存在");
+    throw httpError(404, "接口不存在", ERR.COMMON_ROUTE_NOT_FOUND);
   }
 
   const server = createServer((req, res) => {

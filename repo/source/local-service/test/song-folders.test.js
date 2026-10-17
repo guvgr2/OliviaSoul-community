@@ -84,14 +84,14 @@ test('歌单 CRUD：改名、撞名自动加后缀、删除连带清条目', asy
   assert.deepEqual(afterRename.body.data.list.map(row => row.name).sort(), ['我的收藏 (2)', '我的收藏 (2) (2)'].sort());
 
   const empty = await request('/toy/folders', { method: 'POST', body: JSON.stringify({ name: '   ' }) });
-  assert.equal(empty.body.code, -1);
+  assert.equal(empty.body.code, 'FOLDER_NAME_EMPTY');
   assert.match(empty.body.message, /歌单名不能为空/u);
 
   // #68（第四轮 · 审-5 §7.3）：歌单名与用户名同口径 —— C0 控制符（NUL/BEL/ESC/DEL）也要拒。
   // 原来只挡零宽/bidi，这些会存进 song_folders.name，还会跟着进导出的 .osfolder 文件名。
   for (const bad of ['\u0000', '\u0007', '\u001B', '\u007F', '零宽\u200B名']) {
     const rejected = await request('/toy/folders', { method: 'POST', body: JSON.stringify({ name: `收藏${bad}` }) });
-    assert.equal(rejected.body.code, -1, `歌单名里的 ${JSON.stringify(bad)} 必须被拒`);
+    assert.equal(rejected.body.code, 'FOLDER_NAME_CHARS_INVALID', `歌单名里的 ${JSON.stringify(bad)} 必须被拒`);
     assert.match(rejected.body.message, /不可用字符/u);
   }
 
@@ -110,7 +110,7 @@ test('歌单 CRUD：改名、撞名自动加后缀、删除连带清条目', asy
   assert.equal(list.body.data.total, 1);
 
   const missing = await request('/toy/folders/does-not-exist');
-  assert.equal(missing.body.code, -1);
+  assert.equal(missing.body.code, 'FOLDER_NOT_FOUND');
   assert.match(missing.body.message, /歌单不存在/u);
 });
 
@@ -176,7 +176,7 @@ test('加入曲目去重、排序、移除；显示层重名后缀不改曲库�
     const rejected = await request(`/toy/folders/${encodeURIComponent(folder.id)}/items/order`, {
       method: 'POST', body: JSON.stringify({ itemId: 'midi_b', direction }),
     });
-    assert.equal(rejected.body.code, -1, `direction=${JSON.stringify(direction)} 必须被拒，不能静默重排`);
+    assert.equal(rejected.body.code, 'FOLDER_DIRECTION_INVALID', `direction=${JSON.stringify(direction)} 必须被拒，不能静默重排`);
     assert.match(rejected.body.message, /只能填 up 或 down/u);
   }
   const blank = await request(`/toy/folders/${encodeURIComponent(folder.id)}/items/order`, {
@@ -248,7 +248,7 @@ test('导出/导入闭环：撞名让位、未匹配的曲目必须逐条列出'
   assert.equal(partial.body.data.total, 2, '重复 id 要去重后再报总数');
 
   const bad = await request('/toy/folders/import', { method: 'POST', body: JSON.stringify({ text: '随便一段文字' }) });
-  assert.equal(bad.body.code, -1);
+  assert.equal(bad.body.code, 'FOLDER_IMPORT_NOT_QR');
   assert.match(bad.body.message, /二维码/u);
 
   // 超过 30 首就不给二维码，直接给 .osfolder 文件
@@ -303,7 +303,7 @@ test('写接口来源闸门：恶意网页写不进去，游戏页面与本机�
 
   // 恶意网页：/toy/* 与 /admin/api/* 都写不进去
   const blocked = await attempt('/toy/folders', { method: 'POST', body: JSON.stringify({ name: '坏人建的' }) }, 'https://evil.example');
-  assert.equal(blocked.body.code, -1);
+  assert.equal(blocked.body.code, 'COMMON_ORIGIN_UNTRUSTED');
   assert.match(blocked.body.message, /来源/u);
   const stillOne = await request('/toy/folders');
   assert.equal(stillOne.body.data.total, 1, '被拒的写请求不能留下任何痕迹');
@@ -311,7 +311,7 @@ test('写接口来源闸门：恶意网页写不进去，游戏页面与本机�
   const blockedAdd = await attempt('/toy/addToPlaylist', {
     method: 'POST', body: JSON.stringify({ itemType: 3, itemId: 'midi_a' }),
   }, 'https://evil.example');
-  assert.equal(blockedAdd.body.code, -1);
+  assert.equal(blockedAdd.body.code, 'COMMON_ORIGIN_UNTRUSTED');
   assert.equal(service.db.prepare('SELECT COUNT(*) count FROM playlist_items').get().count, 0);
 
   const blockedAdmin = await attempt('/admin/api/folders', { method: 'POST', body: JSON.stringify({ name: '坏人建的' }) }, 'https://evil.example');
@@ -319,11 +319,11 @@ test('写接口来源闸门：恶意网页写不进去，游戏页面与本机�
 
   // file:// 页面（Origin: null）同样拒绝
   const blockedNull = await attempt('/toy/folders', { method: 'POST', body: JSON.stringify({ name: '沙箱页' }) }, 'null');
-  assert.equal(blockedNull.body.code, -1);
+  assert.equal(blockedNull.body.code, 'COMMON_ORIGIN_UNTRUSTED');
   const blockedNullReferer = await request('/toy/folders', {
     method: 'POST', body: JSON.stringify({ name: '沙箱页' }), headers: { Referer: 'https://evil.example/page' },
   });
-  assert.equal(blockedNullReferer.body.code, -1);
+  assert.equal(blockedNullReferer.body.code, 'COMMON_ORIGIN_UNTRUSTED');
 
   // 游戏页面：单机模式的虚拟源，必须放行
   const fromGame = await attempt('/toy/folders', { method: 'POST', body: JSON.stringify({ name: '游戏建的' }) }, 'https://olivia.local');

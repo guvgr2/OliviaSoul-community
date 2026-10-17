@@ -25,6 +25,10 @@ param(
     # 主动写信（由头驱动）：归档末段是「由头」而不是「要回的来信」，
     # prompt 里注入 {{proactiveNote}}。不传时全链路与回信完全一致。
     [switch]$Proactive,
+    # S9（2026-10-16 两端同步 · 近况层）：档位由调用方按信件数算好后传进来，
+    # 本脚本只负责按档取文案（harness\近况.md）并注入 {{drift}}。
+    # 默认 -1 = 调用方未提供 ⇒ 不注入，行为与接入前逐字一致。
+    [int]$DriftTier = -1,
     [switch]$Quiet
 )
 
@@ -63,10 +67,57 @@ function Save-Step([string]$step, [string]$text) {
 if ([string]::IsNullOrWhiteSpace($HarnessDir)) { $HarnessDir = Join-Path $Root "harness" }
 if (-not [IO.Path]::IsPathRooted($HarnessDir)) { $HarnessDir = Join-Path $Root $HarnessDir }
 
+# S1（2026-10-16）：渲染严格化 —— 把「静默污染 prompt」改成当场抛错。
+# 背景：旧的 Expand-Harness 只做 .Replace：模板里写错一个变量名、或某一步忘了传值，
+# 占位符会**原样** `{{xxx}}` 送进模型 prompt（模型读到的是一段垃圾指令），而外层毫无异常、
+# 日志也干净。两端同步方案 §7 验收 2 要求四种情形各有一条会失败的测试 ——
+# 缺文件 / 缺标记由 Get-HarnessPrompt 覆盖（:76、:82），这里补上「未登记变量」与「必填缺值」。
+# 允许为空的变量（缺值按空串渲染，不抛错）：这份名单必须与 harness-manifest.json 的
+# optionalVariables 集合一致，由 test/letter-harness-strict-render.test.js 断言（防两边漂移）。
+$harnessOptionalVars = @(
+    "proactiveNote", "evidence", "previousState", "relationshipMemory", "facts",
+    "navigation", "historyResults", "budget", "draft", "check",
+    # S3（2026-10-16）：主动来信.md 的 {{memory}} / {{anchors}} 可缺省（无记忆 / 无语料锚时按空串渲染）。
+    "memory", "anchors",
+    # S9（2026-10-16）：近况层 {{drift}} 可缺省 —— 第 0 档（0–3 封）与「调用方没传档位」都渲染成空串。
+    # ⚠️ 必须与 harness-manifest.json 的 optionalVariables 集合一致（strict-render 套件断言两侧逐项相同）。
+    "drift"
+)
+# 宽松匹配：容忍 `{{ x }}` 这种带空格的写法（旧代码只认紧凑写法，带空格就静默漏替换）
+$harnessVarPattern = "\{\{\s*([A-Za-z][A-Za-z0-9]*)\s*\}\}"
+# 替换必须用字面 .Replace，且**不能用 -f 去拼占位符**：格式化器会把 `{{`/`}}` 折叠成 `{`/`}`，
+# `"{{%s}}" -f "ctx"` 得到的是 `{ctx}` 而不是 `{{ctx}}` —— 于是静默不替换（2026-10-16 实测踩过）。
+
 function Expand-Harness([string]$text, [hashtable]$map) {
+    $preview = ($text -replace "\s+", " ").Trim()
+    if ($preview.Length -gt 60) { $preview = $preview.Substring(0, 60) + "..." }
+    $names = @([regex]::Matches($text, $harnessVarPattern) |
+        ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+    foreach ($k in $names) {
+        if (-not $map.ContainsKey($k)) {
+            throw ("harness template uses an unregistered variable {{" + $k + "}} (template starts with: " + $preview + ")")
+        }
+        $v = $map[$k]
+        $s = if ($null -eq $v) { "" } else { [string]$v }
+        if ([string]::IsNullOrWhiteSpace($s) -and -not ($harnessOptionalVars -contains $k)) {
+            throw ("harness required variable is empty: {{" + $k + "}} (template starts with: " + $preview + ")")
+        }
+    }
     $out = $text
-    foreach ($k in $map.Keys) {
-        $out = $out.Replace(("{{" + $k + "}}"), [string]$map[$k])
+    foreach ($k in $names) {
+        $v = $map[$k]
+        $s = if ($null -eq $v) { "" } else { [string]$v }
+        # S4（2026-10-17 发版前必修清单）：旧写法只补「紧凑」与「恰好一个空格」两种形态，
+        # 而 $harnessVarPattern 用 \s* 任意空白 ⇒ 模板写成 `{{  drift  }}`（两个空格）时
+        # 校验阶段能匹配、替换阶段一个都不命中，最后**被上面那段「残留检查」抛错炸掉整封信生成**。
+        # 与其让它在几行之后才炸（错误信息指向「未替换占位符」，看不出真正原因是形态不支持），
+        # 不如在这里按正则统一替换：\s* 能匹配到的形态，Replace 就一定处理掉。
+        $out = [regex]::Replace($out, "\{\{\s*" + [regex]::Escape($k) + "\s*\}\}", { param($m) $s })
+    }
+    foreach ($k in $names) {
+        if ([regex]::IsMatch($out, "\{\{\s*" + [regex]::Escape($k) + "\s*\}\}")) {
+            throw ("harness prompt still has an unreplaced placeholder {{" + $k + "}} (template starts with: " + $preview + ")")
+        }
     }
     return $out
 }
@@ -87,15 +138,59 @@ function Get-HarnessPrompt([string]$fileName) {
     return @{ System = $sys; User = $user }
 }
 
-$writeHeading = "# " + (-join @([char]0x5199, [char]0x6CD5))
-$personaHeading = "## " + (-join @([char]0x57FA, [char]0x7840))
 if ([string]::IsNullOrWhiteSpace($RulesFile)) { $RulesFile = Join-Path $Root ".cursor\rules\linli-letters.mdc" }
 if (-not [IO.Path]::IsPathRooted($RulesFile)) { $RulesFile = Join-Path $Root $RulesFile }
 $personaPath = Join-Path $Root ((-join @([char]0x6797, [char]0x79BB, [char]0x4EBA, [char]0x8BBE)) + ".md")
 $archDir = -join @([char]0x4FE1, [char]0x4EF6, [char]0x5F80, [char]0x6765)
-$rules = Take-FromHeading (Strip-Yaml (Read-Utf8 $RulesFile)) $writeHeading
-$persona = Take-FromHeading (Read-Utf8 $personaPath) $personaHeading
+# S6 两端同步：规则与人设一律「整份读」，不再靠标题嗅探。
+#   旧实现 Take-FromHeading 有两种静默行为：标题缺失 ⇒ 整份返回（fail-open）；标题之前有内容 ⇒ 静默丢掉那部分。
+#   写法.md（首行 # 写法）与 林离人设.md（首行 # 林离 / Olivia Lin 人设，## 基础 在第三行）都必须整份进 prompt。
+#   Strip-Yaml 保留，职责只剩「去 front matter」，与切片无关。
+$rules = Strip-Yaml (Read-Utf8 $RulesFile)
+$persona = Strip-Yaml (Read-Utf8 $personaPath)
 $fields = (Read-Utf8 (Join-Path $HarnessDir ("00-" + (-join @([char]0x680F, [char]0x76EE)) + ".md"))).Trim()
+
+# S9（2026-10-16 两端同步 · 近况层）：按档取「她怎么写」的增量文案，拼成 {{drift}}。
+# 载体 harness\近况.md 的格式约定（由 test/harness-behavior-params.test.js 看守）：
+#   `## 第 N 档` 开一段，段内每个 `- ` 开头的行为一条；第 2 档起**累积**（注入第 3 档 = 第 1+2+3 档）。
+# 档位 ≤ 0（含调用方没传的 -1）⇒ 返回空串，不注入任何东西。
+# ⚠️ 本函数只做「取文案 + 拼接」，不读数据库、不算档位：信件数只有调用方（server.js）知道，
+#    档位由它算好通过 -DriftTier 传进来 —— 这样脚本不碰库，两端也容易对齐同一档。
+function Get-DriftText([int]$Tier, [string]$Dir) {
+    if ($Tier -le 0) { return "" }
+    $path = Join-Path $Dir ((-join @([char]0x8FD1, [char]0x51B5)) + ".md")
+    if (-not (Test-Path -LiteralPath $path)) { throw ("missing near-term carrier: " + $path) }
+    $raw = Read-Utf8 $path
+    $parts = @()
+    for ($n = 1; $n -le $Tier; $n++) {
+        $m = [regex]::Match($raw, "(?ms)^##\s*第\s*" + $n + "\s*档.*?(?=^##\s|\z)")
+        if (-not $m.Success) { throw ("near-term carrier has no tier " + $n + ": " + $path) }
+        $body = @($m.Value -split '\r?\n' | Where-Object { $_ -match '^\s*-\s' })
+        if ($body.Count -eq 0) { throw ("near-term tier " + $n + " has no bullet: " + $path) }
+        $parts += $body
+    }
+    # 标题由引擎层带上：档位 > 0 才有这一段；档位 ≤ 0 时返回空串，模板里那一行自然消失。
+    return ("# 近况（她最近怎么写 —— 只影响表达倾向，不新增任何事实）`n`n" + ($parts -join "`n"))
+}
+$driftText = Get-DriftText -Tier $DriftTier -Dir $HarnessDir
+
+# 主动信专属规则已抽成独立规范文件（harness\主动来信.md，两端同步 S3）：
+# -Proactive 时把它的 ## System 段并进 {rules}，多步链路仍拿得到主动信口径（单步渲染见该文件的 TODO S3b）。
+if ($Proactive) {
+    $proactiveRulesName = (-join @([char]0x4E3B, [char]0x52A8, [char]0x6765, [char]0x4FE1)) + ".md"
+    $proactiveRules = (Get-HarnessPrompt $proactiveRulesName).System
+    $rules = $rules + "`n`n" + $proactiveRules
+    # S4（2026-10-16 两端同步）：调性锚（harness\主动信语料.md）随主动信规则一起进 {rules}。
+    # 它整份就是五封锚文（没有 ## System / ## User 分段），所以整份读，不走 Get-HarnessPrompt。
+    # 文件头的两条引用块也一并进 prompt —— 那是写给模型的「只学长度、口气、落点，不得套用」声明，
+    # 不是给维护者看的注释，删掉它就等于把「不得改写扩写」这条唯一的约束拿掉。
+    $anchorsName = (-join @([char]0x4E3B, [char]0x52A8, [char]0x4FE1, [char]0x8BED, [char]0x6599)) + ".md"
+    $anchorsPath = Join-Path $HarnessDir $anchorsName
+    if (-not (Test-Path -LiteralPath $anchorsPath)) { throw ("missing proactive anchors: " + $anchorsPath) }
+    $anchors = (Read-Utf8 $anchorsPath).Trim()
+    if ([string]::IsNullOrWhiteSpace($anchors)) { throw ("empty proactive anchors: " + $anchorsPath) }
+    $rules = $rules + "`n`n# 调性锚（只学它们的长度、口气和落点，不得改写、扩写、拼接或套用其中的句子）`n`n" + $anchors
+}
 
 Write-Output ("STEP0 memory " + $Person + " " + $nn)
 $arch = Join-Path $Root ("{0}\{1}.md" -f $archDir, $Person)
@@ -170,7 +265,9 @@ if (-not [string]::IsNullOrWhiteSpace($PreviousStateTag)) {
                     ForEach-Object { $_.Trim() } |
                     Where-Object { $_.Length -gt 0 }
             )
-            $statePrefixes = @("关系　", "关系依据　", "已承认情感　", "已承认称呼　", "既有亲密　", "既有边界　", "亲密上限　")
+            # 跨封继承的持久字段。未决与说话者必须继承（上一封未决的项，本封没有原文确认前仍是未决）；
+            # 摘要待核实按封重算，故意不在此列。
+            $statePrefixes = @("关系　", "关系依据　", "已承认情感　", "已承认称呼　", "既有亲密　", "既有边界　", "亲密上限　", "说话者　", "未决　")
             $stateLines = @(
                 $previousSafeLines |
                     Where-Object {
@@ -190,6 +287,7 @@ if ($stateBootstrapRequired) {
     $precheckPrompt = "01-" + (-join @([char]0x521D, [char]0x59CB, [char]0x5316, [char]0x8D26, [char]0x672C)) + ".md"
 }
 if (-not [string]::IsNullOrWhiteSpace($PrecheckFile)) { $precheckPrompt = $PrecheckFile }
+$precheckPath = Join-Path $HarnessDir $precheckPrompt
 $p1 = Get-HarnessPrompt $precheckPrompt
 if ([string]::IsNullOrWhiteSpace($ReuseSafeTag)) {
     $map1 = @{ ctx = $ctx; rules = $rules; previousState = $previousState; relationshipMemory = $relationshipMemory; proactiveNote = $proactiveNote }
@@ -208,9 +306,20 @@ Save-Step "1safe" $safe
 Lap "T1safe"
 
 $expectedSafeLines = 8
-if ($p1.System -match "九行") { $expectedSafeLines = 9 }
-if ($p1.System -match "十三行") { $expectedSafeLines = 13 }
-if ($p1.System -match "十四行") { $expectedSafeLines = 14 }
+$ledgerLineWords = @{ "八" = 8; "九" = 9; "十" = 10; "十一" = 11; "十二" = 12; "十三" = 13; "十四" = 14; "十五" = 15; "十六" = 16; "十七" = 17; "十八" = 18; "十九" = 19; "二十" = 20 }
+$ledgerContractMatch = [regex]::Match($p1.System, "只输出以下([一二三四五六七八九十]+)行")
+# S4（2026-10-17 发版前必修清单）：解析不到时**静默退回默认 8**是 fail-open ——
+# 预检模板若改成「只输出下列若干行」这类说法，expectedSafeLines 永远是 8，而实际要求 17 行，
+# Test-SafeLedgerFormat 会拿「行数 ≠ 8」把每一封合规的信全判违规（或反过来放过不合规的）。
+# 行数校验本身拿不到契约就**不该继续猜**，直接抛错让人改模板措辞。
+if (-not $ledgerContractMatch.Success) {
+    throw ("precheck prompt does not declare its ledger line count (expected wording like 只输出以下十七行): " + $precheckPath)
+}
+$ledgerLineWord = $ledgerContractMatch.Groups[1].Value
+if (-not $ledgerLineWords.ContainsKey($ledgerLineWord)) {
+    throw ("precheck prompt declares an unparsable ledger line count: " + $ledgerLineWord + "行")
+}
+$expectedSafeLines = $ledgerLineWords[$ledgerLineWord]
 $safeLines = @(($safe -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })
 $fullWidthSpace = [string][char]0x3000
 $conclusionWord = -join @([char]0x7ED3, [char]0x8BBA)
@@ -439,16 +548,16 @@ if ($historyEvidence.Count -gt 0) {
     Save-Step "1safe_reconcile_attempt1" $safe
     $reconcileCalls = 1
     $reconcileUsage = @($script:DsLastUsage)
-    $reconcileInvalid = -not (Test-SafeLedgerFormat -Text $safe -ExpectedLines 14 -Relationships $allowedRelationships)
+    $reconcileInvalid = -not (Test-SafeLedgerFormat -Text $safe -ExpectedLines $expectedSafeLines -Relationships $allowedRelationships)
     if ($safe -match "(?m)^(关系依据|已承认称呼|既有亲密|既有边界)　.*(五段式|摘要|回忆)") { $reconcileInvalid = $true }
     if ($reconcileInvalid) {
-        $reconcileSystem = $reconcilePrompt.System + "`n`n上一版格式或证据来源不合格。只输出规定十四行，字段不可省略；最终账本不得把五段式、摘要或回忆写成事实依据，改引近期原文或检索原文的往来顺序/letterId。"
+        $reconcileSystem = $reconcilePrompt.System + "`n`n上一版格式或证据来源不合格。只输出规定" + $expectedSafeLines + "行，字段不可省略；最终账本不得把五段式、摘要或回忆写成事实依据，改引近期原文或检索原文的往来顺序/letterId。"
         $safe = Invoke-Ds -System (Expand-Harness $reconcileSystem $reconcileMap) -User (Expand-Harness $reconcilePrompt.User $reconcileMap)
         Save-Step "1safe_reconcile_attempt2" $safe
         $reconcileCalls += 1
         $reconcileUsage += $script:DsLastUsage
     }
-    $reconcileInvalid = -not (Test-SafeLedgerFormat -Text $safe -ExpectedLines 14 -Relationships $allowedRelationships)
+    $reconcileInvalid = -not (Test-SafeLedgerFormat -Text $safe -ExpectedLines $expectedSafeLines -Relationships $allowedRelationships)
     if ($safe -match "(?m)^(关系依据|已承认称呼|既有亲密|既有边界)　.*(五段式|摘要|回忆)") { $reconcileInvalid = $true }
     if ($reconcileInvalid) {
         throw "STEP2 reconciled ledger format invalid"
@@ -489,7 +598,7 @@ Lap "T2history"
 
 if ([string]::IsNullOrWhiteSpace($DraftFile)) {
     $p3 = Get-HarnessPrompt ("03-" + (-join @([char]0x4E2D, [char]0x6BB5, [char]0x751F, [char]0x6210)) + ".md")
-    $map3 = @{ fields = $fields; safe = $safe; rules = $rules; persona = $persona; ctx = $factCtx; evidence = $evidenceText; proactiveNote = $proactiveNote }
+    $map3 = @{ fields = $fields; safe = $safe; rules = $rules; persona = $persona; ctx = $factCtx; evidence = $evidenceText; proactiveNote = $proactiveNote; drift = $driftText }
     $sysDraft = Expand-Harness $p3.System $map3
     $userDraft = Expand-Harness $p3.User $map3
     Write-Output ("STEP3 draft " + $Person + " " + $nn)

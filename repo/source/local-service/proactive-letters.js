@@ -215,3 +215,52 @@ export function evaluateProactiveLetter(settings, ctx = {}) {
   if (!trigger) return { ok: false, reason: PROACTIVE_REASONS.NO_REASON };
   return { ok: true, reason: PROACTIVE_REASONS.READY, trigger, reasonText: buildReasonText(trigger) };
 }
+
+/**
+ * 近况层（`行为参数.json` 的 `nearTerm`）档位判定 —— **纯函数**，不读文件、不碰数据库。
+ *
+ * 为什么抽出来（2026-10-16，[审查-4] 代码-5）：原先这套判据只能靠**源码文本断言**守
+ * （`assert.match(serverSrc, /…/)`），而文本断言证明不了行为 —— 审查实测「把下一行改成 `if (false)`
+ * 仍然绿」。抽成纯函数后，档位 / 不回退 / NaN / 开关这些判据都能对**真实返回值**下断言。
+ *
+ * 契约（与 `行为参数.json` 的 `nearTerm` 一一对应）：
+ *   · `enabled !== true` 或 `tiers` 不是数组 ⇒ `tier: -1`（整段不注入）
+ *   · 用户打开「保持她现在的样子」（由调用方读好传 `keepCurrentShape`）⇒ `tier: -1`，**不写记忆**
+ *   · 按 `letterCount` 落档：`lettersFrom <= n <= lettersTo`（`lettersTo` 为 null/undefined = 无上界）
+ *     且该档 `inject === true`；多档命中取最大 `tier`（档位可重叠）
+ *   · **不回退**：`effective = max(remembered, tier)`。⚠️ 这一步必须在「档 0 ⇒ -1」**之前**，
+ *     否则所有档都 `inject:false` 时（第 0 档，0–3 封）会提前返回 -1、历史最高档根本没机会兜住。
+ *   · `tier` 值非整数（配置写成字符串/写错）⇒ 该档**跳过**，绝不把 `NaN` 传出去
+ *     （原缺陷：`Number(t.tier)` 得 `NaN` 时 `tier <= 0` 为 false，会把 `"NaN"` 落进 settings 永久化）。
+ *
+ * @returns {{ tier: number, write: string|null }}
+ *   `tier`  = 要传给 harness 的档位；`-1` 表示不注入。
+ *   `write` = 要落盘的 `drift_tier_max` 值；`null` = 本次不需要动记忆。
+ */
+export function nearTermTierDecision({ nearTerm, letterCount = 0, remembered, keepCurrentShape = false } = {}) {
+  if (!nearTerm || nearTerm.enabled !== true || !Array.isArray(nearTerm.tiers)) {
+    return { tier: -1, write: null };
+  }
+  if (keepCurrentShape) return { tier: -1, write: null };
+  const n = Number.isFinite(Number(letterCount)) ? Number(letterCount) : 0;
+  let tier = -1;
+  for (const t of nearTerm.tiers) {
+    if (!t || t.inject !== true) continue;
+    const from = Number(t.lettersFrom);
+    const to = t.lettersTo === null || t.lettersTo === undefined ? Infinity : Number(t.lettersTo);
+    const cand = Number(t.tier);
+    if (!Number.isInteger(cand)) continue; // 见上：非整数跳过，不把 NaN 传出去
+    if (!Number.isFinite(from) || Number.isNaN(to)) continue;
+    if (n >= from && n <= to) tier = Math.max(tier, cand);
+  }
+  // 「不回退」：把历史最高档并进来（这一步与最终 return 之间**不能**插入任何提前 return）。
+  const rememberedNum = Number(remembered ?? "-1");
+  const hasRemembered = Number.isInteger(rememberedNum) && rememberedNum > 0;
+  const effective = hasRemembered ? Math.max(rememberedNum, tier) : tier;
+  if (!Number.isInteger(effective) || effective <= 0) {
+    // 没有可注入的档 ⇒ 顺手清掉历史脏值（旧版本可能落下过 "NaN"），但没脏值就不写
+    const dirty = remembered !== undefined && remembered !== null && remembered !== "" && !hasRemembered;
+    return { tier: -1, write: dirty ? "-1" : null };
+  }
+  return { tier: effective, write: effective !== rememberedNum ? String(effective) : null };
+}

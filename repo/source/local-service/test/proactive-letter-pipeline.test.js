@@ -191,8 +191,10 @@ test('设置接口：GET 回设置与判定，POST 存下来，非法值回 400'
   });
   assert.equal(rejected.status, 200);
   const rejectedBody = await rejected.json();
-  assert.equal(rejectedBody.code, -10402);
+  // 旧的数字号 -10402 已换成字符串号（2026-10-17，见 server.js 的 ERR 表）。
+  assert.equal(rejectedBody.code, "LETTER_SETTINGS_INVALID");
   assert.match(rejectedBody.message, /不合法的值/u);
+  assert.match(rejectedBody.message, /LETTER_SETTINGS_INVALID/u, "用户眼前要看得见号");
 });
 
 test('手动触发接口：没有由头时如实回一句人话，也不落库', async t => {

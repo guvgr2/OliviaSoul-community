@@ -90,8 +90,17 @@ export const DEFAULT_RULES = Object.freeze([
     file: "packaging/build-release.ps1",
     mode: "live",
     expect: 1,
-    pattern: `^\\$version${BLANK}*=${BLANK}*"${TOKEN}"${BLANK}*${EOL}`,
-    note: "打包脚本第 31 行会自己校验它与 package.json 一致",
+    // 2026-10-17 S2：$version 已改成**从 package.json 现读**（build-release.ps1:28-33），
+    // 不再保留写死的第二份版本串 —— 写死副本正是「改版本号要人肉同步 3 处」的根源，
+    // 而本工具只认 package.json 那一个值，写死副本不会被它更新。
+    // 规则随之改为钉住「现读」这个**形态**：`$version = [string]$package.version` 必须恰好出现 1 次。
+    // 若将来有人把它改回写死，这条会红（0 处命中）—— 那时应该同步把 package.json 降级为校验对象，
+    // 而不是删掉这条规则。
+    pattern: `^\\$version${BLANK}*=${BLANK}*\\[string\\]\\$package\\.version${BLANK}*${EOL}`,
+    // 这条规则**没有 %V% 占位符**（它钉的是形态、不是版本串），
+    // 因此它不产 edit、不参与替换，只做「现读形态仍在」的存在性校验。
+    noToken: true,
+    note: "从 package.json 现读（单一来源）；脚本自身仍校验格式与 lock/csproj 一致",
   },
   {
     id: "public/listen-naming-feedback.js 的 APP_VERSION",
@@ -296,6 +305,7 @@ function scanRule(rule, text, baseVersion) {
       values,
       mode: rule.mode ?? "live",
       doc: Boolean(rule.doc),
+      noToken: Boolean(rule.noToken),
       note: rule.note ?? "",
     });
   }
@@ -420,14 +430,6 @@ export function planVersionBump(options = {}) {
   const liveHits = [];
   const historyHits = [];
   for (const rule of rules) {
-    if (!rule.pattern.includes(TOKEN)) {
-      problems.push({
-        code: "rule-without-token",
-        ruleId: rule.id,
-        message: `规则「${rule.id}」的定位模式里没有 ${TOKEN} 占位符，无法定位版本串`,
-      });
-      continue;
-    }
     const text = readText(rule.file);
     if (text === null) {
       problems.push({
@@ -454,6 +456,9 @@ export function planVersionBump(options = {}) {
     }
     if ((rule.mode ?? "live") === "live") {
       for (const hit of hits) {
+        // noToken 规则钉的是「形态」不是「版本串」：命中行里没有版本号是正常的，
+        // 也不进 liveHits（否则「替换后复扫」会要求它含目标版本，永远不成立）。
+        if (hit.noToken) continue;
         if (hit.values.length === 0) {
           problems.push({
             code: "rule-match-without-version",

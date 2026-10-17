@@ -24,14 +24,19 @@ function Step-Mark([string]$Name) {
 }
 
 $baseVersion = "2008.2.7"
-$version = "2008.2.7-linli9-1.2.2"
+# 版本串的权威来源是 package.json（version-bump 规则表第一条就是这么定的：所有其它位置都以它为准）。
+# 这里**现读**而不是写死第二份 —— 写死时「改版本号」要靠人记住同步 3 处以上，漏一处就构建期 throw；
+# 而 tools/lib/version-bump.mjs 的规则表只认 package.json 那一个值，写在这里的副本不会被它更新。
+# 现读后本脚本的三处校验（:31 与 package.json 一致、:40 lock 两处、:50 csproj 三处 token）语义不变，
+# 只是把「两处必须相同」变成「一处派生」。
 $packagePath = Join-Path $project "package.json"
 $packageText = [IO.File]::ReadAllText($packagePath, $utf8NoBom)
 $package = $packageText | ConvertFrom-Json
-if ([string]$package.version -ne $version) { throw "package.json 版本必须与脚本一致：期望 $version，实际 $($package.version)" }
+$version = [string]$package.version
+if ([string]::IsNullOrWhiteSpace($version)) { throw "package.json 里读不到 version 字段" }
 # 允许三种本支标识：旧的 gNN、语义化 x.y、以及测试版 x.y-beta.N
 if ($version -notmatch ('^' + ($baseVersion -replace '\.', '\.') + '(?:-linli9-(?:g\d{2}|\d+(?:\.\d+){0,2}(?:-beta\.\d+)?))?$')) {
-    throw "版本号格式必须是 $baseVersion、$baseVersion-linli9-gNN 或 $baseVersion-linli9-1.0（测试版可加 -beta.N）"
+    throw "版本号格式必须是 $baseVersion、$baseVersion-linli9-gNN 或 $baseVersion-linli9-1.0（测试版可加 -beta.N）：实际 $version"
 }
 
 $lockPath = Join-Path $project "package-lock.json"
@@ -469,7 +474,16 @@ foreach ($extraName in @("model-families.json")) {
 }
 
 Copy-PublicFile (Join-Path $repository "林离人设.md") (Join-Path $stage "resources\workspace-template\林离人设.md")
-foreach ($name in @("VERSION", "00-栏目.md", "01-预检.md", "01-初始化账本.md", "02-历史检索.md", "02-账本校正.md", "03-中段生成.md", "04-尾端检查.md", "05-反馈重写.md", "开信.md", "写法.md")) {
+# S5（2026-10-16 两端写信引擎同步）：行为参数.json 是两端硬校验数值的单一真相源；
+# 生产链路（harness-4step.ps1 的字数/段数机械兜底）接入后要在用户机器上读它 ⇒ 现在就先让它进包。
+# ⚠️ harness-manifest.json **刻意不进包**：它是开发/审计用的基线清单（含本机绝对路径 sourceRepo，
+# 且描述的正是 harness 目录本身——打进产物会让产物随每次重出清单而变）。
+# 这两点由 test/harness-behavior-params.test.js 钉住（含「目录里有、清单里没有就红」的反向检查）。
+# S4（2026-10-16 两端同步）：主动信语料.md（调性锚）也要进包 ——
+# harness-4step.ps1 在 -Proactive 时整份读它并并入 {rules}，缺了它主动信会直接 throw。
+# S9（2026-10-16 P1 拍板后启用）：近况.md 也要进包 —— 它是 {{drift}} 的载体，
+# 引擎按信件数分档后从这里取文案（第 0 档不注入）。
+foreach ($name in @("VERSION", "00-栏目.md", "01-预检.md", "01-初始化账本.md", "02-历史检索.md", "02-账本校正.md", "03-中段生成.md", "04-尾端检查.md", "05-反馈重写.md", "开信.md", "写法.md", "主动来信.md", "主动信语料.md", "近况.md", "行为参数.json")) {
     Copy-PublicFile (Join-Path $repository "harness\$name") (Join-Path $stage "resources\workspace-template\harness\$name")
 }
 foreach ($name in @("patch-feapp-local.ps1", "patch-feapp-locale-local.ps1", "upgrade-feapp-v14-v16.ps1", "upgrade-feapp-v16-v17.ps1", "upgrade-feapp-v22-v23.ps1", "restore-feapp-original.ps1", "get-feapp-status.ps1", "patch-webplayer-local.ps1", "upgrade-webplayer-v6-v7.ps1", "restore-webplayer-original.ps1", "get-webplayer-status.ps1", "process-control.ps1")) {

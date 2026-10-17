@@ -137,6 +137,7 @@
   function fill(data) {
     defaults = data.defaults ?? defaults;
     id("proactiveEnabled").checked = data.enabled !== false;
+    id("proactiveKeepShape").checked = data.keepCurrentShape === true;
     id("proactiveMaxPerDay").value = data.settings?.maxPerDay ?? 1;
     id("proactiveMaxPerWeek").value = data.settings?.maxPerWeek ?? 2;
     id("proactiveMinSilenceDays").value = data.settings?.minSilenceDays ?? 5;
@@ -164,6 +165,7 @@
         method: "POST",
         body: JSON.stringify({
           enabled: id("proactiveEnabled").checked,
+            keepCurrentShape: id("proactiveKeepShape").checked,
           maxPerDay: Number(id("proactiveMaxPerDay").value),
           maxPerWeek: Number(id("proactiveMaxPerWeek").value),
           minSilenceDays: Number(id("proactiveMinSilenceDays").value),
@@ -179,6 +181,7 @@
   function reset() {
     if (!defaults) return;
     id("proactiveEnabled").checked = defaults.enabled !== false;
+    id("proactiveKeepShape").checked = false;
     id("proactiveMaxPerDay").value = defaults.maxPerDay;
     id("proactiveMaxPerWeek").value = defaults.maxPerWeek;
     id("proactiveMinSilenceDays").value = defaults.minSilenceDays;

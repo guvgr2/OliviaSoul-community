@@ -1,6 +1,12 @@
 import {readFile} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import assert from 'node:assert/strict';
+// 外部驱动脚本（靠 argv[2] 拿 playwright 路径）：没设 OLIVIA_BROWSER_UI 就跳过，
+// 否则 node --test 的默认 glob 裸跑它会恒红（见 game-lyrics-browser.mjs 顶部说明）。
+if (process.env.OLIVIA_BROWSER_UI !== '1') {
+  console.log('SKIP management-layout-browser: 未设 OLIVIA_BROWSER_UI（这是外部驱动脚本，不是 node --test 的用例）');
+  process.exit(0);
+}
 const {chromium}=createRequire(import.meta.url)(process.argv[2]);
 const base=new URL('../public/',import.meta.url);
 const html=(await readFile(new URL('index.html',base),'utf8')).replace(/<script\b[^>]*>[\s\S]*?<\/script>/g,'');

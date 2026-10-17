@@ -4,7 +4,9 @@ param(
     [Parameter(Mandatory = $true)][string]$OutFile,
     [string]$HistoryFile = "",
     [string]$RulesFile = "",
-    [string]$Root = ""
+    [string]$Root = "",
+    # Near-term drift tier, computed by the caller (server.js). -1 = inject nothing.
+    [int]$DriftTier = -1
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,6 +60,7 @@ try {
         PreviousStateTag = "live"
         AllowStateBootstrap = $true
         Quiet = $true
+        DriftTier = $DriftTier
     }
     if (-not [string]::IsNullOrWhiteSpace($HistoryFile)) { $invokeArgs.HistoryFile = $HistoryFile }
     & $harness @invokeArgs

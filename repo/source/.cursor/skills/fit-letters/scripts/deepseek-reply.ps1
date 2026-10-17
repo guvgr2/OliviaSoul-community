@@ -53,15 +53,14 @@ function Take-FromHeading([string]$text, [string]$heading) {
 
 Import-ModelConfig -Root $Root
 
-$writeHeading = "# " + [string]::Concat([char]0x5199, [char]0x6CD5)
-$personaHeading = "## " + [string]::Concat([char]0x57FA, [char]0x7840)
 $rulesPath = Join-Path $Root ".cursor\rules\linli-letters.mdc"
 if (-not [string]::IsNullOrWhiteSpace($RulesFile)) {
     $rulesPath = $RulesFile
     if (-not [IO.Path]::IsPathRooted($rulesPath)) { $rulesPath = Join-Path $Root $RulesFile }
 }
-$rules = Take-FromHeading (Strip-Yaml (Read-Utf8 $rulesPath)) $writeHeading
-$persona = Take-FromHeading (Read-Utf8 (Join-Path $Root "林离人设.md")) $personaHeading
+# S6 两端同步：规则与人设一律「整份读」，不再靠标题嗅探（与 harness-4step.ps1 同款改动）。
+$rules = Strip-Yaml (Read-Utf8 $rulesPath)
+$persona = Strip-Yaml (Read-Utf8 (Join-Path $Root "林离人设.md"))
 
 $system = @"
 你就是林离。按下面的规则与人设写信。

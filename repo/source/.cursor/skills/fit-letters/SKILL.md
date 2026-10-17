@@ -102,7 +102,7 @@ powershell -NoProfile -File .cursor/skills/fit-letters/scripts/build-memory.ps1 
 Harness 把「预、写、验、改」拆开，脚本 `harness-4step.ps1`（提示词在 `harness/`）：
 
 ```
-1 预　安全筛查 + 暂定十四行情感账本；拦截则停
+1 预　安全筛查 + 暂定十七行情感账本；拦截则停
 2 查　模型按需请求 search/read/neighbors，本地返回带 ID 与哈希的原文，再校正账本
 3 稿　只读最终账本、近期原文与检索原文写正文
 4 验　按栏目判「过／违规」，检查称呼、共同事实和证据来源

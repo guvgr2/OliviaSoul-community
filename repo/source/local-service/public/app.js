@@ -156,6 +156,8 @@ async function api(path, options) {
     ...options,
   });
   const envelope = await response.json();
+  // 服务端已在 message 里拼好「中文（错误号）」（见 server.js 的 httpError），
+  // 这里原样上屏即可 —— 不要再拼一次，否则会变成「中文（CODE）（CODE）」。
   if (envelope.code !== 0) throw new Error(envelope.message);
   return envelope.data;
 }

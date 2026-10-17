@@ -5,6 +5,9 @@ import { join } from "node:path";
 import test from "node:test";
 
 // These real-browser checks are opt-in: set OLIVIA_BROWSER_UI=1 and expose Playwright through NODE_PATH.
+// ⚠️ playwright 必须在**回调内**惰性加载，不能放顶层 —— 顶层无条件加载会让没装 playwright 的
+//    机器在**收集阶段**就抛 MODULE_NOT_FOUND，整个文件连"跳过"都做不到。
+//    `("playwright").chromium` 的写法本身就是惰性的：三元条件为假时那一侧不求值。
 const browserTest = process.env.OLIVIA_BROWSER_UI === "1" ? test : test.skip;
 const chromium = process.env.OLIVIA_BROWSER_UI === "1" ? createRequire(import.meta.url)("playwright").chromium : null;
 const [html, css, app, updateUI] = await Promise.all([

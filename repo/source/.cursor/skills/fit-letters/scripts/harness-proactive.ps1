@@ -4,7 +4,9 @@
     [Parameter(Mandatory = $true)][string]$OutFile,
     [string]$HistoryFile = "",
     [string]$RulesFile = "",
-    [string]$Root = ""
+    [string]$Root = "",
+    # Near-term drift tier, computed by the caller (server.js). -1 = inject nothing.
+    [int]$DriftTier = -1
 )
 
 # 主动写信：这一次没有他的来信，只有「由头」。
@@ -66,6 +68,7 @@ try {
         PreviousStateTag = "live"
         AllowStateBootstrap = $true
         Proactive = $true
+        DriftTier = $DriftTier
         Quiet = $true
     }
     if (-not [string]::IsNullOrWhiteSpace($HistoryFile)) { $invokeArgs.HistoryFile = $HistoryFile }

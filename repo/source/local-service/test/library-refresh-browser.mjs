@@ -4,6 +4,12 @@ import {mkdtemp,mkdir,writeFile,rm,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createOliviaService} from '../server.js';
+// 外部驱动脚本（靠 argv[2] 拿 playwright 路径）：没设 OLIVIA_BROWSER_UI 就跳过，
+// 否则 node --test 的默认 glob 裸跑它会恒红（见 game-lyrics-browser.mjs 顶部说明）。
+if (process.env.OLIVIA_BROWSER_UI !== '1') {
+  console.log('SKIP library-refresh-browser: 未设 OLIVIA_BROWSER_UI（这是外部驱动脚本，不是 node --test 的用例）');
+  process.exit(0);
+}
 const {chromium}=createRequire(import.meta.url)(process.argv[2]);
 const root=await mkdtemp(join(tmpdir(),'library-live-'));
 const service=await createOliviaService({root,dataDir:join(root,'data'),appData:join(root,'app'),worker:false,runMemoryRefresh:false,midiDurationProbe:async()=>1000000,fetch:async()=>{throw Error('offline');}});

@@ -55,3 +55,16 @@ test("作息表字段与后端 normalizeRoutine 的契约一致", async () => {
   assert.match(source, /weekdays: WEEKDAYS\[/u);
   assert.match(await read("proactive-letters.js"), /export function normalizeRoutine/u);
 });
+
+test("近况层开关（P1）：界面、脚本、服务端、行为参数四处键名一致", async () => {
+  const server = await read("server.js");
+  const panel = await read("public/proactive-settings.js");
+  const html = await read("public/index.html");
+  const params = JSON.parse(await readFile(join(root, "..", "harness", "行为参数.json"), "utf8"));
+  assert.equal(params.nearTerm?.userToggle?.key, "keep-current-shape", "行为参数.json 的开关键名被人改了");
+  assert.equal((server.match(/keepCurrentShape: getSetting\("keep-current-shape"\) === "1"/gu) ?? []).length, 2, "开关当前值必须在 GET 与 POST 两处响应里各回一次");
+  assert.match(server, /setSetting\("keep-current-shape", body\.keepCurrentShape \? "1" : "0"\)/u);
+  assert.match(server, /typeof body\.keepCurrentShape === "boolean"/u);
+  assert.equal((panel.match(/proactiveKeepShape/gu) ?? []).length, 3, "前端应恰好三处：fill / save / reset");
+  assert.match(html, /id="proactiveKeepShape"/u);
+});

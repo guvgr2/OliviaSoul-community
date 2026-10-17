@@ -7,6 +7,9 @@ import { join } from 'node:path';
 import { createOliviaService } from '../server.js';
 import { writeModelProfile, setActiveProvider, readModelConfig } from '../model-config.js';
 const browserTest=process.env.OLIVIA_BROWSER_UI==='1'?test:test.skip;
+// ⚠️ playwright 必须在回调里加载（admin-responsive-ui.test.js:9 同款写法）：
+//    顶层无条件 `createRequire(...)('playwright')` 会让没装 playwright 的机器在**收集阶段**
+//    就抛 MODULE_NOT_FOUND，整个文件连"跳过"都做不到（S0 附带隐患）。
 browserTest('manual model survives failed discovery and saves; candidate selection updates the submitted model',async t=>{
   const {chromium}=createRequire(import.meta.url)('playwright');
   const root=await mkdtemp(join(tmpdir(),'olivia-relay-ui-'));

@@ -576,7 +576,7 @@ test("local webplayer binds progress and controls to one playback session", asyn
       body: JSON.stringify({ cmd: "resume", songId: second.id, sessionId: secondPlay.command.sessionId }),
     });
     assert.equal(resume.status, 200, "toy compatibility routes keep their HTTP envelope");
-    assert.equal(resume.body.code, -1, "a terminal pause cannot be resumed");
+    assert.equal(resume.body.code, "PLAYER_SESSION_ENDED", "a terminal pause cannot be resumed");
     assert.match(resume.body.message, /已经结束/u);
 
     const replayAfterPause = (await ctx.json("/toy/player-command", {
@@ -703,7 +703,8 @@ test("stale stop cannot terminate a replayed session of the same song", async ()
         restoreDefault: false,
       }),
     });
-    assert.equal(staleStop.body.code, -1);
+    // 旧的 sessionId 已被顶掉 ⇒ 必须是「演奏会话已经切换」，不是笼统失败。
+    assert.equal(staleStop.body.code, "PLAYER_SESSION_SWITCHED");
     const afterStaleStop = (await ctx.json("/toy/player-state")).body.data;
     assert.equal(afterStaleStop.playbackState, "playing");
     assert.equal(afterStaleStop.sessionId, replay.command.sessionId);
