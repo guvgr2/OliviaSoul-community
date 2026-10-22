@@ -487,8 +487,9 @@ foreach ($extraName in @("model-families.json")) {
 Copy-PublicFile (Join-Path $repository "林离人设.md") (Join-Path $stage "resources\workspace-template\林离人设.md")
 # S5（2026-10-16 两端写信引擎同步）：行为参数.json 是两端硬校验数值的单一真相源；
 # 生产链路（harness-4step.ps1 的字数/段数机械兜底）接入后要在用户机器上读它 ⇒ 现在就先让它进包。
-# ⚠️ harness-manifest.json **刻意不进包**：它是开发/审计用的基线清单（含本机绝对路径 sourceRepo，
-# 且描述的正是 harness 目录本身——打进产物会让产物随每次重出清单而变）。
+# ⚠️ harness-manifest.json **刻意不进包**：它是开发/审计用的基线清单，描述的就是 harness 目录本身——
+# 打进产物会让产物随每次重出清单而变（早年还多一条理由：含本机绝对路径 sourceRepo；
+# 2026-10-23 已按姊妹侧同款字段的形式改成仓库名短形式，那条理由不复存在）。
 # 这两点由 test/harness-behavior-params.test.js 钉住（含「目录里有、清单里没有就红」的反向检查）。
 # S4（2026-10-16 两端同步）：主动信语料.md（调性锚）也要进包 ——
 # harness-4step.ps1 在 -Proactive 时整份读它并并入 {rules}，缺了它主动信会直接 throw。

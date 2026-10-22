@@ -195,7 +195,7 @@ function pathOverrideProblems(saved) {
   }
   const consumers = Object.keys(saved).filter((k) => k !== "_说明");
   if (consumers.length === 0) {
-    return ["pathOverrides 里一个消费方都没有（至少要有 E:/linli-letters）—— 空对象等于没做 B6"];
+    return ["pathOverrides 里一个消费方都没有（至少要有 linli-letters）—— 空对象等于没做 B6"];
   }
   const crossLevel = ordered.filter(
     (k) => typeof files[k]?.relPath === "string" && files[k].relPath.includes("../")

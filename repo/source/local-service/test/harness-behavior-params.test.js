@@ -383,7 +383,7 @@ test("打包清单含 行为参数.json、且刻意不含 harness-manifest.json�
   );
   assert.ok(
     !names.includes("harness-manifest.json"),
-    "打包清单不许含 harness-manifest.json：它是开发/审计用清单（含本机绝对路径 sourceRepo），进产物只会让产物随清单重出而变",
+    "打包清单不许含 harness-manifest.json：它是开发/审计用清单，进产物只会让产物随清单重出而变（曾含本机绝对路径 sourceRepo，2026-10-23 已修成仓库名短形式）",
   );
   // 反向检查：harness 目录里每个「该进包」的文件都必须在清单里（新加的文件忘了登记即红）。
   // ⚠️ 不能只查 .json（2026-10-16 评审指出）：S2/S3/S4 会往这个目录加 .md（十七行预检、
