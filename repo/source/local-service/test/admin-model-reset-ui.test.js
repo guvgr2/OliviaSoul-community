@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readSourceText } from "./lib/read-source.mjs";
 
 test("model reset captures the clicked button before awaiting confirmation", async () => {
-  const app = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const app = await readSourceText(new URL("../public/app.js", import.meta.url));
   const start = app.indexOf('$("#resetModelConfig").addEventListener');
   const end = app.indexOf('$("#localAuthMode").addEventListener', start);
   assert.ok(start >= 0 && end > start, "model reset handler should exist");

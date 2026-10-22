@@ -1,11 +1,12 @@
 import test from 'node:test';
+import { readSourceText } from "./lib/read-source.mjs";
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { setImmediate as turn } from 'node:timers/promises';
-const source = await readFile(new URL('../public/lyrics-settings.js', import.meta.url), 'utf8');
+const source = await readSourceText(new URL('../public/lyrics-settings.js', import.meta.url));
 test('lyrics settings has its own sidebar page and native settings shortcut', async () => {
-  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const html = await readSourceText(new URL('../public/index.html', import.meta.url));
   // 本支给页签加了 data-tip 悬停说明，属性与标签文本之间允许存在其它属性
   assert.match(html, /data-tab="lyrics"[^>]*>歌词设置<\/button>/);
   const pages = html.split(/<section class="panel tabPage"/);

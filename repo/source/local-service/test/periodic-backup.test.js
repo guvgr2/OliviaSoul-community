@@ -13,6 +13,7 @@
 // 三层证据：真实文件（真库 + 真复制）× 真实 HTTP（真服务 + 真设置存储）× 源码/界面钉死。
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { readSourceTextSync } from "./lib/read-source.mjs";
 import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -34,9 +35,11 @@ import {
   runPeriodicBackupIfDue,
   startPeriodicBackup,
 } from "../midi/data-safety.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const read = relative => readFileSync(join(here, "..", relative), "utf8");
+const read = relative => readSourceTextSync(join(here, "..", relative));
 const serverSource = read("server.js");
 const safetySource = read("midi/data-safety.js");
 const panelSource = read("public/diagnostics-panel.js");
@@ -56,7 +59,7 @@ function makeDatabase(file) {
 
 async function makeDir(t, label) {
   const dir = await mkdtemp(join(tmpdir(), `olivia-periodic-${label}-`));
-  t.after(async () => { await rm(dir, { recursive: true, force: true }).catch(() => {}); });
+  t.after(async () => { await cleanupDir(dir).catch(() => {}); });
   return dir;
 }
 
@@ -381,7 +384,7 @@ async function boot(root, open) {
     root, dataDir: join(root, "data"),
     worker: false, runMemoryRefresh: false, delaySeconds: 300,
   });
-  const address = await service.listen(0);
+  const address = await listenOnFetchablePort(service);
   const base = `http://127.0.0.1:${address.port}`;
   let cookie = "";
   async function request(path, init = {}) {
@@ -410,7 +413,7 @@ async function makeRoot(t, label) {
     for (const instance of [...open].reverse()) {
       try { await instance.close(); } catch { /* 可能已手动关过 */ }
     }
-    await rm(root, { recursive: true, force: true }).catch(() => {});
+    await cleanupDir(root).catch(() => {});
   });
   return { root, open };
 }
@@ -479,8 +482,7 @@ test("真实服务：启动就留一份；默认值 / 保存立刻生效 / 非�
   assert.equal(week.body.data.intervalDays, 7, "7 天这一档要能存下来");
 
   // ④ 非法值被拒。
-  // 注意项目约定：/toy/* 下的错误统一走 HTTP 200 + code≠0（游戏端才不会把业务报错当网络故障），
-  // 所以这里断言的是 code 与 message，不是 HTTP 状态码。
+  // ★ E5（2026-10-18）起 /toy/* 的错误回真实状态码（上面那组断言已是 400）；这里只剩合法路径断言。
   for (const [bad, pattern] of [
     [{ intervalDays: 0 }, /间隔天数/u],
     [{ intervalDays: "每天" }, /间隔天数/u],
@@ -490,7 +492,8 @@ test("真实服务：启动就留一份；默认值 / 保存立刻生效 / 非�
     const rejected = await request("/toy/listen-naming/data/periodic-backup", {
       method: "POST", body: JSON.stringify(bad),
     });
-    assert.equal(rejected.status, 200);
+    // ★ E5（2026-10-18）：/toy/* 错误回真实状态码（坏设置 = httpError(400)），envelope 仍是 code≠0。
+    assert.equal(rejected.status, 400);
     assert.notEqual(rejected.body.code, 0, `${JSON.stringify(bad)} 必须被拒（不能让坏设置静默落盘）`);
     assert.match(rejected.body.message, pattern, `${JSON.stringify(bad)} 的提示要说清哪里不对`);
   }

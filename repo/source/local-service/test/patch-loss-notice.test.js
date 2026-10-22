@@ -13,6 +13,7 @@
 // 界面层不碰 server.js 既有契约。
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { readSourceTextSync } from "./lib/read-source.mjs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -23,9 +24,11 @@ import { createOliviaService } from "../server.js";
 import { createPatchLossNotice, lostPatchKinds } from "../public/patch-loss-notice.js";
 import { createTabNotices } from "../public/tab-notices.js";
 import { createUpdateDownloadUI } from "../public/update-download-ui.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const read = relative => readFileSync(join(here, "..", relative), "utf8");
+const read = relative => readSourceTextSync(join(here, "..", relative));
 const appSource = read("public/app.js");
 const KNOWN_KEY = "olivia.client-mount-known.v1";
 
@@ -408,9 +411,9 @@ test("真实服务：/admin/patch-loss-notice.js 取得到且不缓存，app.js 
   });
   t.after(async () => {
     await service.close(); // 必须先关服务再删目录（顺序反了 sqlite 会 EBUSY）
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   });
-  const address = await service.listen(0, "127.0.0.1");
+  const address = await listenOnFetchablePort(service, "127.0.0.1");
   const base = `http://127.0.0.1:${address.port}`;
 
   const module = await fetch(`${base}/admin/patch-loss-notice.js`);

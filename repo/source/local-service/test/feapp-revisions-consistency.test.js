@@ -5,6 +5,7 @@
 // mismatch，以及卸载恢复路径判定失效。这类 bug 靠"写代码时更小心"是防不住的，
 // 只能靠测试自动发现"同一事实存在多个副本"。
 import test from 'node:test';
+import { readSourceText } from "./lib/read-source.mjs";
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -12,7 +13,7 @@ import { FEAPP_REVISIONS, feappMarkerStartsWithExpression, feappRevisionAtLeast,
 
 const DESKTOP = new URL('../desktop/', import.meta.url);
 const TOOLS = new URL('../../tools/', import.meta.url);
-const read = (base, name) => readFile(new URL(name, base), 'utf8');
+const read = (base, name) => readSourceText(new URL(name, base));
 const versionsIn = text => (text.match(/v\d{1,12}/gu) ?? []).map(v => Number(v.slice(1)));
 
 test('本支版本列表自身一致且递增（v22…，无重复）', () => {
@@ -108,7 +109,7 @@ test('卸载恢复路径的 locale 放行范围与备份路径一致（同一事
 const EXCLUDED_DESKTOP = ['main.js', 'preload.cjs'];
 
 test('打包清单必须覆盖 desktop 下的全部模块（新增文件忘了加清单 = 装出来缺模块）', async () => {
-  const build = await readFile(new URL('../packaging/build-release.ps1', import.meta.url), 'utf8');
+  const build = await readSourceText(new URL('../packaging/build-release.ps1', import.meta.url));
   const block = /\$desktopModules = @\(([\s\S]*?)\)/u.exec(build);
   assert.ok(block, '未能从 build-release.ps1 解析出 $desktopModules');
   const listed = new Set((block[1].match(/"([^"]+\.js)"/gu) ?? []).map(item => item.replace(/"/gu, '')));
@@ -137,14 +138,14 @@ test('刻意不打包的 desktop 文件（main.js / preload.cjs）不得被任�
       if (!/\.c?js$/u.test(name) || EXCLUDED_DESKTOP.includes(name)) continue;
       // 注意：base 必须是合法 URL。传 '../desktop/' 这样的字符串会在 readFile 之前就抛错，
       // 而且 .catch() 拦不到（错误发生在参数求值时）—— 这一版修掉这个写法。
-      const text = await readFile(new URL(`${root}${name}`, import.meta.url), 'utf8').catch(() => '');
+      const text = await readSourceText(new URL(`${root}${name}`, import.meta.url)).catch(() => '');
       for (const excluded of EXCLUDED_DESKTOP) {
         if (offenderRe(excluded).test(text)) offenders.push(`${root}${name} <- ${excluded}`);
       }
     }
   }
   for (const name of ['server.js']) {
-    const text = await readFile(new URL(`../${name}`, import.meta.url), 'utf8').catch(() => '');
+    const text = await readSourceText(new URL(`../${name}`, import.meta.url)).catch(() => '');
     for (const excluded of EXCLUDED_DESKTOP) {
       if (offenderRe(excluded).test(text)) offenders.push(`${name} <- ${excluded}`);
     }
@@ -154,7 +155,7 @@ test('刻意不打包的 desktop 文件（main.js / preload.cjs）不得被任�
 });
 
 test('打包清单必须覆盖 midi 下的全部本支模块（上游未打包模块除外）', async () => {
-  const build = await readFile(new URL('../packaging/build-release.ps1', import.meta.url), 'utf8');
+  const build = await readSourceText(new URL('../packaging/build-release.ps1', import.meta.url));
   const block = /\$midiModules = @\(([\s\S]*?)\)/u.exec(build);
   assert.ok(block, '未能从 build-release.ps1 解析出 $midiModules');
   const listed = new Set((block[1].match(/"([^"]+\.js)"/gu) ?? []).map(item => item.replace(/"/gu, '')));
@@ -178,10 +179,13 @@ const INJECTED_BASELINE = new URL('./feapp-injected-scripts.baseline.json', impo
 const hashOf = text => createHash('sha256').update(text.replace(/\r\n/gu, '\n'), 'utf8').digest('hex');
 
 test('游戏内注入脚本的内容与基线一致（改脚本必须同步升 marker 并更新基线）', async () => {
-  const baseline = JSON.parse(await readFile(INJECTED_BASELINE, 'utf8'));
+  const baseline = JSON.parse(await readSourceText(INJECTED_BASELINE));
   const drifted = [];
   for (const [relative, expected] of Object.entries(baseline.scripts)) {
-    const text = await readFile(new URL(`../${relative}`, import.meta.url), 'utf8');
+    // ★ 这里必须读**原始字节**，不能走 readSourceText：基线是逐字节 sha256，
+    //   剥掉注释（哪怕是等长空白替换）也会让哈希变 ⇒ 假红。
+    //   （2026-10-20 第六轮复验迁移时真的踩到：三个脚本的哈希全对不上。）
+    const text = await readFile(new URL(`../${relative}`, import.meta.url), "utf8");
     const actual = hashOf(text);
     if (actual !== expected) drifted.push(`${relative}（基线 ${expected.slice(0, 12)}… / 实际 ${actual.slice(0, 12)}…）`);
   }
@@ -193,7 +197,7 @@ test('游戏内注入脚本的内容与基线一致（改脚本必须同步升 m
 });
 
 test('注入脚本基线的 marker 必须是 FEAPP_REVISIONS 里的最新版本', async () => {
-  const baseline = JSON.parse(await readFile(INJECTED_BASELINE, 'utf8'));
+  const baseline = JSON.parse(await readSourceText(INJECTED_BASELINE));
   const latest = FEAPP_REVISIONS[FEAPP_REVISIONS.length - 1];
   assert.ok(FEAPP_REVISIONS.includes(baseline.marker), `基线 marker ${baseline.marker} 不在已知版本列表里`);
   assert.equal(baseline.marker, latest,

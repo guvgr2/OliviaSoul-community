@@ -19,6 +19,7 @@
 // time-of-day-variants.test.js 里有同款注释与说明。
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { readSourceTextSync } from "./lib/read-source.mjs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -26,17 +27,28 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { createOliviaService } from "../server.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const serverSource = readFileSync(join(here, "..", "server.js"), "utf8");
+const serverSource = readSourceTextSync(join(here, "..", "server.js"));
 
 test("源码接线：listen-naming 路由要跟 time-of-day 一样注入本次启动的 databasePath", () => {
   // 这条断言看着琐碎，但它是这个缺陷唯一的静态护栏：漏参数时单元测试全绿、
   // 只有「显式 dataDir + 真服务」的组合才会暴露（所以下面还有一条真服务测试）。
+  // ★ 2026-10-19：原来这条写的是**精确字面量** `{ libraryRoot: currentRoot, databasePath }`，
+  //   而复审 E4-4 要求把 dataDir 一起注入（否则 USER_DATA_DIR 仍是空 ⇒ 状态文件落安装树）
+  //   ⇒ 精确字面量会把这处**改进**判成回归。改成「必须含这两个键」，并且两样都要求，
+  //   契约反而更紧了：漏 databasePath 红、漏 dataDir 也红。
   assert.match(
     serverSource,
-    /createListenNamingRoutes\(\{ libraryRoot: currentRoot, databasePath \}\)/u,
+    /createListenNamingRoutes\(\{[^}]*\bdatabasePath\b[^}]*\}\)/u,
     "server.js 起 listen-naming 路由时必须带上 databasePath，否则异位数据目录下这一页读不到曲库",
+  );
+  assert.match(
+    serverSource,
+    /createListenNamingRoutes\(\{[^}]*\bdataDir\b[^}]*\}\)/u,
+    "listen-naming 还必须带 dataDir（复审 E4-4）：只传 databasePath 时 USER_DATA_DIR 仍是空，状态文件会落安装树",
   );
 });
 
@@ -55,7 +67,7 @@ test("真实服务：显式 dataDir 下「曲名与时段」列表读的是本�
   });
   t.after(async () => {
     await service.close();
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   });
 
   const libraryRoot = service.midiStore.root;
@@ -72,7 +84,7 @@ test("真实服务：显式 dataDir 下「曲名与时段」列表读的是本�
   });
   service.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES('midi_library_root', ?)").run(libraryRoot);
 
-  const address = await service.listen(0);
+  const address = await listenOnFetchablePort(service);
   const response = await fetch(`http://127.0.0.1:${address.port}/toy/listen-naming/list?pageSize=3000`);
   assert.equal(response.status, 200);
   const body = await response.json();

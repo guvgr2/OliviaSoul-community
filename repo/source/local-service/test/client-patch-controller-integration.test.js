@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 
 import { DesktopController } from "../desktop/controller.js";
 import { discoverVerifiedOptionalClientPatches, readClientPatchRegistry, registerMountedClientPatch } from "../desktop/client-patch-registry.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 function nativeDllBytes() {
   const patch = Buffer.from([0x33, 0xc0, 0x90, 0x90, 0x90, 0x90]);
@@ -113,7 +114,7 @@ test("desktop backend readiness never waits for legacy registry adoption", async
 
 test("controller registers exact Studio and Container native patches but not an unchanged NutBase", async t => {
   const root = await mkdtemp(join(tmpdir(), "olivia-controller-native-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const userData = join(root, "UserData"), clientRoot = join(root, "game"), version = "1.2.3";
   const resources = join(clientRoot, version, "resources"), backupRoot = join(userData, "database", "client-backups", "resources-only", "exact");
   const layout = {
@@ -168,7 +169,7 @@ test("controller registers exact Studio and Container native patches but not an 
 
 test("registration failure restores and verifies every exact optional DLL changed by this mount", async t => {
   const root = await mkdtemp(join(tmpdir(), "olivia-controller-native-rollback-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const userData = join(root, "UserData"), clientRoot = join(root, "game"), version = "1.2.3";
   const backupRoot = join(userData, "database", "client-backups", "resources-only", "exact");
   const layout = {
@@ -232,7 +233,7 @@ test("registration failure restores and verifies every exact optional DLL change
 
 test("manual restore refuses a missing registered optional backup before writes and never marks it restored", async t => {
   const root = await mkdtemp(join(tmpdir(), "olivia-controller-native-missing-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const userData = join(root, "UserData"), clientRoot = join(root, "game"), version = "1.2.3";
   const resources = join(clientRoot, version, "resources"), backupRoot = join(userData, "database", "client-backups", "resources-only", "exact");
   const layout = { gameRoot: clientRoot, version, feappPath: join(resources, "feapp.dat"), webplayerPath: join(resources, "webplayer.dat") };
@@ -268,7 +269,7 @@ test("manual restore refuses a missing registered optional backup before writes 
 
 test("manual restore freezes client identity and rejects selection changes until the exact record is marked", async t => {
   const root = await mkdtemp(join(tmpdir(), "olivia-controller-restore-identity-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const userData = join(root, "UserData"), version = "1.2.3";
   const clients = {};
   for (const name of ["a", "b"]) {

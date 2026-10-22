@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createUpdateDownloader } from '../update-download.js';
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 async function until(fn) {
   for (let i = 0; i < 500; i++) { const value = fn(); if (value) return value; await delay(10); }
@@ -17,7 +19,7 @@ async function fixture(t, handler, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'olivia-update-'));
   const requests = [];
   const server = createServer((req, res) => { requests.push(req.headers); handler(req, res, requests.length); });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenOnFetchablePort(server, "127.0.0.1");
   const url = `http://127.0.0.1:${server.address().port}/Setup.exe`;
   const release = { latestTag: 'test.1', asset: { id: 1, name: 'OliviaSoul-Test-Setup.exe', url,
     size: payload.length, digest: `sha256:${createHash('sha256').update(payload).digest('hex')}` } };
@@ -29,7 +31,7 @@ async function fixture(t, handler, options = {}) {
     managers.push(manager); return manager;
   };
   t.after(async () => { for (const m of managers) await m.close(); server.closeAllConnections();
-    await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+    await new Promise(resolve => server.close(resolve)); await cleanupDir(root); });
   return { root, requests, release, make, releaseCalls: () => releaseCalls };
 }
 const terminal = m => until(() => !m.status().running && ['failed', 'completed'].includes(m.status().state) && m.status());

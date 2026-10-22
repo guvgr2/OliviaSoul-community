@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 // C1 曲库体检：既有的 /listen-naming/health 只报 5 类，而且每类**硬截断**（30/20 条）——
 // 前端拿到 30 条没法说清「是正好 30 条还是被砍了」，占位名（个人上传 · midi_xxx）与
@@ -42,7 +44,7 @@ const service = await createOliviaService({
   runMemoryRefresh: false,
   midiDurationProbe: async () => 120_000_000,
 });
-const address = await service.listen(0);
+const address = await listenOnFetchablePort(service);
 const base = `http://127.0.0.1:${address.port}`;
 const libraryRoot = service.midiStore.root;
 // 曲库根一会儿要被 /listen-naming 路由现读，所以必须写进 settings 再发第一个请求。
@@ -67,7 +69,7 @@ async function seedSong(folder, { name, customName = null, permanentName = null,
   if (customName) service.midiStore.updateUserSongMetadata(id, { name: customName });
   if (permanentName) service.midiStore.updateUserSongMetadata(id, { permanentName });
   // missingVideo 的场景：先让库里记上，再把文件夹删掉（不然有些写入路径会先校验文件在不在）。
-  if (dropFolder) await rm(dir, { recursive: true, force: true });
+  if (dropFolder) await cleanupDir(dir);
   return id;
 }
 
@@ -91,7 +93,7 @@ await writeFile(groupCsv, "\uFEFF" + [
 
 test.after(async () => {
   await service.close();
-  await rm(root, { recursive: true, force: true });
+  await cleanupDir(root);
 });
 
 async function health(query = "") {

@@ -13,7 +13,11 @@
 .lyricsSettings select { color-scheme: dark; cursor: pointer; }
 .lyricsSettings select option { background: #222329; color: #efedea; }
 .lyricsSettings .lyricsField input[type=color] { height: 40px; padding: 5px; cursor: pointer; }
-.lyricsSettings .lyricsField input[type=range] { padding: 0; accent-color: #d7cfc1; height: 22px; cursor: pointer; }
+/* ★ 2026-10-19 压测（真界面 + CDP 几何量）发现：Chrome 的 UA 表给 input[type=range] 留了
+   `margin: 2px`。在 `width:100%` + `box-sizing:border-box` 之下，这 2px 会把滑块推出容器右边
+   ⇒ 容器 scrollWidth 906 > clientWidth 904（1024 宽下 614 > 612），最右端的滑块头被裁掉一点。
+   显式清掉 margin 即可，滑块反而填满整列。 */
+.lyricsSettings .lyricsField input[type=range] { padding: 0; margin: 0; accent-color: #d7cfc1; height: 22px; cursor: pointer; }
 .lyricsSettings .fieldHint { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; margin-bottom: 0; }
 .lyricsSettings .lyricsPreviewBox { background: #111214; border: 1px solid #36373c; border-radius: 12px; margin-top: 20px; padding: 16px; overflow: hidden; }
 .lyricsPreviewBox > small { color: #8f8f97; font-size: 12px; }

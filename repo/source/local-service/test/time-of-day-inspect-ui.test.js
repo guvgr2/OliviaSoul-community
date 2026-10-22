@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readSourceText } from "./lib/read-source.mjs";
 
 // g14：时段页的「按画面判定重写这一首」以前无论识别到几段都能点。识别不到 3 段时，
 // 重写会把缺的时段映射清空，播放时三段都回退到同一段视频 —— 必须在界面上拦住。
 // 这里用最小假 DOM 把真实前端文件跑起来，只断言护栏行为，不碰真实浏览器。
-const source = await readFile(new URL("../public/time-of-day-inspect.js", import.meta.url), "utf8");
+const source = await readSourceText(new URL("../public/time-of-day-inspect.js", import.meta.url));
 const FOLDER = "midi_900_1700000000";
 const REWORK_LABEL = "按画面判定重写这一首";
 

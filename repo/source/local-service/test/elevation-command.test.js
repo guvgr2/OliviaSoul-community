@@ -23,6 +23,7 @@ import {
   describeElevationFailure,
   elevatedProcessCommand,
 } from "../desktop/elevation-command.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 const desktopDirectory = resolve(new URL("../desktop", import.meta.url).pathname.replace(/^\//u, ""));
 const sourceOf = name => readFile(join(desktopDirectory, name), "utf8");
@@ -102,7 +103,7 @@ test("真实失败路径：启动一个不存在的程序必须 exit 1 并写下
     assert.ok(written.includes(ELEVATION_CANCELLED_HINT), `错误文件应含提示语：${written}`);
     assert.match(command, /exit 1/u);
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await cleanupDir(directory);
   }
 });
 

@@ -9,7 +9,8 @@ import test from "node:test";
 import { importPerformanceLibrary, scanPerformanceLibrary } from "../midi/library-importer.js";
 import { createSongPreviewResolver } from '../midi/song-preview-source.js';
 import { MidiStore } from "../midi/store.js";
-import { endOfTrack, midiFile, track } from "./fixtures/midi-fixtures.js";
+import { endOfTrack, midiFile, track } from "./support/midi-fixtures.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 async function libraryFixture() {
   // 原来写死某个固定盘符的临时目录，任何没有该盘的机器都会 ENOENT 全红
@@ -30,7 +31,7 @@ async function libraryFixture() {
     store,
     async close() {
       db.close();
-      await rm(root, { recursive: true, force: true });
+      await cleanupDir(root);
     },
   };
 }
@@ -47,7 +48,7 @@ test('verified duplicate import records another root and recovers after the orig
     const id=ctx.store.listUserSongs()[0].id;
     ctx.store.updateUserSongMetadata(id,{name:'Renamed'});
     await importPerformanceLibrary(await scanPerformanceLibrary(second),options);
-    await rm(first,{recursive:true,force:true});
+    await cleanupDir(first);
     const song=ctx.store.getUserSong(id);
     assert.equal(song.name,'Renamed');assert.equal(ctx.store.listUserSongs().length,1);
     assert.deepEqual(song.sourceRoots,[ctx.libraryRoot,second]);

@@ -470,6 +470,9 @@ export function readLibraryRootFromDatabase(databasePath) {
  * @returns {Promise<(req, url) => Promise<object|null>>}
  */
 export async function createTimeOfDayRoutes(options = {}) {
+  // ★ 2026-10-19 修（复审 E4-4 🟠）：同 listen-naming —— 只接 databasePath 时 `USER_DATA_DIR`
+  //   仍是空，缩略图缓存（:771 `join(USER_DATA_DIR || DEFAULT_DATA_DIR, ...)`）会落安装树。
+  configure({ dataDir: options.dataDir });
   const databasePath = resolve(options.databasePath ?? DATABASE_PATH);
   if (!existsSync(databasePath)) throw new Error(`未找到 OliviaSoul 数据库：${databasePath}`);
 

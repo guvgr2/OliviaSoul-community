@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import vm from "node:vm";
+import { readSourceText } from "./lib/read-source.mjs";
 
-const source = await readFile(new URL("../public/song-editor.js", import.meta.url), "utf8").catch(() => "");
+const source = await readSourceText(new URL("../public/song-editor.js", import.meta.url)).catch(() => "");
 // DOM/event/media transport boundary only; all editor rendering and commands are real.
 class Element {
   constructor(tag) { this.tagName = tag; this.children = []; this.style = {}; this.attributes = {}; this.listeners = {}; this.value = ""; this.textContent = ""; this.disabled = false; this.open = false; }

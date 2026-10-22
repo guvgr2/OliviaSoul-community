@@ -4,6 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createOliviaService } from '../server.js';
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 // 这组测试守四件事：
 // ① 歌单/收藏夹是**新表**，`playlist_items` 的结构一个字段都不能动（它是游戏真实歌单的镜像）。
@@ -23,9 +25,9 @@ async function fixture(t) {
     runMemoryRefresh: false,
     fetch: async () => { throw new Error('No external requests allowed'); },
   });
-  const { port } = await service.listen(0, '127.0.0.1');
+  const { port } = await listenOnFetchablePort(service, "127.0.0.1");
   const base = `http://127.0.0.1:${port}`;
-  t.after(async () => { await service.close(); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await service.close(); await cleanupDir(root); });
 
   async function request(path, init = {}) {
     const response = await fetch(base + path, {
@@ -346,7 +348,14 @@ test('写接口来源闸门：恶意网页写不进去，游戏页面与本机�
   }, 'https://olivia.local');
   assert.equal(gameAdd.body.code, 0, gameAdd.body.message);
 
-  // 读接口不受影响（GET 不带来源闸门）
+  // ★ 2026-10-19 数据安全审计改契约：这条断言原来写的是「读接口不受影响（GET 不带来源闸门）」。
+  //   那正是审计发现的泄露面 —— `/toy/*` 的 GET 会吐信件正文、用户信息、曲库、诊断包与运行日志，
+  //   而 `corsHeaders()` 对 `/toy/*` 是**反射任意 Origin** 的 ⇒ 任意网页 fetch 一下就能读走。
+  //   现在读同样要过闸门；「无来源」和「游戏页面的源」照旧可用（见 test/source-guard.test.js）。
   const readFromEvil = await attempt(`/toy/folders/${encodeURIComponent(folder.id)}`, {}, 'https://evil.example');
-  assert.equal(readFromEvil.body.code, 0);
+  assert.equal(readFromEvil.body.code, 'COMMON_ORIGIN_UNTRUSTED', '外部站点不能跨域读本地数据');
+  const readFromScript = await request(`/toy/folders/${encodeURIComponent(folder.id)}`);
+  assert.equal(readFromScript.body.code, 0, '无来源的读（本机脚本 / node 测试）必须照旧可用');
+  const readFromGame = await attempt(`/toy/folders/${encodeURIComponent(folder.id)}`, {}, 'https://olivia.local');
+  assert.equal(readFromGame.body.code, 0, '游戏页面自己的源必须能读，否则游戏里看不到歌单');
 });

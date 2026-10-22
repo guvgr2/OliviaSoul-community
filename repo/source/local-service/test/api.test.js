@@ -8,6 +8,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
+import { readSourceText } from "./lib/read-source.mjs";
 import { createOliviaService, validateHarnessReply } from "../server.js";
 import { DesktopController } from "../desktop/controller.js";
 import {
@@ -16,7 +17,8 @@ import {
 } from "../remote-memory.js";
 import { prepareSoulBundle } from "../soul-bundle.js";
 import { parseFfmpegProgress, parseWhisperProgress, TranscriptionEngine } from "../transcription.js";
-import { blockedFetchPorts } from "./fixtures/fetch-ports.js";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -73,11 +75,7 @@ async function fixture(options = {}) {
     legacyWorkspaceRoots: options.legacyWorkspaceRoots,
     allowLegacyModelConfigImport: options.allowLegacyModelConfigImport,
   });
-  let address = await service.listen(0);
-  while (blockedFetchPorts.has(address.port)) {
-    await new Promise(resolve => service.server.close(resolve));
-    address = await service.listen(0);
-  }
+  let address = await listenOnFetchablePort(service);
   const base = `http://127.0.0.1:${address.port}`;
   let cookie = "";
   async function request(path, init = {}) {
@@ -101,7 +99,7 @@ async function fixture(options = {}) {
     request,
     async close() {
       await service.close();
-      await rm(root, { recursive: true, force: true });
+      await cleanupDir(root);
     },
   };
 }
@@ -189,7 +187,7 @@ if (-not (Test-Path -LiteralPath $RulesFile)) { throw "missing rules file: $Rule
   ], { env: cleanPowerShellModulePath() });
   assert.match(result.stdout, /HARNESS LIVE DONE/u);
   assert.equal(await readFile(reply, "utf8"), "reply");
-  await rm(root, { recursive: true, force: true });
+  await cleanupDir(root);
 });
 
 test("PowerShell 5 可输出结构化记忆摘要数组", async () => {
@@ -225,7 +223,7 @@ test("PowerShell 5 可输出结构化记忆摘要数组", async () => {
     contentMd5: "0123456789abcdef0123456789abcdef",
     summary: "已有摘要",
   }]);
-  await rm(root, { recursive: true, force: true });
+  await cleanupDir(root);
 });
 
 test("逐封摘要保持独立请求且最多八并发", async () => {
@@ -246,7 +244,7 @@ test("逐封摘要保持独立请求且最多八并发", async () => {
       }, 400);
     });
   });
-  await new Promise(resolve => api.listen(0, "127.0.0.1", resolve));
+  await listenOnFetchablePort(api, "127.0.0.1");
   const root = await mkdtemp(join(tmpdir(), "olivia-memory-concurrency-test-"));
   try {
     const secrets = join(root, ".cursor", "secrets");
@@ -284,7 +282,7 @@ test("逐封摘要保持独立请求且最多八并发", async () => {
     assert.ok(maxActive <= 8, `实际并发数不能超过 8，得到 ${maxActive}`);
   } finally {
     await new Promise(resolve => api.close(resolve));
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });
 
@@ -339,7 +337,7 @@ test("客户端原版备份按游戏版本隔离", async t => {
   assert.notEqual(oldBackup, newBackup);
   assert.match(oldBackup, /client-backups[\\/]resources-only[\\/][a-f0-9]{32}[\\/][a-f0-9]{32}\.feapp\.dat$/u);
   assert.match(newBackup, /client-backups[\\/]resources-only[\\/][a-f0-9]{32}[\\/][a-f0-9]{32}\.feapp\.dat$/u);
-  await rm(root, { recursive: true, force: true });
+  await cleanupDir(root);
 });
 
 test("独立客户端复制后逐文件哈希一致且拒绝覆盖源目录", async () => {
@@ -444,12 +442,12 @@ test("独立客户端复制后逐文件哈希一致且拒绝覆盖源目录", as
       "-TestFixture",
     ]), /独立目录/u);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });
 
 test("挂载补丁会恢复离线信件、音乐和我的上传但保持 MIDI 定制卡隐藏", async () => {
-  const patchScript = await readFile(new URL("../../tools/patch-feapp-local.ps1", import.meta.url), "utf8");
+  const patchScript = await readSourceText(new URL("../../tools/patch-feapp-local.ps1", import.meta.url));
   assert.match(patchScript, /\[switch\]\$RefreshOriginal/u);
   assert.match(patchScript, /\[switch\]\$PatchNativeOfflineChecks/u);
   assert.match(patchScript, /if \(\$RefreshOriginal\) \{/u);
@@ -482,7 +480,7 @@ test("挂载补丁会恢复离线信件、音乐和我的上传但保持 MIDI �
   assert.match(patchScript, /NutContainerPlugin\.dll/u);
   // Native widget mutation and rollback are executed in native-widget-patch.test.js.
   assert.match(patchScript, /nativeOfflineChecks=false/u);
-  const restoreScript = await readFile(new URL("../../tools/restore-feapp-original.ps1", import.meta.url), "utf8");
+  const restoreScript = await readSourceText(new URL("../../tools/restore-feapp-original.ps1", import.meta.url));
   assert.match(restoreScript, /NutStudioUI-/u);
   assert.match(restoreScript, /NutContainerPlugin-/u);
   assert.match(patchScript, /patched archive still disables offline desktop widgets/u);
@@ -721,7 +719,7 @@ test("启动时备份目标数据库并去重合并旧信件", async t => {
   const target = await fixture({ legacyDatabasePaths: [join(legacyData, "olivia-local.sqlite")] });
   t.after(async () => {
     await target.close();
-    await rm(legacyRoot, { recursive: true, force: true });
+    await cleanupDir(legacyRoot);
   });
 
   const merged = target.service.db.prepare("SELECT * FROM letters WHERE id = 'legacy-letter'").get();
@@ -770,7 +768,7 @@ test("旧数据库缺失时从明确的旧 Markdown 档案目录恢复信件并�
   const target = await fixture({ legacyArchiveDirs: [archiveDir] });
   t.after(async () => {
     await target.close();
-    await rm(legacyRoot, { recursive: true, force: true });
+    await cleanupDir(legacyRoot);
   });
 
   const restored = target.service.db.prepare("SELECT * FROM letters WHERE content = ?")
@@ -795,7 +793,7 @@ test("普通启动不会从旧目录导入模型配置", async t => {
   const target = await fixture({ legacyWorkspaceRoots: [legacyRoot] });
   t.after(async () => {
     await target.close();
-    await rm(legacyRoot, { recursive: true, force: true });
+    await cleanupDir(legacyRoot);
   });
   await assert.rejects(readFile(join(target.root, ".cursor", "secrets", "model.env")), error => error.code === "ENOENT");
   await assert.rejects(readFile(join(target.root, ".cursor", "secrets", "deepseek.env")), error => error.code === "ENOENT");
@@ -817,8 +815,8 @@ test("显式授权可以导入缺失的旧模型配置且不覆盖当前配置",
     allowLegacyModelConfigImport: true,
   });
   t.after(async () => {
-    await rm(target.root, { recursive: true, force: true });
-    await rm(legacyRoot, { recursive: true, force: true });
+    await cleanupDir(target.root);
+    await cleanupDir(legacyRoot);
   });
   assert.equal(await readFile(join(target.root, ".cursor", "secrets", "model.env"), "utf8"), oldConfig);
 
@@ -860,12 +858,12 @@ test("桌面更新安装器只接受数据目录 updates 下的 exe", async () =
     await assert.rejects(controller.prepareUpdateInstall(outside), /只能安装/u);
     await assert.rejects(controller.prepareUpdateInstall(join(dataDir, "updates", "note.txt")), /必须是 \.exe/u);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });
 
 test("客户端重新挂载使用已验证备份并保留播放器还原支持", async () => {
-  const source = await readFile(new URL("../desktop/controller.js", import.meta.url), "utf8");
+  const source = await readSourceText(new URL("../desktop/controller.js", import.meta.url));
   assert.match(source, /Promise\.all\(\[\s*this\.readFeappStatus\(layout\.feappPath\), this\.readWebplayerStatus\(layout\.webplayerPath\)/u);
   assert.match(source, /this\.originalClientBackups\(layout, true\)/u);
   assert.doesNotMatch(source, /patchArgs\.push\("-RefreshOriginal"/u);
@@ -877,14 +875,14 @@ test("客户端重新挂载使用已验证备份并保留播放器还原支持",
 
 test("v28 客户端补丁终止旧会话并按播放模式推进播单", async () => {
   const [patchScript, patchStatus, upgradeScript, v23UpgradeScript, localeScript, webplayerScript, webplayerUpgradeScript, controller] = await Promise.all([
-    readFile(new URL("../../tools/patch-feapp-local.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../../tools/get-feapp-status.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../../tools/upgrade-feapp-v16-v17.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../../tools/upgrade-feapp-v22-v23.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../../tools/patch-feapp-locale-local.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../../tools/patch-webplayer-local.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../../tools/upgrade-webplayer-v6-v7.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../desktop/controller.js", import.meta.url), "utf8"),
+    readSourceText(new URL("../../tools/patch-feapp-local.ps1", import.meta.url)),
+    readSourceText(new URL("../../tools/get-feapp-status.ps1", import.meta.url)),
+    readSourceText(new URL("../../tools/upgrade-feapp-v16-v17.ps1", import.meta.url)),
+    readSourceText(new URL("../../tools/upgrade-feapp-v22-v23.ps1", import.meta.url)),
+    readSourceText(new URL("../../tools/patch-feapp-locale-local.ps1", import.meta.url)),
+    readSourceText(new URL("../../tools/patch-webplayer-local.ps1", import.meta.url)),
+    readSourceText(new URL("../../tools/upgrade-webplayer-v6-v7.ps1", import.meta.url)),
+    readSourceText(new URL("../desktop/controller.js", import.meta.url)),
   ]);
   // 当前补丁标记是 v67（v62 挂了 game-favorites.js 并把歌曲行的「加播单」接到本地服务的歌单界面；
   // v63 又把这个调用点的「原功能回调」一并传下去，让下拉里能保留「加入音乐桌面」；
@@ -1106,9 +1104,9 @@ assert.match(controller, /feappRevisionAtLeast\(current\.revision, "v28"\)/u,
 
 test("webplayer 补丁精确移除桌面 UID 水印并可从原版备份还原", async () => {
   const [patch, status, restore] = await Promise.all([
-    readFile(new URL("../../tools/patch-webplayer-local.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../../tools/get-webplayer-status.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../../tools/restore-webplayer-original.ps1", import.meta.url), "utf8"),
+    readSourceText(new URL("../../tools/patch-webplayer-local.ps1", import.meta.url)),
+    readSourceText(new URL("../../tools/get-webplayer-status.ps1", import.meta.url)),
+    readSourceText(new URL("../../tools/restore-webplayer-original.ps1", import.meta.url)),
   ]);
   const watermark = 'S(n)?(k(),we(l,{key:0,uid:S(n)},null,8,["uid"])):Re("",!0)';
   assert.match(patch, /OliviaSoulPatch:webplayer-instant-seamless-v20/u);
@@ -1248,7 +1246,7 @@ test("发布构建路径解析到项目目录", async () => {
     assert.equal(resolved.nugetPackages, join(project, "dist-native", "build-tools", "nuget-packages"));
     assert.equal(resolved.outputDirectory, output);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });
 
@@ -1261,9 +1259,9 @@ test("发布脚本为现有二进制生成校验和", async () => {
     // 口径必须与打包脚本保持同一处：$version = [string]$package.version（现读 package.json）。
     // 只读 $version = "..." 会漏掉现读形态，把正常脚本判成坏脚本。
     const buildScriptUrl = new URL("../packaging/build-release.ps1", import.meta.url);
-    const buildScriptText = await readFile(buildScriptUrl, "utf8");
+    const buildScriptText = await readSourceText(buildScriptUrl);
     const version = /\$version\s*=\s*\[string\]\$package\.version/u.test(buildScriptText)
-      ? JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version
+      ? JSON.parse(await readSourceText(new URL("../package.json", import.meta.url))).version
       : /\$version\s*=\s*"([^"]+)"/u.exec(buildScriptText)?.[1];
     assert.ok(version, "打包脚本里应当能读到版本号（现读 package.json 或写死 $version）");
     const setupName = `OliviaSoul-${version}-Setup.exe`;
@@ -1281,24 +1279,24 @@ test("发布脚本为现有二进制生成校验和", async () => {
       "",
     ].join("\n"));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });
 
 test("v18 发布配置只同步当前 Harness 文件并清理旧文件", async () => {
   const [harnessScript, retrievalScript, liveScript, precheck, stateInitializer, historyPrompt, buildScript, nodeHost, workspaceTemplate, desktopMain, installer, server] = await Promise.all([
-    readFile(new URL("../../.cursor/skills/fit-letters/scripts/harness-4step.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../../.cursor/skills/fit-letters/scripts/history-retrieval.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../../.cursor/skills/fit-letters/scripts/harness-live.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../../harness/01-预检.md", import.meta.url), "utf8"),
-    readFile(new URL("../../harness/01-初始化账本.md", import.meta.url), "utf8"),
-    readFile(new URL("../../harness/02-历史检索.md", import.meta.url), "utf8"),
-    readFile(new URL("../packaging/build-release.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../desktop/node-host.js", import.meta.url), "utf8"),
-    readFile(new URL("../desktop/workspace-template.js", import.meta.url), "utf8"),
-    readFile(new URL("../desktop/main.js", import.meta.url), "utf8"),
-    readFile(new URL("../packaging/OliviaSoul.iss", import.meta.url), "utf8"),
-    readFile(new URL("../server.js", import.meta.url), "utf8"),
+    readSourceText(new URL("../../.cursor/skills/fit-letters/scripts/harness-4step.ps1", import.meta.url)),
+    readSourceText(new URL("../../.cursor/skills/fit-letters/scripts/history-retrieval.ps1", import.meta.url)),
+    readSourceText(new URL("../../.cursor/skills/fit-letters/scripts/harness-live.ps1", import.meta.url)),
+    readSourceText(new URL("../../harness/01-预检.md", import.meta.url)),
+    readSourceText(new URL("../../harness/01-初始化账本.md", import.meta.url)),
+    readSourceText(new URL("../../harness/02-历史检索.md", import.meta.url)),
+    readSourceText(new URL("../packaging/build-release.ps1", import.meta.url)),
+    readSourceText(new URL("../desktop/node-host.js", import.meta.url)),
+    readSourceText(new URL("../desktop/workspace-template.js", import.meta.url)),
+    readSourceText(new URL("../desktop/main.js", import.meta.url)),
+    readSourceText(new URL("../packaging/OliviaSoul.iss", import.meta.url)),
+    readSourceText(new URL("../server.js", import.meta.url)),
   ]);
   assert.doesNotMatch(harnessScript, /SkipFeel|2feel|02-读信感/u);
   assert.doesNotMatch(harnessScript, /Get-TempDecision|\$arith|00-strict-precheck/u);
@@ -1341,7 +1339,10 @@ test("v18 发布配置只同步当前 Harness 文件并清理旧文件", async (
   assert.doesNotMatch(installer, /\{commonappdata\}\\OliviaSoul/u);
   assert.doesNotMatch(nodeHost, /copyIfPresent\(join\(template, "\.cursor", "rules"/u);
   assert.match(nodeHost, /prepareWorkspaceIncrementally/u);
-  assert.match(workspaceTemplate, /rm\(join\(resolvedRoot, "\.cursor", "rules"\), \{ recursive: true, force: true \}\)/u);
+  // ★ 2026-10-19 修正：这条原先把 `{ recursive: true, force: true }` 逐字钉死，本轮给目录级删除
+  //   加了重试（Windows pending-delete ⇒ rmdir 报 ENOTEMPTY），字面量对不上了。
+  //   这里不是放宽，而是把「必须带重试」也钉进去 —— 否则下次有人删掉 maxRetries，这条照样绿。
+  assert.match(workspaceTemplate, /rm\(join\(resolvedRoot, "\.cursor", "rules"\), \{ recursive: true, force: true, maxRetries: 10, retryDelay: 50 \}\)/u);
   assert.doesNotMatch(desktopMain, /cp\(join\(template, "\.cursor", "rules"/u);
   assert.match(desktopMain, /prepareWorkspaceIncrementally/u);
   assert.match(workspaceTemplate, /rm\(join\(resolvedRoot, "harness", "00-脚本算术\.md"\)/u);
@@ -1357,14 +1358,14 @@ test("v18 发布配置只同步当前 Harness 文件并清理旧文件", async (
 
 test("v18 工程文档、人设与正式 Prompt 保持单一契约", async () => {
   const [document, persona, packagedPersona, fields, precheck, writing, finalCheck, summaryScript] = await Promise.all([
-    readFile(new URL("../V18_ENGINEERING.md", import.meta.url), "utf8"),
-    readFile(new URL("../../林离人设.md", import.meta.url), "utf8"),
-    readFile(new URL("../packaging/林离人设.md", import.meta.url), "utf8"),
-    readFile(new URL("../../harness/00-栏目.md", import.meta.url), "utf8"),
-    readFile(new URL("../../harness/01-预检.md", import.meta.url), "utf8"),
-    readFile(new URL("../../harness/写法.md", import.meta.url), "utf8"),
-    readFile(new URL("../../harness/04-尾端检查.md", import.meta.url), "utf8"),
-    readFile(new URL("../../.cursor/skills/fit-letters/scripts/refresh-live-memory.ps1", import.meta.url), "utf8"),
+    readSourceText(new URL("../V18_ENGINEERING.md", import.meta.url)),
+    readSourceText(new URL("../../林离人设.md", import.meta.url)),
+    readSourceText(new URL("../packaging/林离人设.md", import.meta.url)),
+    readSourceText(new URL("../../harness/00-栏目.md", import.meta.url)),
+    readSourceText(new URL("../../harness/01-预检.md", import.meta.url)),
+    readSourceText(new URL("../../harness/写法.md", import.meta.url)),
+    readSourceText(new URL("../../harness/04-尾端检查.md", import.meta.url)),
+    readSourceText(new URL("../../.cursor/skills/fit-letters/scripts/refresh-live-memory.ps1", import.meta.url)),
   ]);
   assert.equal(packagedPersona.replace(/\r\n/gu, "\n").trimEnd(), persona.replace(/\r\n/gu, "\n").trimEnd());
   assert.equal((fields.match(/^挑选　/gmu) ?? []).length, 1);
@@ -1471,7 +1472,7 @@ test("本地档案室支持精确读取、模糊搜索并拒绝越权查询", as
       "-ExpectedSha256", exactSha256,
     ]);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });
 
@@ -1505,9 +1506,9 @@ test("摘要不按 prompt_version 字段放行，库中旧缓存仍可见", asyn
 
 test("桌面监听进程随父进程退出并保留无正文诊断日志", async () => {
   const [nodeHost, nodeBackend, mainForm] = await Promise.all([
-    readFile(new URL("../desktop/node-host.js", import.meta.url), "utf8"),
-    readFile(new URL("../native-host/NodeBackend.cs", import.meta.url), "utf8"),
-    readFile(new URL("../native-host/MainForm.cs", import.meta.url), "utf8"),
+    readSourceText(new URL("../desktop/node-host.js", import.meta.url)),
+    readSourceText(new URL("../native-host/NodeBackend.cs", import.meta.url)),
+    readSourceText(new URL("../native-host/MainForm.cs", import.meta.url)),
   ]);
   assert.match(nodeBackend, /"--parent-pid", Process\.GetCurrentProcess\(\)\.Id/u);
   assert.match(nodeBackend, /StopStaleProcesses\(\)/u);
@@ -1539,10 +1540,7 @@ test("Node 宿主的 stdin 关闭后会退出并释放监听端口", async t => 
   ]);
   await writeFile(usersettingsPath, Buffer.from(`songStoragePath\u0000${JSON.stringify(songStorage)}`));
   const portProbe = createNetServer();
-  await new Promise((resolvePromise, reject) => {
-    portProbe.once("error", reject);
-    portProbe.listen(0, "127.0.0.1", resolvePromise);
-  });
+  await listenOnFetchablePort(portProbe, "127.0.0.1");
   const port = portProbe.address().port;
   await new Promise(resolvePromise => portProbe.close(resolvePromise));
   await writeFile(join(appData, "desktop-settings.json"), JSON.stringify({ port, clientExe: "" }));
@@ -1559,7 +1557,7 @@ test("Node 宿主的 stdin 关闭后会退出并释放监听端口", async t => 
   let exited = false;
   t.after(async () => {
     if (!exited) child.kill();
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   });
   await new Promise((resolvePromise, reject) => {
     const timer = setTimeout(() => reject(new Error("Node 宿主启动超时")), 5000);
@@ -1619,7 +1617,7 @@ test("客户端 UID 和用户名可配置并在重启后保留", async () => {
   await mkdir(join(root, "信件往来_原始语料"));
   const dataDir = join(root, "data");
   const first = await createOliviaService({ root, dataDir, worker: false, runMemoryRefresh: false });
-  const firstAddress = await first.listen(0);
+  const firstAddress = await listenOnFetchablePort(first);
   const savedResponse = await fetch(`http://127.0.0.1:${firstAddress.port}/admin/api/identity`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1629,7 +1627,7 @@ test("客户端 UID 和用户名可配置并在重启后保留", async () => {
   await first.close();
 
   const second = await createOliviaService({ root, dataDir, worker: false, runMemoryRefresh: false });
-  const secondAddress = await second.listen(0);
+  const secondAddress = await listenOnFetchablePort(second);
   const base = `http://127.0.0.1:${secondAddress.port}`;
   const identity = await (await fetch(`${base}/admin/api/identity`)).json();
   assert.deepEqual(identity.data, { uid: "88001", nickname: "访客" });
@@ -1641,7 +1639,7 @@ test("客户端 UID 和用户名可配置并在重启后保留", async () => {
   assert.equal(login.data.uid, "88001");
   assert.equal(login.data.userInfo.nickname, "访客");
   await second.close();
-  await rm(root, { recursive: true, force: true });
+  await cleanupDir(root);
 });
 
 test("服务启动即具备唯一身份且无需登录即可使用完整回信流程", async t => {
@@ -1725,7 +1723,7 @@ test("首次 SQLite 迁移只采用数据库并覆盖旧 Markdown 与文件摘�
   assert.doesNotMatch(projection, /只在旧 Markdown|不应回填/u);
   assert.equal(second.db.prepare("SELECT COUNT(*) count FROM archive_projections").get().count, 1);
   await second.close();
-  await rm(root, { recursive: true, force: true });
+  await cleanupDir(root);
 });
 
 test("Harness 启动前会按双 MD5 自愈被篡改的 Markdown 投影", async t => {
@@ -2058,7 +2056,7 @@ test("旧多用户数据在启动时归并到当前本地身份", async () => {
   assert.equal(second.db.prepare("SELECT person FROM users").get().person, "旧账号");
   assert.deepEqual(second.db.prepare("SELECT person FROM letters ORDER BY id").all().map(row => row.person), ["用户", "旧账号"]);
   await second.close();
-  await rm(root, { recursive: true, force: true });
+  await cleanupDir(root);
 });
 
 test("每天按本地自然日最多发送三封", async t => {
@@ -2077,7 +2075,8 @@ test("每天按本地自然日最多发送三封", async t => {
     method: "POST",
     body: JSON.stringify({ content: "第四封" }),
   });
-  assert.equal(rejected.status, 200);
+  // ★ E5：/toy/* 的错误不再强制 HTTP 200，改回真实状态码（超日限额 = httpError(429)）。
+  assert.equal(rejected.status, 429);
   assert.notEqual(rejected.body.code, 0);
 });
 
@@ -2374,7 +2373,7 @@ test("服务重启后清除失败及生成中的信件与临时文件", async ()
   await mkdir(join(root, "信件往来_原始语料"));
   const dataDir = join(root, "data");
   const first = await createOliviaService({ root, dataDir, worker: false, runMemoryRefresh: false });
-  const firstAddress = await first.listen(0);
+  const firstAddress = await listenOnFetchablePort(first);
   const base = `http://127.0.0.1:${firstAddress.port}`;
   await fetch(`${base}/toy/signIn`, {
     method: "POST",
@@ -2403,7 +2402,7 @@ test("服务重启后清除失败及生成中的信件与临时文件", async ()
   await first.close();
 
   const second = await createOliviaService({ root, dataDir, worker: false, runMemoryRefresh: false });
-  const secondAddress = await second.listen(0);
+  const secondAddress = await listenOnFetchablePort(second);
   const detailResponse = await fetch(`http://127.0.0.1:${secondAddress.port}/toy/letter/detail?letterId=${sent.data.letterId}`);
   const detail = await detailResponse.json();
   // 断言具体号而不是 -1：重启后这封信已被清除 ⇒ 必须是「信件不存在」这一种，
@@ -2414,7 +2413,7 @@ test("服务重启后清除失败及生成中的信件与临时文件", async ()
   await assert.rejects(readFile(replyTemp), error => error.code === "ENOENT");
   await assert.rejects(readFile(failedTemp), error => error.code === "ENOENT");
   await second.close();
-  await rm(root, { recursive: true, force: true });
+  await cleanupDir(root);
 });
 
 test("升级启动时会补写上一版已回信但未归档的记忆", async () => {
@@ -2423,7 +2422,7 @@ test("升级启动时会补写上一版已回信但未归档的记忆", async ()
   await mkdir(join(root, "信件往来_原始语料"));
   const dataDir = join(root, "data");
   const first = await createOliviaService({ root, dataDir, worker: false, runMemoryRefresh: false });
-  const firstAddress = await first.listen(0);
+  const firstAddress = await listenOnFetchablePort(first);
   const base = `http://127.0.0.1:${firstAddress.port}`;
   await fetch(`${base}/toy/signIn`, {
     method: "POST",
@@ -2450,7 +2449,7 @@ test("升级启动时会补写上一版已回信但未归档的记忆", async ()
   const person = second.db.prepare("SELECT person FROM users LIMIT 1").get().person;
   assert.match(await readFile(join(root, "信件往来", `${person}.md`), "utf8"), /上一版遗漏的第二封信/u);
   await second.close();
-  await rm(root, { recursive: true, force: true });
+  await cleanupDir(root);
 });
 
 test("服务启动时自动触发未完成的记忆整理", async () => {
@@ -2466,7 +2465,7 @@ test("服务启动时自动触发未完成的记忆整理", async () => {
   const second = await createOliviaService({ root, dataDir, worker: false, runMemoryRefresh: false });
   assert.equal(second.db.prepare("SELECT value FROM settings WHERE key = ?").get("memory_state:启动整理").value, "idle");
   await second.close();
-  await rm(root, { recursive: true, force: true });
+  await cleanupDir(root);
 });
 
 test("提前生成的回信到 available_at 前保持状态 3 且隐藏正文", async t => {
@@ -2575,30 +2574,39 @@ test("导入档案同步写入信箱、不占额度并阻断注入", async t => 
   assert.equal(confirm.status, 409);
 });
 
-test("OPTIONS 反射客户端来源并允许凭据", async t => {
+// ★ 2026-10-19 数据安全审计改契约：这两条以前是「/toy/* 反射**任意** Origin」。
+//   那正是泄露面：任何网页都能跨域读到 /toy/* 的返回（信件、曲库、诊断包）。
+//   现在只反射**可信来源**（服务自身源 / 环回 / 游戏页面的源），其余来源在请求层就 403。
+test("OPTIONS 预检只对可信来源反射（游戏源照旧，任意外站不再放行）", async t => {
   const ctx = await fixture();
   t.after(() => ctx.close());
-  const preflight = await fetch(`http://127.0.0.1:${ctx.service.server.address().port}/toy/letter/list`, {
+  const port = ctx.service.server.address().port;
+  const preflightOf = origin => fetch(`http://127.0.0.1:${port}/toy/letter/list`, {
     method: "OPTIONS",
-    headers: {
-      Origin: "http://game-client.local",
-      "Access-Control-Request-Headers": "x-rpc-device_fp,x-uid,x-token",
-    },
+    headers: { Origin: origin, "Access-Control-Request-Headers": "x-rpc-device_fp,x-uid,x-token" },
   });
-  assert.equal(preflight.status, 204);
-  assert.equal(preflight.headers.get("access-control-allow-origin"), "http://game-client.local");
-  assert.equal(preflight.headers.get("access-control-allow-credentials"), "true");
-  assert.equal(preflight.headers.get("access-control-allow-headers"), "x-rpc-device_fp,x-uid,x-token");
+
+  // 游戏页面自己的源：照旧放行，且要把请求的自定义头原样放回（游戏端要带 x-uid/x-token）
+  const game = await preflightOf("https://olivia.local");
+  assert.equal(game.status, 204);
+  assert.equal(game.headers.get("access-control-allow-origin"), "https://olivia.local");
+  assert.equal(game.headers.get("access-control-allow-credentials"), "true");
+  assert.equal(game.headers.get("access-control-allow-headers"), "x-rpc-device_fp,x-uid,x-token");
+
+  // 任意外站：不发跨域许可 ⇒ 浏览器不会发出真正的 GET
+  const evil = await preflightOf("http://game-client.local");
+  assert.equal(evil.status, 204, "预检本身要能回来（204），但绝不能带跨域许可");
+  assert.equal(evil.headers.get("access-control-allow-origin"), null);
 });
 
-test("管理接口不向第三方来源反射跨域头（否则任意网页都能读到 API Key）", async t => {
+test("读接口不向第三方来源开放（否则任意网页都能读到信件与 API Key）", async t => {
   const ctx = await fixture();
   t.after(() => ctx.close());
   const port = ctx.service.server.address().port;
 
-  // 跨站页面来读模型配置：不得拿到跨域头，浏览器因此读不到响应体（里面含已保存的 API Key）
+  // 跨站页面来读模型配置：管理接口直接 403，且不得带任何跨域头
   const cross = await fetch(`http://127.0.0.1:${port}/admin/api/model`, { headers: { Origin: "https://evil.example" } });
-  assert.equal(cross.status, 200);
+  assert.equal(cross.status, 403, "外部来源读管理接口必须被拒（200 + 无 ACAO 只是「浏览器读不到」，403 是「服务根本不给」）");
   assert.equal(cross.headers.get("access-control-allow-origin"), null);
   assert.equal(cross.headers.get("access-control-allow-credentials"), null);
 
@@ -2609,9 +2617,14 @@ test("管理接口不向第三方来源反射跨域头（否则任意网页都�
   });
   assert.equal(preflight.headers.get("access-control-allow-origin"), null);
 
-  // 游戏端路由照旧反射来源（那条链路必须保留）
-  const game = await fetch(`http://127.0.0.1:${port}/toy/letter/list`, { headers: { Origin: "http://game-client.local" } });
-  assert.equal(game.headers.get("access-control-allow-origin"), "http://game-client.local");
+  // 游戏端路由：可信来源照旧反射（那条链路必须保留）
+  const game = await fetch(`http://127.0.0.1:${port}/toy/letter/list`, { headers: { Origin: "https://olivia.local" } });
+  assert.equal(game.headers.get("access-control-allow-origin"), "https://olivia.local");
+
+  // 而同一台机器上的任意网页读同一条路：403（这是本轮修的主症状）
+  const evilRead = await fetch(`http://127.0.0.1:${port}/toy/letter/list`, { headers: { Origin: "https://evil.example" } });
+  assert.equal(evilRead.status, 403);
+  assert.equal(evilRead.headers.get("access-control-allow-origin"), null);
 });
 
 test("PowerShell 模型切换：本地档案不发送鉴权与 DeepSeek 专用字段", async () => {
@@ -2632,7 +2645,7 @@ test("PowerShell 模型切换：本地档案不发送鉴权与 DeepSeek 专用�
       }));
     });
   });
-  await new Promise(resolve => api.listen(0, "127.0.0.1", resolve));
+  await listenOnFetchablePort(api, "127.0.0.1");
   const root = await mkdtemp(join(tmpdir(), "olivia-model-call-test-"));
   try {
     const secrets = join(root, ".cursor", "secrets");
@@ -2667,7 +2680,7 @@ test("PowerShell 模型切换：本地档案不发送鉴权与 DeepSeek 专用�
     assert.equal(captured.body.reasoning_effort, undefined);
   } finally {
     await new Promise(resolve => api.close(resolve));
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });
 
@@ -2678,7 +2691,7 @@ test("PowerShell 模型切换：本地 503 只重试当前档案", async () => {
     response.writeHead(503, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ error: "local unavailable" }));
   });
-  await new Promise(resolve => api.listen(0, "127.0.0.1", resolve));
+  await listenOnFetchablePort(api, "127.0.0.1");
   const root = await mkdtemp(join(tmpdir(), "olivia-model-no-fallback-test-"));
   try {
     const secrets = join(root, ".cursor", "secrets");
@@ -2711,7 +2724,7 @@ test("PowerShell 模型切换：本地 503 只重试当前档案", async () => {
     assert.equal(attempts, 3);
   } finally {
     await new Promise(resolve => api.close(resolve));
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });
 
@@ -2723,9 +2736,9 @@ test("管理页手动切换模型：分别编辑测试并显式启用档案", as
     fetch(`${base}/admin/`).then(response => response.text()),
     fetch(`${base}/admin/app.js`).then(response => response.text()),
     fetch(`${base}/admin/model-combobox.js`).then(async response => ({ status: response.status, text: await response.text() })),
-    readFile(new URL("../packaging/build-release.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../../.cursor/skills/fit-letters/scripts/ds-call.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../../.cursor/skills/fit-letters/scripts/deepseek-reply.ps1", import.meta.url), "utf8"),
+    readSourceText(new URL("../packaging/build-release.ps1", import.meta.url)),
+    readSourceText(new URL("../../.cursor/skills/fit-letters/scripts/ds-call.ps1", import.meta.url)),
+    readSourceText(new URL("../../.cursor/skills/fit-letters/scripts/deepseek-reply.ps1", import.meta.url)),
   ]);
   assert.match(html, /id="modelProvider"/u);
   assert.match(html, /value="deepseek"/u);
@@ -2986,7 +2999,8 @@ test("admin serves the tab notification module required by the app", async t => 
   const response = await fetch(`http://127.0.0.1:${address.port}/admin/tab-notices.js`);
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-type'), /javascript/u);
-  assert.equal(await response.text(), await readFile(new URL('../public/tab-notices.js', import.meta.url), 'utf8'));
+  // 基线是逐字节相等比较：不能剥注释（等长空白替换会造出假红），同 feapp-revisions 基线。
+  assert.equal(await response.text(), await readFile(new URL('../public/tab-notices.js', import.meta.url), "utf8"));
 });
 
 test("active model test-save updates runtime and status reads never execute probes", async t => {
@@ -3022,8 +3036,8 @@ test("model restart retains historical result while background probe is pending"
   const started = new Promise(resolve => { entered = resolve; });
   const restarted = await createOliviaService({ root: ctx.root, dataDir: join(ctx.root, "data"), worker: false,
     fetch: () => { entered(); return new Promise(resolve => { release = resolve; }); } });
-  t.after(async () => { release?.(Response.json({ choices: [{ message: { content: "OK" } }] })); await restarted.close(); await rm(ctx.root, { recursive: true, force: true }); });
-  const address = await restarted.listen(0);
+  t.after(async () => { release?.(Response.json({ choices: [{ message: { content: "OK" } }] })); await restarted.close(); await cleanupDir(ctx.root); });
+  const address = await listenOnFetchablePort(restarted);
   await started;
   const status = await new Promise((resolve, reject) => {
     const req = httpRequest({ hostname: "127.0.0.1", port: address.port, path: "/admin/api/model/status" }, res => {
@@ -3173,7 +3187,7 @@ test("R10.7 默认更新标识不会把旧公开包误报为待更新", async t 
   assert.equal(checked.status, 200);
   // 当前版本从源头读，别写死上游的 linli.9：本支版本号是 2008.2.7-linli9-gNN
   const appVersion = /APP_VERSION\s*=\s*"([^"]+)"/u
-    .exec(await readFile(new URL("../public/listen-naming-feedback.js", import.meta.url), "utf8"))?.[1];
+    .exec(await readSourceText(new URL("../public/listen-naming-feedback.js", import.meta.url)))?.[1];
   assert.ok(appVersion, "应当能读到 APP_VERSION");
   assert.equal(checked.body.data.currentTag, appVersion);
   assert.equal(checked.body.data.updateAvailable, false);
@@ -3421,7 +3435,10 @@ test("DeepSeek 设置支持默认配置、自定义配置与连通性测试", as
       baseUrl: "https://model.example/v1/",
     }),
   });
-  assert.equal(saved.body.data.apiKey, "test-key");
+  // ★ 2026-10-19 数据安全审计改契约：接口不再回显 API Key（原来这里是 assert.equal(..., "test-key")）。
+  //   Key 出现在响应体里就会进浏览器内存 / 开发者工具 / 用户截图，而那些地方都不该有密钥。
+  assert.equal(saved.body.data.apiKey, "", "接口不得回显已保存的 Key");
+  assert.equal(saved.body.data.keyConfigured, true, "但要告诉前端「已经配过了」，否则输入框没法提示留空=不修改");
   assert.equal(saved.body.data.model, "custom-model");
   assert.equal(saved.body.data.baseUrl, "https://model.example/v1");
   const tested = await ctx.request("/admin/api/deepseek/test", { method: "POST", body: "{}" });
@@ -3957,7 +3974,7 @@ test("Whisper 模型首次下载后按 SHA-256 校验", async () => {
       /模型校验失败/u,
     );
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });
 
@@ -3988,7 +4005,7 @@ test("中文安装目录中的内置 Whisper 模型会桥接到 ASCII 路径", a
     assert.equal(engine.modelPath, join(modelsDir, "whisper", model.name));
     assert.deepEqual(await readFile(engine.modelPath), content);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });
 
@@ -4019,7 +4036,7 @@ test("从官方信箱请求日志读取可直接复用的一次性请求头", as
     assert.equal(context.apiHeaders["x-uid"], "52001");
     assert.equal(context.apiHeaders.authorization, undefined);
   } finally {
-    await rm(logsPath, { recursive: true, force: true });
+    await cleanupDir(logsPath);
   }
 });
 
@@ -4139,7 +4156,7 @@ test("远端视频转写后封装 soul 且凭据不落盘", async () => {
     assert.ok(requests.some(item => item.token === secret));
   } finally {
     await jobs.close();
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });
 
@@ -4235,14 +4252,14 @@ test("无去有回的导入信即使日期在未来也直接显示为已回信",
 
 test("管理前端包含视频维护、上方插入和本地服务状态", async () => {
   const [html, app, styles, patch, patchStatus, preload, bridge, controller] = await Promise.all([
-    readFile(new URL("../public/index.html", import.meta.url), "utf8"),
-    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
-    readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
-    readFile(new URL("../../tools/patch-feapp-local.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../../tools/get-feapp-status.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../desktop/preload.cjs", import.meta.url), "utf8"),
-    readFile(new URL("../native-host/DesktopBridge.cs", import.meta.url), "utf8"),
-    readFile(new URL("../desktop/controller.js", import.meta.url), "utf8"),
+    readSourceText(new URL("../public/index.html", import.meta.url)),
+    readSourceText(new URL("../public/app.js", import.meta.url)),
+    readSourceText(new URL("../public/styles.css", import.meta.url)),
+    readSourceText(new URL("../../tools/patch-feapp-local.ps1", import.meta.url)),
+    readSourceText(new URL("../../tools/get-feapp-status.ps1", import.meta.url)),
+    readSourceText(new URL("../desktop/preload.cjs", import.meta.url)),
+    readSourceText(new URL("../native-host/DesktopBridge.cs", import.meta.url)),
+    readSourceText(new URL("../desktop/controller.js", import.meta.url)),
   ]);
   assert.match(html, />记忆管理</u);
   assert.match(html, />\.soul导入</u);

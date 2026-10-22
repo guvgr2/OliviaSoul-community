@@ -8,6 +8,7 @@ import fsPromises from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 // Literal archive content; ZIP storage records are built independently of the resolver.
 function zip(main = 'original()', asset = 'version-one', entries = [['assets/main-build.js', main], ['assets/style.css', asset]]) {
@@ -53,7 +54,7 @@ async function fixture() {
   after(async () => {
     const target = resolve(root);
     if (dirname(target) !== tempRoot || !/^client-backups-[A-Za-z0-9]+$/u.test(basename(target))) throw new Error('Unsafe fixture cleanup target');
-    await rm(target, { recursive: true, force: true });
+    await cleanupDir(target);
   });
   const dataDir = join(root, 'data'), appData = join(root, 'app'), roamingAppData = join(root, 'roaming');
   const layout = { gameRoot: join(root, 'game'), version: '1.0', feappPath: join(root, 'fe.dat'), webplayerPath: join(root, 'wp.dat') };

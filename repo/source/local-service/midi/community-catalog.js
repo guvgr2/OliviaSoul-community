@@ -1290,6 +1290,10 @@ export async function buildContributionFile(options = {}) {
  * @returns {Promise<(req, url) => Promise<object|null>>}
  */
 export async function createCommunityRoutes(options = {}) {
+  // ★ 2026-10-19 修（复审 E4-4 🟠）：`databasePath` 早就在注入，但 `dataDir` 没有
+  //   ⇒ `community-catalog.json`(:357) / settings(:250) / 上传队列(:889) / outbox(:918)
+  //   在异位 dataDir 下仍然写**安装树**。两样必须一起注入。
+  configure({ dataDir: options.dataDir });
   const databasePath = databasePathOf(options);
   if (!existsSync(databasePath)) throw new Error(`未找到 OliviaSoul 数据库：${databasePath}`);
   let libraryRoot = String(options.libraryRoot ?? LIBRARY_ROOT ?? "").trim();

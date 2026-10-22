@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readSourceText } from "./lib/read-source.mjs";
 
 test("admin UI imports completed performance videos without exposing keyboard-only MIDI generation", async () => {
   const [html, app, styles, bridge, preload, desktopMain, releaseGuide] = await Promise.all([
-    readFile(new URL("../public/index.html", import.meta.url), "utf8"),
-    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
-    readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
-    readFile(new URL("../native-host/DesktopBridge.cs", import.meta.url), "utf8"),
-    readFile(new URL("../desktop/preload.cjs", import.meta.url), "utf8"),
-    readFile(new URL("../desktop/main.js", import.meta.url), "utf8"),
-    readFile(new URL("../packaging/使用说明.txt", import.meta.url), "utf8"),
+    readSourceText(new URL("../public/index.html", import.meta.url)),
+    readSourceText(new URL("../public/app.js", import.meta.url)),
+    readSourceText(new URL("../public/styles.css", import.meta.url)),
+    readSourceText(new URL("../native-host/DesktopBridge.cs", import.meta.url)),
+    readSourceText(new URL("../desktop/preload.cjs", import.meta.url)),
+    readSourceText(new URL("../desktop/main.js", import.meta.url)),
+    readSourceText(new URL("../packaging/使用说明.txt", import.meta.url)),
   ]);
 
   // 本支给页签加了 data-tip 悬停说明，属性与标签文本之间允许存在其它属性
@@ -90,8 +90,8 @@ test("admin UI imports completed performance videos without exposing keyboard-on
 
 test("管理侧栏固定、AI 模块使用横线分隔且只在文本控件保留右键编辑菜单", async () => {
   const [styles, app] = await Promise.all([
-    readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
-    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+    readSourceText(new URL("../public/styles.css", import.meta.url)),
+    readSourceText(new URL("../public/app.js", import.meta.url)),
   ]);
 
   assert.match(styles, /\.sidebar\s*\{[^}]*position:\s*sticky[^}]*height:\s*100%/su);

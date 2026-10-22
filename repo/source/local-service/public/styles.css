@@ -78,6 +78,16 @@ input:focus, select:focus, textarea:focus { border-color: #807362; }
 label { display: block; color: #9d9b98; font-size: 12px; margin-bottom: 6px; }
 small { display: block; color: #77777d; font-size: 11px; margin-top: 2px; }
 
+/* ★ B1（2026-10-19 第三轮独立审查）：收起的 <details> 里内容仍然参与布局。
+   实测：`#storagePathDetails` 收起时 details 高 21px，里面的 ul 却在 y=349 悬着 135px，
+   把下面「已引用目录」那一行压住；`#midiReferencedDetails` 里的 `#midiWatchNotice`
+   同型（`small { display:block }` 让它在收起状态下照样占 49px）。
+   视觉上暂时看不见（下层卡片背景不透明 `rgb(25,26,30)` 盖住了，AX 树里也没有这些文字），
+   但**结构是错的**：一旦背景改半透明 / 加 backdrop-filter / 里层出现可交互元素，
+   立刻变成「看得见、点得到」的问题。这条兜底特异性 (0,1,2)，高于 `.storagePathValues`(0,1,0)
+   与 `small`(0,0,1)，所以能压住它们 —— 与其逐处修，不如一次兜住「以后第三处、第四处再犯」。 */
+details:not([open]) > :not(summary) { display: none; }
+
 .headerActions { display: flex; align-items: center; gap: 11px; }
 .edition {
   border-radius: 6px;
@@ -335,7 +345,9 @@ small { display: block; color: #77777d; font-size: 11px; margin-top: 2px; }
 .storagePathDetails { min-width: 0; }
 .storagePathDetails summary { cursor: pointer; color: #d7d4cf; }
 .storagePathDetails summary::marker { color: #8c8e96; }
-.storagePathValues { display: grid; gap: 9px; margin: 10px 0 0; padding: 0; list-style: none; }
+/* ★ B1：加 [open] 前缀，让「只在展开时才是 grid」这件事写在规则里，
+   不再依赖 `details:not([open])` 那条兜底去压它（两条都留，互为保险）。 */
+.storagePathDetails[open] .storagePathValues { display: grid; gap: 9px; margin: 10px 0 0; padding: 0; list-style: none; }
 .storagePathValues li { display: grid; gap: 3px; min-width: 0; }
 .storagePathValues span { color: #8c8e96; font-size: 11px; }
 .storagePathValues strong { min-width: 0; overflow-wrap: anywhere; color: #d7d4cf; font-weight: 500; }
@@ -350,6 +362,20 @@ small { display: block; color: #77777d; font-size: 11px; margin-top: 2px; }
 .modelSettings > div, .customFields > div { min-width: 0; }
 .customFields > div > input, .customFields > div > select { width: 100%; }
 .modelSettings .fieldHint { margin: 6px 0 0; color: #8b9099; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+/* ★ 2026-10-19 N2：API Key 解不开时的提示。用与「fault」同一套颜色（#e48c87 / #5f4547），
+   别再发明新色；`white-space: pre-line` 是为了让 JS 拼的那句引导语与原因分成两行。 */
+.keyErrorHint {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid #5f4547;
+  border-radius: 8px;
+  background: #1f1a1b;
+  color: #e48c87;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
 .secretInput { position: relative; }
 .secretInput input { padding-right: 44px; }
 .secretInput input::-ms-reveal, .secretInput input::-ms-clear { display: none; }

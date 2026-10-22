@@ -4,8 +4,9 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { cleanupDir } from "./lib/cleanup.mjs";
 import { createOliviaService } from "../server.js";
-import { blockedFetchPorts } from "./fixtures/fetch-ports.js";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 function deferred() {
   let resolve;
@@ -60,11 +61,7 @@ async function fixture() {
     midiDurationProbe: async () => 120_000_000,
     fetch: async () => { throw new Error("External requests are disabled in this test"); },
   });
-  let address = await service.listen(0);
-  while (blockedFetchPorts.has(address.port)) {
-    await new Promise(resolvePromise => service.server.close(resolvePromise));
-    address = await service.listen(0);
-  }
+  let address = await listenOnFetchablePort(service);
   const base = `http://127.0.0.1:${address.port}`;
   const json = async (path, body) => {
     const response = await fetch(base + path, body === undefined ? {} : {
@@ -89,7 +86,7 @@ async function fixture() {
     play: song => json("/toy/player-command", {
       cmd: "play", songId: song.id, url: `${base}/toy/midi/songs/${song.id}/video.mp4`,
     }),
-    close: async () => { await service.close(); await fs.rm(root, { recursive: true, force: true }); },
+    close: async () => { await service.close(); await cleanupDir(root); },
   };
 }
 

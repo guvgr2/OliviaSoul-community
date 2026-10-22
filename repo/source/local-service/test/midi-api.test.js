@@ -6,8 +6,9 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { createOliviaService } from "../server.js";
-import { blockedFetchPorts } from "./fixtures/fetch-ports.js";
-import { endOfTrack, midiFile, noteOff, noteOn, track } from "./fixtures/midi-fixtures.js";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
+import { endOfTrack, midiFile, noteOff, noteOn, track } from "./support/midi-fixtures.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 async function apiFixture(options = {}) {
   const root = await mkdtemp(join(tmpdir(), "olivia-midi-api-"));
@@ -21,11 +22,7 @@ async function apiFixture(options = {}) {
     officialMediaRoot: join(root, "official-media"),
     ...options,
   });
-  let address = await service.listen(0);
-  while (blockedFetchPorts.has(address.port)) {
-    await new Promise(resolve => service.server.close(resolve));
-    address = await service.listen(0);
-  }
+  let address = await listenOnFetchablePort(service);
   const base = `http://127.0.0.1:${address.port}`;
   async function json(path, init = {}) {
     const response = await fetch(`${base}${path}`, {
@@ -42,7 +39,7 @@ async function apiFixture(options = {}) {
     json,
     async close() {
       await service.close();
-      await rm(root, { recursive: true, force: true });
+      await cleanupDir(root);
     },
   };
 }
@@ -54,7 +51,8 @@ test("local MIDI API rejects new keyboard-only generation without creating recor
       method: "POST",
       body: JSON.stringify({ type: "midi", filename: "水边的阿狄丽娜.midi" }),
     });
-    assert.equal(signed.status, 200, "game-compatible /toy endpoints keep HTTP 200");
+    // ★ E5（2026-10-18）：/toy/* 的错误回真实状态码（不再强制 200）；envelope 结构不变。
+    assert.equal(signed.status, 410, "game-compatible /toy endpoints keep their error envelope");
     assert.equal(signed.body.code, "MIDI_RENDERING_DISABLED");
     assert.match(signed.body.message, /人物演奏/u);
     assert.equal(ctx.service.midiStore.listJobs().length, 0);
@@ -344,7 +342,7 @@ test("My Upload direct HTTP listing does not materialize or copy native playback
     assert.ok(item.videoByTodView.every(variant => variant.url === item.videoUrl));
   } finally {
     await ctx.close();
-    await rm(nativePlaybackRoot, { recursive: true, force: true });
+    await cleanupDir(nativePlaybackRoot);
   }
 });
 
@@ -575,7 +573,8 @@ test("local webplayer binds progress and controls to one playback session", asyn
       method: "POST",
       body: JSON.stringify({ cmd: "resume", songId: second.id, sessionId: secondPlay.command.sessionId }),
     });
-    assert.equal(resume.status, 200, "toy compatibility routes keep their HTTP envelope");
+    // ★ E5（2026-10-18）：错误回真实状态码（PLAYER_SESSION_ENDED = httpError(409)）。
+    assert.equal(resume.status, 409, "toy compatibility routes keep their HTTP envelope");
     assert.equal(resume.body.code, "PLAYER_SESSION_ENDED", "a terminal pause cannot be resumed");
     assert.match(resume.body.message, /已经结束/u);
 

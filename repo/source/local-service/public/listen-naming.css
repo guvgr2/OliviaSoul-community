@@ -234,7 +234,13 @@
 /* 「诊断」面板（g12）：启动耗时列表 + 曲库健康检查 */
 .ln-diagnostics { display: grid; gap: 10px; }
 .ln-diagSpacer { margin-top: 6px; }
-.ln-diagOut { display: grid; gap: 8px; }
+/* ★ B2（2026-10-19 第三轮独立审查）：1024 宽下 debug 页「数据备份与恢复」的
+   `table.ln-diagTable` 内容宽 627 > 容器 612（溢出 15px），而 overflow-x 是 visible。
+   当时只是被卡片 16px padding 吸住才没露出来 —— 余量只剩 1px，padding 一改就真的越界。
+   这里给外框一个横向滚动兜底：宽屏下完全无感（没有溢出就没有滚动条），
+   窄屏下宁可让用户横向滑，也不让内容压到卡片外面。
+   `min-width: 0` 是给 grid 子项用的：默认 min-width:auto 会让它撑到 min-content 而不滚动。 */
+.ln-diagOut { display: grid; gap: 8px; overflow-x: auto; min-width: 0; }
 .ln-diagCard { margin: 0; padding: 10px 12px; }
 .ln-diagCard > strong { display: block; margin-bottom: 6px; font-size: 13px; }
 .ln-diagList { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
@@ -319,3 +325,48 @@
 .ln-twins .ln-twinStatus[data-kind="done"] { color: #8da094; }
 .ln-twins .ln-twinStatus[data-kind="warn"] { color: #e0b978; }
 .ln-twins .ln-twinTop button[data-state="on"] { border-color: #e7e2da; color: #f2f0ed; }
+
+/* ==========================================================================
+   2026-10-20「命名纠错」：已命名的歌随时改名
+   折叠区（<details>）默认收起，只占一行；展开后是可滚动的清单。
+   排布照抄 .guideMap 的做法（summary 用 settingsBlockHead，收起时不占额外高度）。
+   ========================================================================== */
+[data-page="listen-naming"] .ln-fix { border-color: #2c3138; background: #1b1e23; }
+[data-page="listen-naming"] .ln-fixHead { cursor: pointer; margin-bottom: 0; }
+[data-page="listen-naming"] .ln-fixHead strong { display: block; }
+[data-page="listen-naming"] .ln-fixHead small { display: block; margin-top: 4px; color: #8b9198; font-size: 12px; }
+[data-page="listen-naming"] .ln-fix[open] .ln-fixHead { margin-bottom: 10px; }
+[data-page="listen-naming"] .ln-fixBody { display: grid; gap: 8px; }
+[data-page="listen-naming"] .ln-fixSearch { flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 0; }
+[data-page="listen-naming"] .ln-fixQuery { flex: 1 1 260px; min-width: 180px; height: 34px; padding: 0 12px; font-size: 13px; }
+[data-page="listen-naming"] .ln-fixSort { flex: 0 0 auto; min-width: 150px; margin-bottom: 0; height: 34px; }
+[data-page="listen-naming"] .ln-fixSearch button { height: 34px; }
+[data-page="listen-naming"] .ln-fixCount { margin: 0; }
+[data-page="listen-naming"] .ln-fixList {
+  margin: 0; padding: 0; list-style: none; display: grid; gap: 6px;
+  max-height: 46vh; overflow-y: auto; overflow-x: hidden;
+}
+[data-page="listen-naming"] .ln-fixRow {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 7px 9px; border: 1px solid #2c3138; border-radius: 8px; background: #15181c;
+}
+[data-page="listen-naming"] .ln-fixMain { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; }
+[data-page="listen-naming"] .ln-fixNameLine { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+[data-page="listen-naming"] .ln-fixName { font-size: 13.5px; color: #e8eaed; overflow-wrap: anywhere; }
+[data-page="listen-naming"] .ln-fixTod { font-size: 11.5px; padding: 0 8px; }
+[data-page="listen-naming"] .ln-fixMeta {
+  color: #8b9198; font-size: 11.5px; line-height: 1.5;
+  font-family: Consolas, "Courier New", monospace; overflow-wrap: anywhere;
+}
+[data-page="listen-naming"] .ln-fixBtn { flex: 0 0 auto; height: 30px; padding: 0 12px; font-size: 12.5px; }
+[data-page="listen-naming"] .ln-fixEdit { flex: 1 1 100%; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+[data-page="listen-naming"] .ln-fixInput { flex: 1 1 240px; min-width: 160px; height: 34px; padding: 0 10px; font-size: 13.5px; }
+[data-page="listen-naming"] .ln-fixEdit button { height: 34px; padding: 0 14px; }
+[data-page="listen-naming"] .ln-fixMore { margin-top: 2px; }
+[data-page="listen-naming"] .ln-fixMore[hidden] { display: none; }
+[data-page="listen-naming"] .ln-fixStatus { margin: 0; }
+[data-page="listen-naming"] .ln-fixStatus:empty { display: none; }
+[data-page="listen-naming"] .ln-fixStatus[data-kind="fault"] { color: #e48c87; }
+[data-page="listen-naming"] .ln-fixStatus[data-kind="done"] { color: #8da094; }
+[data-page="listen-naming"] .ln-fixStatus[data-kind="warn"] { color: #e0b978; }
+[data-page="listen-naming"] .ln-fixList .empty { color: #7f7f87; font-size: 12.5px; padding: 6px 2px; }

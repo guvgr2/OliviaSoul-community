@@ -4,6 +4,8 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createOliviaService } from '../server.js';
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 // 这组测试守四件事：
 // ① 时间线是**只读**接口，筛选与统计全部服务端做（游标分页，不许用 OFFSET 的 page=N）。
@@ -25,9 +27,9 @@ async function fixture(t) {
     runMemoryRefresh: false,
     fetch: async () => { throw new Error('No external requests allowed'); },
   });
-  const { port } = await service.listen(0, '127.0.0.1');
+  const { port } = await listenOnFetchablePort(service, "127.0.0.1");
   const base = `http://127.0.0.1:${port}`;
-  t.after(async () => { await service.close(); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await service.close(); await cleanupDir(root); });
 
   async function request(path, init = {}) {
     const response = await fetch(base + path, {

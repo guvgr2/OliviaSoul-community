@@ -1,14 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { readSourceText } from "./lib/read-source.mjs";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 const browserTest = process.env.OLIVIA_BROWSER_UI === "1" ? test : test.skip;
 const chromium = process.env.OLIVIA_BROWSER_UI === "1" ? createRequire(import.meta.url)("playwright").chromium : null;
-const script = await readFile(process.env.OLIVIA_EDITOR_SOURCE || new URL("../public/song-editor.js", import.meta.url), "utf8").catch(() => "");
-const adminCss = await readFile(new URL("../public/styles.css", import.meta.url), "utf8").catch(() => "");
+const script = await readSourceText(process.env.OLIVIA_EDITOR_SOURCE || new URL("../public/song-editor.js", import.meta.url)).catch(() => "");
+const adminCss = await readSourceText(new URL("../public/styles.css", import.meta.url)).catch(() => "");
 const metadata = {
   id: "work/42", name: "<img src=x onerror=alert(1)>", originalName: "Original", customName: "<img src=x onerror=alert(1)>",
   variants: [{ key: "DEFAULT0", filename: "<b>video.mp4</b>", url: "http://fixture.test/video.mp4", tod: null, view: null }],
@@ -30,7 +32,7 @@ async function fixture(t, { rejectSave = false, record = metadata, viewport = { 
     browser = await chromium.launch(launchOptions);
     context = await browser.newContext();
   }
-  t.after(async () => { await (browser ? browser.close() : context.close()); if (profile) await rm(profile, { recursive: true, force: true }); });
+  t.after(async () => { await (browser ? browser.close() : context.close()); if (profile) await cleanupDir(profile); });
   const page = await context.newPage();
   await page.setViewportSize(viewport);
   const posts = [];

@@ -12,6 +12,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { readSourceTextSync } from "./lib/read-source.mjs";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -21,10 +22,11 @@ import vm from "node:vm";
 import { createOliviaService } from "../server.js";
 import { createTabNotices } from "../public/tab-notices.js";
 import { createPatchLossNotice } from "../public/patch-loss-notice.js";
-import { blockedFetchPorts } from "./fixtures/fetch-ports.js";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const read = relative => readFileSync(join(here, "..", relative), "utf8");
+const read = relative => readSourceTextSync(join(here, "..", relative));
 const serverSource = read("server.js");
 const appSource = read("public/app.js");
 const notesSource = read("public/update-notes.js");
@@ -62,11 +64,7 @@ async function boot(root, open, { updateFetch, updateCurrentTag = CURRENT_TAG, u
     updateFetch,
     updateReleaseReuseMs,
   });
-  let address = await service.listen(0);
-  while (blockedFetchPorts.has(address.port)) {
-    await new Promise(resolve => service.server.close(resolve));
-    address = await service.listen(0);
-  }
+  let address = await listenOnFetchablePort(service);
   const base = `http://127.0.0.1:${address.port}`;
   let cookie = "";
   async function request(path, init = {}) {
@@ -96,7 +94,7 @@ async function makeRoot(t, label) {
     for (const instance of [...open].reverse()) {
       try { await instance.close(); } catch { /* 测试里可能已经手动关过 */ }
     }
-    await rm(root, { recursive: true, force: true }).catch(() => {});
+    await cleanupDir(root).catch(() => {});
   });
   return { root, open };
 }

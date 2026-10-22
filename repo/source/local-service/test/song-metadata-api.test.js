@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createOliviaService } from "../server.js";
+import { cleanupDir, cleanupDirStrict } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 async function fixture(options = {}) {
   const root = await mkdtemp(join(tmpdir(), "olivia-metadata-api-"));
@@ -14,7 +16,7 @@ async function fixture(options = {}) {
     worker: false, runMemoryRefresh: false,
     playbackNow: () => clock, midiDurationProbe: async () => 120_000_000, ...options,
   });
-  const address = await service.listen(0);
+  const address = await listenOnFetchablePort(service);
   const base = `http://127.0.0.1:${address.port}`;
   const json = async (path, body) => {
     const response = await fetch(base + path, body === undefined ? {} : {
@@ -39,7 +41,7 @@ async function fixture(options = {}) {
       cmd: "play", songId: song.id, name: "STALE CLIENT TITLE",
       url: `${base}/toy/midi/songs/${song.id}/video.mp4`,
     }),
-    close: async () => { await service.close(); await rm(root, { recursive: true, force: true }); },
+    close: async () => { await service.close(); await cleanupDir(root); },
   };
 }
 
@@ -83,7 +85,7 @@ test("permanent API exposes projection failure with durable DB title and allows 
     assert.equal(saved.data.nameSync.state, "failed");
     assert.ok(saved.data.nameSync.error);
     assert.equal((await ctx.json(endpoint)).data.nameSync.state, "failed");
-    await rm(target, { recursive: true });
+    await cleanupDirStrict(target);
     const retried = await ctx.json(endpoint, { permanentName: "Saved in database" });
     assert.equal(retried.data.nameSync.state, "synced");
   } finally { await ctx.close(); }

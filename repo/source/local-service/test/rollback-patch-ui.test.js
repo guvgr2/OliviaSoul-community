@@ -8,6 +8,7 @@
 //      → tools/restore-*-original.ps1），不新写还原逻辑，也不改走「重打补丁」那条路。
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { readSourceTextSync } from "./lib/read-source.mjs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -17,7 +18,7 @@ import { createTabNotices } from "../public/tab-notices.js";
 import { createPatchLossNotice } from "../public/patch-loss-notice.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const read = relative => readFileSync(join(here, "..", relative), "utf8");
+const read = relative => readSourceTextSync(join(here, "..", relative));
 const appSource = read("public/app.js");
 const indexHtml = read("public/index.html");
 

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,12 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createOliviaService } from '../server.js';
 import { buildChatRequest, buildModelListRequest, writeModelProfile, setActiveProvider } from '../model-config.js';
-import { blockedFetchPorts } from './fixtures/fetch-ports.js';
+// ★ 2026-10-19：teardown 原来是裸 `rm(root,{recursive:true,force:true})`，属于 P1 那批清理漏网
+//   （当时只扫了 `recursive: true` 的 4 个"假阳性"文件，把这条当成"单独跑通过"放过了）。
+//   实测代价：门禁阶段 1（默认并发）下它在 teardown 撞 ENOTEMPTY ⇒ 整个文件判 'test failed'；
+//   而本轮把它的豁免从 Variadic 收紧成 Count=0 之后，这一下就从"被吞掉"变成了真红。
+import { cleanupDir } from './lib/cleanup.mjs';
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 const exec = promisify(execFile);
 const quote = v => v.replaceAll("'", "''");
@@ -24,11 +29,8 @@ test('ambiguous or credential-bearing URLs are rejected before sending a key', (
   }
 });
 async function listen(server) {
-  for(;;) {
-    await new Promise(r=>server.listen(0,'127.0.0.1',r));
-    if(!blockedFetchPorts.has(server.address().port)) return `http://127.0.0.1:${server.address().port}`;
-    await new Promise(r=>server.close(r));
-  }
+  const address = await listenOnFetchablePort(server, "127.0.0.1");
+  return `http://127.0.0.1:${address.port}`;
 }
 async function fixture(t, handler, modelsHandler) {
   const root=await mkdtemp(join(tmpdir(),'olivia-relay-contract-'));
@@ -45,7 +47,7 @@ async function fixture(t, handler, modelsHandler) {
   const service=await createOliviaService({root,dataDir:join(root,'data'),appData:join(root,'appdata'),worker:false,runMemoryRefresh:false,fetch:(url,init)=>{
     assert.equal(new URL(url).origin,relayBase);return fetch(url,init);
   }});
-  t.after(async()=>{await service.close();await new Promise(r=>relay.close(r));await rm(root,{recursive:true,force:true});});
+  t.after(async()=>{await service.close();await new Promise(r=>relay.close(r));await cleanupDir(root);});
   const serviceBase=await listen(service.server);
   return {root,calls,relayBase,async post(path,body){const r=await fetch(serviceBase+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return {status:r.status,body:await r.json()};}};
 }
@@ -54,7 +56,14 @@ async function runtime(root) {
   const script=`$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; . '${quote(helper)}'; Import-ModelConfig -Root '${quote(root)}'; try {$value=Invoke-ModelChatOnce -System 'system' -User 'user'; @{ok=$true;value=$value}|ConvertTo-Json -Compress -Depth 8} catch {@{ok=$false;error=$_.Exception.Message}|ConvertTo-Json -Compress}`;
   // 与产品本体一致地带上 -ExecutionPolicy Bypass：点源 .ps1 在 Restricted 策略的机器上会被拒绝加载，
   // 而 server.js / desktop 控制器调用脚本时都显式带了 Bypass。
-  const result=await exec('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{timeout:15000,windowsHide:true});
+  //
+  // ★ 2026-10-19 去掉 -EncodedCommand 与 windowsHide（姊妹项目 agent 给的处置建议 §3.B）：
+  //   原来这三件事同时出现 —— `-ExecutionPolicy Bypass` + `-EncodedCommand`（base64 编码命令）+
+  //   隐藏窗口 —— 恰好是行为启发式的教科书特征，卡巴斯基报 `PDM:Trojan.Win32.Generic` 并**把文件删掉**过。
+  //   这个脚本本来就是明文、只点源本仓库的 ps1，没有编码和隐藏窗口的必要。
+  //   `Bypass` 必须保留：产品在 Restricted 策略的机器上点源 .ps1 会失败，测试要与产品一致。
+  //   ⚠️ 副作用提醒：「文件被删」在测试里只表现为**测试数量变少**，永远不会报错 —— 见 .workbuddy/memory 的 S17。
+  const result=await exec('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-Command',script],{timeout:15000});
   return JSON.parse(result.stdout.replace(/^\uFEFF/,''));
 }
 const json=(res,payload)=>res.end(JSON.stringify(payload));

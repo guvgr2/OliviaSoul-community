@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { pickFile, lightForFilePicker } from "../public/file-picker-guard.js";
-import { readFile } from "node:fs/promises";
+import { readSourceText } from "./lib/read-source.mjs";
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
@@ -118,7 +118,7 @@ test("pickFile / lightForFilePicker：没有 input 时安静返回（不抛错�
 // 那种环境下 `window.pickFile = pickFile;` 会抛 ReferenceError，表现为
 // 「update-channel 5 项 + rollback-patch-ui 11 项 + patch-loss-notice 5 项」一起红 —— 2026-10-12 真实踩过。
 test("app.js 的全局挂载带 typeof 守卫（假 DOM 夹具会剥掉 import 行）", async () => {
-  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const source = await readSourceText(new URL("../public/app.js", import.meta.url));
   assert.match(source, /if \(typeof pickFile === "function"\) window\.pickFile = pickFile;/u);
   assert.match(
     source,

@@ -17,13 +17,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
 import { readFileSync } from "node:fs";
+import { readSourceTextSync } from "./lib/read-source.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const controllerSource = readFileSync(join(here, "..", "desktop", "controller.js"), "utf8");
-const nodeHostSource = readFileSync(join(here, "..", "desktop", "node-host.js"), "utf8");
-const mainSource = readFileSync(join(here, "..", "desktop", "main.js"), "utf8");
+const controllerSource = readSourceTextSync(join(here, "..", "desktop", "controller.js"));
+const nodeHostSource = readSourceTextSync(join(here, "..", "desktop", "node-host.js"));
+const mainSource = readSourceTextSync(join(here, "..", "desktop", "main.js"));
 
 function probeAvailable(port) {
   return new Promise(resolvePromise => {
@@ -85,7 +87,7 @@ test("Electron 遗留的 main.js 不应被塞入端口逻辑（曾因此做错�
 
 test("实测：端口被占用时探测为不可用，释放后可用", async () => {
   const holder = createServer();
-  await new Promise(resolvePromise => holder.listen(0, "127.0.0.1", resolvePromise));
+  await listenOnFetchablePort(holder, "127.0.0.1");
   const taken = holder.address().port;
   try {
     assert.equal(await probeAvailable(taken), false, "已占用端口不应探测为可用");
@@ -124,7 +126,7 @@ test("实测：退让算法能跳过被占端口且不超上限", async () => {
 });
 
 test("faststart 的 ffmpeg 调用显式指定 -f mp4（临时名 .part 无法推断格式）", () => {
-  const faststart = readFileSync(join(here, "..", "midi", "faststart-cache.js"), "utf8");
+  const faststart = readSourceTextSync(join(here, "..", "midi", "faststart-cache.js"));
   const block = /await runProcess\(ffmpegPath, \[[\s\S]*?\]/u.exec(faststart);
   assert.ok(block, "未找到 ffmpeg 调用");
   assert.ok(block[0].includes('"-f", "mp4"'), "缺少 -f mp4：临时文件名为 .part，ffmpeg 会报 Unable to choose an output format");

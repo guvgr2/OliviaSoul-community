@@ -42,7 +42,13 @@ repo/build*/
 package-work/
 
 # 本地验证用的沙箱与临时目录（不进包、不入库；里面会写本机路径）
-.test-twins/
+# ★ 例外（2026-10-19 第四轮审查 N7）：`.test-twins\全面检查.ps1` 是**发版门禁本体**，
+#   整目录被忽略 ⇒ 别人 review 时看不到「改了什么、改对没有」（A1/A2/C1/C2 四处修复全无 diff）。
+#   只把门禁脚本与它的说明纳入版本管理，日志 / 发布步骤 / 临时目录继续忽略。
+#   写法必须是 `.test-twins/*` + 逐条 `!`：先忽略目录本身的话，git 不会再往下走，`!` 规则不生效。
+.test-twins/*
+!.test-twins/全面检查.ps1
+!.test-twins/全面检查说明.md
 .uipick/
 .edge-profile*/
 
@@ -90,3 +96,17 @@ _innounp/
 _mut_backup/
 _t17_setup_probe/
 
+
+# 运行时产物：记录「上次运行的版本」，每次启动都会重写，不入库（2026-10-19 第三轮审查 A3）
+repo/source/local-service/last-run-version.txt
+
+# 本地设计素材 / 生成图 / 临时增强目录：本机工作资产，不进公开仓库（与 browser-screenshots/ 同族）
+design/
+generated-images/
+.dsh-enhance/
+
+# 本机取证/探针用的临时目录（_ 前缀与 _innounp/ 同族，绝不入库）
+/_t_*/
+
+# 收工归档用的可逆回收站（原样搬进来的构建产物 / 脏数据，绝不入库）
+/.build-trash/

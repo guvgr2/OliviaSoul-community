@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { createOliviaService } from '../server.js';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 // ── 结构容忍的补丁脚本定位 ──────────────────────────────────────────────────
 // 历史教训（真实踩过）：原实现按「脚本里第一行以 $playerStateStoreTo = 开头的行」取行，再按列切片。
@@ -36,8 +38,8 @@ test('lyrics HTTP routes consume only accepted actual playback and never control
     runtimeDir: join(root, 'runtime'), worker: false, runMemoryRefresh: false,
     onLyricsFrame: frame => frames.push(frame), midiDurationProbe: async () => 120_000_000,
     fetch: async () => { throw new Error('No external requests allowed'); } });
-  t.after(async () => { await service.close(); await rm(root, { recursive: true, force: true }); });
-  const { port } = await service.listen(0, '127.0.0.1');
+  t.after(async () => { await service.close(); await cleanupDir(root); });
+  const { port } = await listenOnFetchablePort(service, "127.0.0.1");
   const base = `http://127.0.0.1:${port}`;
   const json = async (url, body, method = 'POST') => {
     const response = await fetch(base + url, body === undefined ? {} : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

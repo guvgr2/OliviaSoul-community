@@ -40,6 +40,11 @@ class BackendLifecycle {
     OwnedProcess _process = new OwnedProcess();
     IntPtr _job;
     int _disposed;
+    // ★ 独立审查报告-1 §4.2(a)：`_stopping` 是 NodeBackend 的**类字段**（native-host/NodeBackend.cs:31
+    //   `private volatile bool _stopping;`），而 runner 的 method() 只抽 8 空格缩进的**方法体**
+    //   ⇒ 字段永远抽不进来，编译必然报 Harness.cs(58,13) CS0103。g12（ddba2d5, 2026-09-26）加了
+    //   这个字段之后本套件就与源码脱钩了，一直红着没人发现。字段只能在这里补声明。
+    private volatile bool _stopping;
     public int Sends;
     public TaskCompletionSource<object> Shutdown = new TaskCompletionSource<object>();
     Task SendAsync(string command) { if(command != "shutdown") throw new Exception("wrong shutdown command"); Sends++; return Shutdown.Task; }
@@ -80,6 +85,7 @@ class MainForm {
     Task EnsureUiAsync() { UiCalls++; return Task.FromResult<object>(null); }
     void RenderStartupError(Exception error) { ErrorPages++; }
     public Task StartInitialization() { return InitializeAsync(); }
+    /* PRELOAD_UI */
     /* MAIN_HANDLERS */
 }
 class SplashForm {

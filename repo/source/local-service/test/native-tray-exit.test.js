@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { cleanupDirSync } from "./lib/cleanup.mjs";
 
 // Execute verbatim production handlers. Only external UI/backend boundaries are
 // replaced: constructing MainForm itself would create WebView2 and a real tray icon.
@@ -20,8 +21,12 @@ test('native tray Exit lifecycle uses production handlers without launching app 
   const main = readFileSync(new URL('../native-host/MainForm.cs', import.meta.url), 'utf8');
   const startup = readFileSync(new URL('../native-host/StartupContext.cs', import.meta.url), 'utf8');
   const backend = readFileSync(new URL('../native-host/NodeBackend.cs', import.meta.url), 'utf8');
-  const fixture = readFileSync(new URL('./fixtures/native-tray-exit/Harness.cs', import.meta.url), 'utf8');
-  const code = fixture.replace('/* MAIN_HANDLERS */', ['RequestQuit', 'OnFormClosing', 'HideToTray', 'ShowFromTray', 'FinishShowFromTrayAsync', 'InitializeAsync'].map(name => method(main, name)).join('\n'))
+  const fixture = readFileSync(new URL('./support/native-tray-exit/Harness.cs', import.meta.url), 'utf8');
+  // ★ 独立审查报告-1 §4.2(a)：InitializeAsync 在隐藏启动分支里调 PreloadUiAsync
+  //   （native-host/MainForm.cs:379，方法体在 :410），漏抽它就会报 CS0103。
+  //   它是方法、能被 method() 抽到；`_stopping` 是类字段，抽不到，所以在 fixture 里声明。
+  const code = fixture.replace('/* PRELOAD_UI */', method(main, 'PreloadUiAsync'))
+    .replace('/* MAIN_HANDLERS */', ['RequestQuit', 'OnFormClosing', 'HideToTray', 'ShowFromTray', 'FinishShowFromTrayAsync', 'InitializeAsync'].map(name => method(main, name)).join('\n'))
     .replace('/* IS_QUITTING */', main.split(/\r?\n/).find(line => line.includes('public bool IsQuitting ')) || 'public bool IsQuitting { get { return false; } }')
     .replace('/* STARTUP_HANDLER */', method(startup, 'Start'))
     .replace('/* BACKEND_HANDLERS */', ['StopAsync', ...(backend.includes('Task StopCoreAsync(') ? ['StopCoreAsync'] : []), 'Dispose'].map(name => method(backend, name)).join('\n'));
@@ -41,6 +46,6 @@ test('native tray Exit lifecycle uses production handlers without launching app 
     assert.equal(run.status, 0, `production lifecycle regression:\n${run.stdout}\n${run.stderr}`);
     console.log(run.stdout.trim());
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    cleanupDirSync(dir);
   }
 });

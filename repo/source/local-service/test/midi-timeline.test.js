@@ -10,7 +10,7 @@ import {
   noteOn,
   tempo,
   track,
-} from "./fixtures/midi-fixtures.js";
+} from "./support/midi-fixtures.js";
 
 test("MIDI timeline parses format 0 into exact integer microseconds", () => {
   const input = midiFile({

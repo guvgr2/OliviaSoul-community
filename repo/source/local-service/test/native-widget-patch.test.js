@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { isVerifiedOptionalClientPatch } from "../desktop/client-patch-registry.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 const execute = promisify(execFile);
 const script = await readFile(new URL("../../tools/patch-feapp-local.ps1", import.meta.url), "utf8");
@@ -14,7 +15,7 @@ const quote = value => `'${value.replaceAll("'", "''")}'`;
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "olivia-native-widgets-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const backup = join(root, "backups");
   const studio = join(root, "0.0.9.627", "plugins", "Studio", "NutStudioUI.dll");
   const container = join(root, "0.0.9.627", "plugins", "Container", "NutContainerPlugin.dll");

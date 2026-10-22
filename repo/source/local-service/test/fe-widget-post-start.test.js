@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
+import { readSourceText } from "./lib/read-source.mjs";
 
-const patch = await readFile(new URL("../../tools/patch-feapp-local.ps1", import.meta.url), "utf8");
+const patch = await readSourceText(new URL("../../tools/patch-feapp-local.ps1", import.meta.url));
 
 function singleQuotedPatchValue(name) {
   const value = patch.match(new RegExp(`^\\$${name} = '([^\\r\\n]*)'\\r?$`, "mu"))?.[1];

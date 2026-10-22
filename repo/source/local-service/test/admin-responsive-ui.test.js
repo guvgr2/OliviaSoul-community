@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import test from "node:test";
+import { readSourceText } from "./lib/read-source.mjs";
 
 // These real-browser checks are opt-in: set OLIVIA_BROWSER_UI=1 and expose Playwright through NODE_PATH.
 // ⚠️ playwright 必须在**回调内**惰性加载，不能放顶层 —— 顶层无条件加载会让没装 playwright 的
@@ -10,12 +11,24 @@ import test from "node:test";
 //    `("playwright").chromium` 的写法本身就是惰性的：三元条件为假时那一侧不求值。
 const browserTest = process.env.OLIVIA_BROWSER_UI === "1" ? test : test.skip;
 const chromium = process.env.OLIVIA_BROWSER_UI === "1" ? createRequire(import.meta.url)("playwright").chromium : null;
-const [html, css, app, updateUI] = await Promise.all([
-  readFile(new URL("../public/index.html", import.meta.url), "utf8"),
-  readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
-  readFile(new URL("../public/app.js", import.meta.url), "utf8"),
-  readFile(new URL("../public/update-download-ui.js", import.meta.url), "utf8"),
+const [html, css, app, updateUI, tabNoticesJs, patchLossJs, filePickerJs] = await Promise.all([
+  readSourceText(new URL("../public/index.html", import.meta.url)),
+  readSourceText(new URL("../public/styles.css", import.meta.url)),
+  readSourceText(new URL("../public/app.js", import.meta.url)),
+  readSourceText(new URL("../public/update-download-ui.js", import.meta.url)),
+  readSourceText(new URL("../public/tab-notices.js", import.meta.url)),
+  readSourceText(new URL("../public/patch-loss-notice.js", import.meta.url)),
+  readSourceText(new URL("../public/file-picker-guard.js", import.meta.url)),
 ]);
+// app.js 顶部静态 import 的四个本地模块（:1-4）。app-fixture.js 是 module，MIME 校验严格，
+// 缺一个就会以 text/html 兜底响应被浏览器拒绝（此前只登记了 update-download-ui 一个，另外三个
+// 是后来加的 —— 「admin-responsive-ui 3 条从未真跑过」掩盖了这个缺口）。
+const FIXTURE_MODULES = {
+  "/admin/update-download-ui.js": updateUI,
+  "/admin/tab-notices.js": tabNoticesJs,
+  "/admin/patch-loss-notice.js": patchLossJs,
+  "/admin/file-picker-guard.js": filePickerJs,
+};
 
 const longPath = "X:\\OliviaSoulData\\我的上传\\" + "非常非常长的曲目分类目录\\".repeat(18) + "最终上传曲目.mp4";
 const longLetter = "这是用于压力测试的来信内容，没有任何空格，确保记忆卡会测量真实的长正文。".repeat(38);
@@ -32,8 +45,9 @@ const fixtureMemory = [{
   contentMd5: "fixture-memory-md5",
 }];
 const fixtureMidi = {
-  dataRoot: longPath,
-  library: { mode: "copy" },
+  // renderMidiStatus（app.js:1010）现在消费 data.library.root（不再读顶层 dataRoot）；
+  // 本套件从未真跑过（缺 Edge/playwright），app.js 改字段时这里没人同步 —— 一直红着没人发现。
+  library: { mode: "copy", root: longPath },
   songs: [{ id: "fixture-song", name: "我的上传曲目：" + "月光".repeat(45), durationUs: 238_000_000 }],
 };
 const longModelName = `example-local-model-${"very-long-model-segment-".repeat(80)}`;
@@ -65,12 +79,14 @@ const viewports = [1366, 1024, 820, 683, 410].map(width => ({ width, height: 760
 
 function appWithFixtureHook() {
   const normalizedApp = app.replace(/\r\n/g, "\n");
+  // bootstrap 段现在到文件尾还有 EventSource 订阅块（曲库实时刷新，也连真服务），一并剥掉；
+  // `\s*$` 吃不到「注释行 + EventSource 块」，所以正则放宽为匹配到 setInterval 行为止（不再锚定文件尾）。
   const withoutBootstrap = normalizedApp.replace(
-    /\nPromise\.all\(\[refresh\(\), loadDesktopSettings\(\)\]\)\.catch\(showError\);\nsetInterval\(\(\) => refreshStatus\(\)\.catch\(console\.error\), 5000\);\s*$/u,
+    /\nPromise\.all\(\[refresh\(\), loadDesktopSettings\(\)\]\)\.catch\(showError\);\n[\s\S]*?setInterval\(\(\) => refreshStatus\(\)\.catch\(console\.error\), 5000\);\n[\s\S]*$/u,
     "\n",
   );
   assert.notEqual(withoutBootstrap, normalizedApp, "fixture must prevent the real admin bootstrap from calling live services");
-  return `${withoutBootstrap}\nwindow.__renderAdminResponsiveFixture = ({ memory, midi, model }) => { memoryExchanges = memory; renderMemoryList(); renderMidiStatus(midi); renderModelConfig(model.config); renderModelRuntime(model.runtime); }; window.__renderAdminModelRuntimeFixture = status => renderModelRuntime(status);`;
+  return `${withoutBootstrap}\nwindow.__renderAdminResponsiveFixture = ({ memory, midi, model }) => { memoryExchanges = memory; renderMemoryList(); renderMidiStatus(midi); renderModelConfig(model.config); renderModelRuntime(model.runtime); }; window.__renderAdminModelRuntimeFixture = status => renderModelRuntime(status); window.__renderClientMountFixture = () => refreshClientMountStatus();`;
 }
 
 async function openFixture(t) {
@@ -89,7 +105,7 @@ async function openFixture(t) {
     const path = new URL(route.request().url()).pathname;
     if (path === "/admin/styles.css") return route.fulfill({ contentType: "text/css", body: css });
     if (path === "/admin/app-fixture.js") return route.fulfill({ contentType: "text/javascript", body: appWithFixtureHook() });
-    if (path === "/admin/update-download-ui.js") return route.fulfill({ contentType: "text/javascript", body: updateUI });
+    if (FIXTURE_MODULES[path]) return route.fulfill({ contentType: "text/javascript", body: FIXTURE_MODULES[path] });
     return route.fulfill({ contentType: "text/html", body: markup });
   });
   await page.goto("http://admin.fixture/admin/", { waitUntil: "domcontentloaded" });
@@ -142,7 +158,8 @@ browserTest("responsive uploads and rendered memory cards keep long fixtures ins
     });
     assertNoHorizontalOverflow(uploadLayout, `${viewport.width}px uploads`);
     assert.ok(Math.abs(uploadLayout.listWidth - uploadLayout.containerWidth) < 1, `${viewport.width}px uploads use the full list width`);
-    assert.equal(uploadLayout.pathTitle, `当前保存目录：${longPath}`, `${viewport.width}px shows the complete data path in a tooltip`);
+    // renderMidiStatus（app.js:1010）的文案已从「当前保存目录：」改为「最近导入目录：」（数据源同样换成了 library.root）。
+    assert.equal(uploadLayout.pathTitle, `最近导入目录：${longPath}`, `${viewport.width}px shows the complete data path in a tooltip`);
     assert.ok(uploadLayout.pathTop > uploadLayout.toolsTop, `${viewport.width}px places the long data path on its own line`);
     assert.equal(uploadLayout.refreshWhiteSpace, "nowrap", `${viewport.width}px keeps the refresh button label intact`);
     if (screenshots) {
@@ -242,6 +259,22 @@ browserTest("active model runtime status replaces its previous value", async t =
     const badge = document.querySelector("#activeModelProvider");
     return { text: badge.textContent, title: badge.title };
   }, ["checking", "available", "available"]);
-  const expected = `当前：本地兼容 API · ${longModelName} · 可用`;
+  // providerLabel（app.js:976）的文案已从「本地兼容 API」改为「通用兼容 API」（local）——
+  // 本套件从未真跑过，文案改版时这里没人同步。
+  const expected = `当前：通用兼容 API · ${longModelName} · 可用`;
   assert.deepEqual(rendered, { text: expected, title: expected });
+});
+
+browserTest("E6: no desktop bridge leaves a stable status instead of a stuck spinner", async t => {
+  const page = await openFixture(t);
+  // fixture 环境没有 window.oliviaDesktop ⇒ refreshClientMountStatus 必须写稳定态，
+  // 不能把 index.html 初始值「正在检测」永久留在页面上（独立审查报告-1 §E6）。
+  await page.evaluate(() => window.__renderClientMountFixture());
+  const layout = await page.evaluate(() => {
+    const badge = document.querySelector("#serviceMountStatus");
+    return { text: badge.textContent, className: badge.className, mountDisabled: document.querySelector("#mountService").disabled };
+  });
+  assert.equal(layout.text, "未在桌面应用内运行", "无桌面桥时徽章必须落在稳定态，不得停留在「正在检测」");
+  assert.match(layout.className, /unmounted/u);
+  assert.equal(layout.mountDisabled, true, "无桌面桥时挂载按钮必须禁用（没有可挂载的客户端）");
 });

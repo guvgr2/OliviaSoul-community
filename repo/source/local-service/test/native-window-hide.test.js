@@ -4,6 +4,7 @@ import {readFileSync,mkdtempSync,writeFileSync,rmSync,readdirSync} from 'node:fs
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
+import { cleanupDirSync } from "./lib/cleanup.mjs";
 function method(source,name){
  const lines=source.replace(/\r/g,'').split('\n');
  const start=lines.findIndex(line=>/^        (public|private) /.test(line)&&line.includes(` ${name}(`));
@@ -12,7 +13,7 @@ function method(source,name){
 }
 test('one close hides the native maximized window as well as its content and reopens at the same state',{skip:process.platform!=='win32'},()=>{
  const source=readFileSync(new URL('../native-host/MainForm.cs',import.meta.url),'utf8');
- const fixture=readFileSync(new URL('./fixtures/native-window-hide/Harness.cs',import.meta.url),'utf8');
+ const fixture=readFileSync(new URL('./support/native-window-hide/Harness.cs',import.meta.url),'utf8');
  const code=fixture.replace('/* HANDLERS */',['OnFormClosing','HideToTray','ShowFromTray'].map(name=>method(source,name)).join('\n'));
  const dir=mkdtempSync(join(tmpdir(),'native-window-hide-'));
  try{
@@ -24,5 +25,5 @@ test('one close hides the native maximized window as well as its content and reo
   assert.equal(compile.status,0,compile.stdout+compile.stderr);
   const run=spawnSync(exe,[],{encoding:'utf8',windowsHide:true,timeout:30000});
   assert.equal(run.status,0,run.stdout+run.stderr);console.log(run.stdout.trim());
- }finally{rmSync(dir,{recursive:true,force:true});}
+ }finally{cleanupDirSync(dir);}
 });

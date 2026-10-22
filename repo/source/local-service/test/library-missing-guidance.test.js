@@ -32,6 +32,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { createOliviaService } from "../server.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const serviceRoot = join(here, "..");
@@ -188,11 +190,11 @@ test("真实服务：曲库目录没设置时，health / tags 回 needsLibrary +
   });
   t.after(async () => {
     await service.close();
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   });
 
   // 故意**不**写 settings.midi_library_root：新装用户就是这种状态。
-  const address = await service.listen(0);
+  const address = await listenOnFetchablePort(service);
   const get = async path => {
     const response = await fetch(`http://127.0.0.1:${address.port}${path}`);
     assert.equal(response.status, 200, `${path} 在 /toy/ 下一律是 HTTP 200 + 信封里的 code`);

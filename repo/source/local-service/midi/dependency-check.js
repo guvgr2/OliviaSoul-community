@@ -26,9 +26,29 @@ function routePathOf(url) {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const INSTALL_ROOT = resolve(here, "..", "..");
-const USER_DATA = process.env.OLIVIA_USER_DATA || join(INSTALL_ROOT, "UserData");
-const DATABASE_PATH = process.env.OLIVIA_LISTEN_DB || join(USER_DATA, "database", "olivia-local.sqlite");
-const CATALOG_CACHE = join(USER_DATA, "community-catalog.json");
+
+// ★ E4（2026-10-18 独立审查报告-1）：数据路径**必须由调用方传进来**，不能靠模块级常量。
+//   旧写法是 `process.env.OLIVIA_USER_DATA || join(INSTALL_ROOT, "UserData")`，而 server.js 从不设
+//   那个环境变量 ⇒ 界面「依赖检查」报的数据库是「程序目录下的 UserData\database\olivia-local.sqlite」
+//   （实测 ENOENT，指向工作区源码目录），面板上「程序目录 / 数据目录」也整个指错。同一类 bug 在
+//   1.0.8 / 1.0.9 各修过一次（listen-naming、time-of-day），这里是漏修的第三、四处。
+//   现在的形状：调用方（server.js）把真实的 dataDir 传进 createDependencyCheckRoutes；
+//   不传时退回环境变量与旧默认值 —— 只为了让独立调用仍能工作，不是正常路径。
+function resolvePaths({ dataDir, databasePath } = {}) {
+  const userData = dataDir
+    ? resolve(dataDir)
+    : (process.env.OLIVIA_USER_DATA || join(INSTALL_ROOT, "UserData"));
+  return {
+    userData,
+    databasePath: databasePath
+      ? resolve(databasePath)
+      : (process.env.OLIVIA_LISTEN_DB || join(userData, "database", "olivia-local.sqlite")),
+    catalogCache: join(userData, "community-catalog.json"),
+  };
+}
+
+// 默认路径不预先生成：`resolvePaths()` 在每次调用时现算，避免把「模块加载那一刻」的环境变量
+// 钉死成常量 —— 那正是 E4 的成因（server.js 后来才拿到 dataDir，模块却已经记死了旧值）。
 
 function runVersion(exe) {
   return new Promise(resolvePromise => {
@@ -92,21 +112,21 @@ async function checkWebView2() {
   };
 }
 
-async function checkDatabase() {
+async function checkDatabase(paths) {
   try {
-    await access(DATABASE_PATH, FS.R_OK | FS.W_OK);
-    const db = new DatabaseSync(DATABASE_PATH, { readOnly: true });
+    await access(paths.databasePath, FS.R_OK | FS.W_OK);
+    const db = new DatabaseSync(paths.databasePath, { readOnly: true });
     const count = db.prepare("SELECT COUNT(*) AS n FROM user_songs WHERE removed_at IS NULL").get();
     db.close();
-    return { name: "数据库", ok: true, detail: `可读写，共 ${count?.n ?? "?"} 首作品`, fix: "", path: DATABASE_PATH };
+    return { name: "数据库", ok: true, detail: `可读写，共 ${count?.n ?? "?"} 首作品`, fix: "", path: paths.databasePath };
   } catch (error) {
-    return { name: "数据库", ok: false, detail: String(error.message).slice(0, 120), fix: "确认本程序有权限访问自己的数据目录；必要时重装", path: DATABASE_PATH };
+    return { name: "数据库", ok: false, detail: String(error.message).slice(0, 120), fix: "确认本程序有权限访问自己的数据目录；必要时重装", path: paths.databasePath };
   }
 }
 
-async function checkLibrary() {
+async function checkLibrary(paths) {
   try {
-    const db = new DatabaseSync(DATABASE_PATH, { readOnly: true });
+    const db = new DatabaseSync(paths.databasePath, { readOnly: true });
     const row = db.prepare("SELECT value FROM settings WHERE key = 'midi_library_root'").get();
     db.close();
     const root = String(row?.value ?? "").trim();
@@ -118,35 +138,42 @@ async function checkLibrary() {
   }
 }
 
-async function checkCatalog() {
-  if (!existsSync(CATALOG_CACHE)) {
+async function checkCatalog(paths) {
+  if (!existsSync(paths.catalogCache)) {
     return { name: "社区名单缓存", ok: true, detail: "还没拉取过（首次点「刷新名单」即可）", fix: "", path: "" };
   }
   try {
-    const document = JSON.parse(await readFile(CATALOG_CACHE, "utf8"));
+    const document = JSON.parse(await readFile(paths.catalogCache, "utf8"));
     const count = Object.keys(document.entries ?? {}).length;
-    return { name: "社区名单缓存", ok: true, detail: `${count} 条`, fix: "", path: CATALOG_CACHE };
+    return { name: "社区名单缓存", ok: true, detail: `${count} 条`, fix: "", path: paths.catalogCache };
   } catch (error) {
-    return { name: "社区名单缓存", ok: false, detail: String(error.message).slice(0, 120), fix: "点「刷新名单」重新拉取", path: CATALOG_CACHE };
+    return { name: "社区名单缓存", ok: false, detail: String(error.message).slice(0, 120), fix: "点「刷新名单」重新拉取", path: paths.catalogCache };
   }
 }
 
-export async function dependencyReport() {
+/**
+ * 依赖自检报告。
+ * @param {{ dataDir?: string, databasePath?: string }} [options]
+ *        正常路径由 createDependencyCheckRoutes 从 server.js 传进来（真实 dataDir）；
+ *        不传时退回 resolvePaths() 的默认值 —— 只有独立调用才会走到。
+ */
+export async function dependencyReport({ dataDir, databasePath } = {}) {
+  const paths = resolvePaths({ dataDir, databasePath });
   const items = [
     await checkFfmpeg("ffmpeg"),
     await checkFfmpeg("ffprobe"),
     await checkWebView2(),
     { name: "Node 运行时", ok: true, detail: `内置 ${process.version}`, fix: "", path: process.execPath },
-    await checkDatabase(),
-    await checkLibrary(),
-    await checkCatalog(),
+    await checkDatabase(paths),
+    await checkLibrary(paths),
+    await checkCatalog(paths),
   ];
   return {
     items,
     required: items.filter(item => !item.ok).map(item => item.name),
     ok: items.every(item => item.ok),
     installRoot: INSTALL_ROOT,
-    userData: USER_DATA,
+    userData: paths.userData,
   };
 }
 
@@ -161,11 +188,15 @@ export async function installWebView2() {
   return { started: true, path: bootstrapper };
 }
 
-/** 路由工厂：与其它模块同风格；返回 null 表示"不是我的路由"。 */
-export async function createDependencyCheckRoutes() {
+/**
+ * 路由工厂：与其它模块同风格；返回 null 表示"不是我的路由"。
+ * @param {{ dataDir?: string, databasePath?: string }} [options]
+ *        必须由 server.js 传入真实 dataDir：不传的话，界面「依赖检查」会报安装树里的假路径（E4）。
+ */
+export async function createDependencyCheckRoutes(options = {}) {
   return async function handle(req, url) {
     const path = routePathOf(url).replace(/^\/toy/u, "").replace(/^\/admin\/api/u, "");
-    if (req.method === "GET" && path === "/listen-naming/dependencies") return dependencyReport();
+    if (req.method === "GET" && path === "/listen-naming/dependencies") return dependencyReport(options);
     if (req.method === "POST" && path === "/listen-naming/dependencies/install-webview2") return installWebView2();
     return null;
   };

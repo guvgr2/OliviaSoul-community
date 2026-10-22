@@ -15,10 +15,11 @@
 // 修法：自己记一份正常大小（_normalBounds），还原时不信系统那份，直接贴回去。
 // 这份套件钉死下面这些点，行号会漂移，所以一律按「方法体 + 关键语句顺序」断言。
 import test from 'node:test';
+import { readSourceTextSync } from "./lib/read-source.mjs";
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 
-const rawSource = readFileSync(new URL('../native-host/MainForm.cs', import.meta.url), 'utf8').replace(/\r/g, '');
+const rawSource = readSourceTextSync(new URL('../native-host/MainForm.cs', import.meta.url)).replace(/\r/g, '');
 
 function methodFrom(source, name) {
   const lines = source.split('\n');

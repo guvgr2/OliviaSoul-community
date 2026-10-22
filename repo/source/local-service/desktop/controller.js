@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { feappRevisionAtLeast, isKnownFeappRevision } from "./feapp-revisions.js";
 import { createHash, randomUUID } from "node:crypto";
-import { access, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { Readable } from "node:stream";
@@ -148,11 +148,21 @@ export class DesktopController {
     }
   }
 
+  // ★ 2026-10-19：改成原子写。原来直接 writeFile 到目标文件，写到一半时
+  //   另一个进程（或重启后的首次读取）会拿到半截 JSON —— 测试 713 就是这么红的，
+  //   真实场景下重启时机不巧同样会读到残缺的设置。
+  //   改为先写同目录的 .tmp 再 rename 覆盖：同一目录内 rename 是原子的，
+  //   读到的要么是完整旧内容、要么是完整新内容，不会是中间态。
+  //   （Node 的 fs.rename 在 Windows 上会覆盖已存在的同名文件。）
   async writeRuntimeSettings() {
-    await writeFile(this.settingsPath, `${JSON.stringify({
+    const payload = `${JSON.stringify({
       port: this.currentPort,
       clientExe: this.clientExePath,
-    }, null, 2)}\n`, "utf8");
+    }, null, 2)}\n`;
+    const temporary = `${this.settingsPath}.tmp`;
+    await mkdir(dirname(this.settingsPath), { recursive: true });
+    await writeFile(temporary, payload, "utf8");
+    await rename(temporary, this.settingsPath);
   }
 
   async queryAutoStart() {

@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { MidiStore } from "../midi/store.js";
 import { createOliviaService } from "../server.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 test('removal hides a song but retains identity metadata for explicit restore',async()=>{
  await withStore(async({store})=>{
@@ -109,7 +110,7 @@ async function withStore(run) {
     await run({ db, root, store, advance: seconds => { now += seconds; } });
   } finally {
     db.close();
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 }
 
@@ -265,6 +266,6 @@ test("Olivia service keeps the legacy media index without starting a MIDI render
     assert.equal(service.midiStore.listJobs().length, 0);
   } finally {
     await service.close();
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });

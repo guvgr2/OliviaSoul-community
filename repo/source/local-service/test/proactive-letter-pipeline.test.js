@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createOliviaService } from '../server.js';
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 // 这组测试守的是「接线」，不是「判据」：
 // proactive-letters.js 的每条判据都有自己的单测，但纯函数全绿证明不了服务端真的喂了数据、
@@ -32,8 +34,8 @@ async function fixture(t, options = {}) {
   // 默认把她的作息清空（任何时刻都不忙），要验作息的用例自己设回去。
   // 传 routine: null 表示「别动默认作息」（要验默认值的用例需要它）。
   if (options.routine !== null) service.saveProactiveLetterSettings({ routine: options.routine ?? [] });
-  const { port } = await service.listen(0, '127.0.0.1');
-  t.after(async () => { await service.close(); await rm(root, { recursive: true, force: true }); });
+  const { port } = await listenOnFetchablePort(service, "127.0.0.1");
+  t.after(async () => { await service.close(); await cleanupDir(root); });
   return { root, dataDir, service, calls, base: `http://127.0.0.1:${port}` };
 }
 
@@ -184,12 +186,12 @@ test('设置接口：GET 回设置与判定，POST 存下来，非法值回 400'
   assert.equal(posted.code, 0);
   assert.equal(posted.data.settings.minSilenceDays, 7);
 
-  // /toy/* 的错误一律是 HTTP 200 + 非零 code（这是这个项目对游戏端的既有契约）。
+  // ★ E5（2026-10-18）：/toy/* 的错误不再强制 HTTP 200，回真实状态码（非法设置 = httpError(400)）。
   const rejected = await fetch(`${base}/toy/letter/proactive`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ minSilenceDays: -1 }),
   });
-  assert.equal(rejected.status, 200);
+  assert.equal(rejected.status, 400);
   const rejectedBody = await rejected.json();
   // 旧的数字号 -10402 已换成字符串号（2026-10-17，见 server.js 的 ERR 表）。
   assert.equal(rejectedBody.code, "LETTER_SETTINGS_INVALID");
@@ -260,7 +262,7 @@ test('历史数据自愈：已生成完但 reply_type=0 的主动信，服务启
   // 先起一次，只为建表；关掉之后直接塞一行「漏置 reply_type」的历史数据
   //（列默认值就是 0，正是线上缺陷留下的样子）。
   const first = await createOliviaService(options);
-  await first.listen(0, '127.0.0.1');
+  await listenOnFetchablePort(first, "127.0.0.1");
   await first.close();
   withDb(dataDir, db => {
     const user = db.prepare('SELECT id, person FROM users ORDER BY id LIMIT 1').get();
@@ -271,7 +273,7 @@ test('历史数据自愈：已生成完但 reply_type=0 的主动信，服务启
       .run(user.id, user.person);
   });
   const second = await createOliviaService(options);
-  await second.listen(0, '127.0.0.1');
-  t.after(async () => { await second.close(); await rm(root, { recursive: true, force: true }); });
+  await listenOnFetchablePort(second, "127.0.0.1");
+  t.after(async () => { await second.close(); await cleanupDir(root); });
   assert.equal(readLetter(dataDir, 'heal-1').reply_type, 1, '启动时应当把历史主动信补成文字回信');
 });

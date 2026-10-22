@@ -39,7 +39,7 @@ test("index.html：页签、页面容器、脚本引用、页内引导四处齐�
   assert.match(html, /她什么时候会主动写信给我/u);
 });
 
-test("设置页只跟这三个接口打交道，并且按 code 判错（/toy/* 的错误是 HTTP 200）", async () => {
+test("设置页只跟这三个接口打交道，并且按 code 判错（E5 后错误回真实状态码，code 仍是主判据）", async () => {
   const source = await read("public/proactive-settings.js");
   assert.match(source, /const BASE = "\/toy\/letter\/proactive";/u);
   assert.match(source, /body\.code !== 0/u);

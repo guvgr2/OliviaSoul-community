@@ -4,6 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createOliviaService } from '../server.js';
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 // 这组测试单独守「歌曲行状态」这一件事：游戏端要在曲库列表上显示
 // 「已在 N 个歌单」，并给每首歌显示它为哪些歌单勾选过。
@@ -25,9 +27,9 @@ async function fixture(t) {
     runMemoryRefresh: false,
     fetch: async () => { throw new Error('No external requests allowed'); },
   });
-  const { port } = await service.listen(0, '127.0.0.1');
+  const { port } = await listenOnFetchablePort(service, "127.0.0.1");
   const base = `http://127.0.0.1:${port}`;
-  t.after(async () => { await service.close(); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await service.close(); await cleanupDir(root); });
 
   async function request(path, init = {}) {
     const response = await fetch(base + path, {

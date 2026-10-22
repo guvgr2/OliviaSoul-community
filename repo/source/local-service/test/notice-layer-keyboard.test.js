@@ -13,12 +13,13 @@
 //   3. app.js 的键盘关层与鼠标关层必须走同一个 closeNotice（resolver 只有一份）。
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { readSourceTextSync } from "./lib/read-source.mjs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const read = relative => readFileSync(join(here, "..", relative), "utf8");
+const read = relative => readSourceTextSync(join(here, "..", relative));
 
 const appSource = read("public/app.js");
 const diagnosticsSource = read("public/diagnostics-panel.js");

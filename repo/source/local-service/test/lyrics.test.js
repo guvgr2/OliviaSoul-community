@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parseLrc, lyricPair, MAX_LRC_BYTES } from '../lyrics/lrc.js';
 import { createLyricsService } from '../lyrics/service.js';
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 const lrc = '[ar:演奏者]\n[ti:测试]\n[00:01.5]第一句\n[00:04.00][00:08.125]第二句\n[00:06.000]\n[00:10]尾句';
 test('LRC metadata, fractions, repeated stamps, blank marker and random seek', () => {
@@ -38,7 +39,7 @@ async function fixture(t, extras = {}) {
   const frames = []; let clock = 1000;
   const options = { db, root, getSong: id => songs[id], now: () => clock, onFrame: frame => frames.push(frame), ...extras };
   let service = await createLyricsService(options);
-  t.after(async () => { await service.close(); db.close(); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await service.close(); db.close(); await cleanupDir(root); });
   return { root, db, songs, frames, get service() { return service; }, advance: ms => clock += ms,
     restart: async () => { await service.close(); service = await createLyricsService(options); },
     import: (id = 'a', variant = 'day', offsetMs = 0, content = lrc) => service.save(id, { variant, offsetMs, filename: '测试.lrc', contentBase64: Buffer.from(content).toString('base64') }),
@@ -208,7 +209,7 @@ test('failed replace keeps prior binding; queued changes use last operation; inv
 });
 test('broken lyrics storage degrades without taking down playback service', async t => {
   const root = await mkdtemp(join(tmpdir(), 'lyrics-unavailable-')); await writeFile(join(root, 'lyrics'), 'not a directory');
-  const db = new DatabaseSync(':memory:'); t.after(async () => { db.close(); await rm(root, { recursive: true, force: true }); });
+  const db = new DatabaseSync(':memory:'); t.after(async () => { db.close(); await cleanupDir(root); });
   const service = await createLyricsService({ db, root, getSong: () => null });
   assert.equal(service.snapshot().visible, false); assert.match(service.settings().status, /不可用/);
   service.observe(state(), {}, true); await service.close();

@@ -28,6 +28,25 @@ class Harness {
         };
     }
     static void Check(bool ok, string reason) { if (!ok) throw new Exception(reason); }
+    // ★ 2026-10-20 两小时压测实证（1/35 偶发）：Cursor.Current 是线程级静态，真实鼠标移动/窗口切换
+    //   会让 OS 在 WM_SETCURSOR 里重设它；更关键的是**工具栏会跟随浮层重排**，
+    //   调用点事先算好的屏幕坐标会过期（实测连 6 次都是 SizeAll = GetItemAt 命中 null）。
+    //   ⇒ 有界重试：每轮**重算**坐标 → 设点 → Pump 让布局稳定 → Invoke → 立刻读。
+    //   判据强度不变：每次读都紧跟一次 Invoke，「WndProc 完全不写」的坏实现读到的是
+    //   base.WndProc 留下的 Default，永远命中不了 expected ⇒ 仍然红（LC1 变异当初的陷阱）。
+    static void CheckCursorAfterWndProc(ToolStrip strip, Func<System.Drawing.Point> localPoint, Cursor expected, string reason) {
+        Cursor last = null;
+        for (int attempt = 0; attempt < 8; attempt++) {
+            if (attempt > 0) System.Threading.Thread.Sleep(15);
+            Cursor.Position = strip.PointToScreen(localPoint());
+            Pump();
+            var args = new object[] { Message.Create(strip.Handle, 0x20, strip.Handle, (IntPtr)1) };
+            strip.GetType().GetMethod("WndProc", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(strip, args);
+            last = System.Windows.Forms.Cursor.Current;
+            if (last == expected) return;
+        }
+        throw new Exception(reason + "（重试 8 次仍为 " + (last == null ? "null" : last.ToString()) + "）");
+    }
     static LyricsOverlayForm Overlay() { return Application.OpenForms.Cast<Form>().OfType<LyricsOverlayForm>().SingleOrDefault(); }
     static void Pump() { Application.DoEvents(); }
     [STAThread] static int Main() {
@@ -38,10 +57,20 @@ class Harness {
                 var presenter = new LyricsPresenter(owner, backend, frame => {});
                 Check(backend.Subscribers == 1, "single subscription");
                 backend.Emit(Frame(false, false)); Pump(); Check(Overlay() == null, "default must not create overlay");
-                var foreground = GetForegroundWindow();
                 backend.Emit(Frame(true, true)); Pump(); var overlay = Overlay();
                 Check(overlay != null && overlay.Visible && overlay.TopMost && !overlay.ShowInTaskbar, "native two-line window visible");
-                Check(GetForegroundWindow() == foreground, "overlay stole focus");
+                // ★ 2026-10-20 门禁压测实证（阶段 1 偶发 1 次）：满负载下前台窗口会被**本进程外**的窗口
+                //   抢走（编辑器/控制台/别的测试进程），于是「显示浮层后前台没变」这条偶发假红。
+                //   修法：每轮先记一下「显示之前的前台是谁」，只在 after == before 且 before 不是
+                //   我们自己浮层时算通过。真正会抢焦点的坏实现（after == 浮层）永远过不了 ⇒ 判据不变。
+                bool focusKept = false;
+                for (int attempt = 0; attempt < 8 && !focusKept; attempt++) {
+                    if (attempt > 0) System.Threading.Thread.Sleep(20);
+                    var before = GetForegroundWindow();
+                    backend.Emit(Frame(true, true)); Pump();
+                    focusKept = GetForegroundWindow() == before && before != overlay.Handle;
+                }
+                Check(focusKept, "overlay stole focus");
                 Check(Screen.AllScreens.Any(s => s.WorkingArea.Contains(overlay.Bounds)), "offscreen position not clamped");
                 backend.Emit(Frame(true, true, true)); Pump();
                 Check((GetWindowLong(overlay.Handle, -20) & 0x20) != 0 && presenter.LockedItem.Checked, "click-through lock");
@@ -89,16 +118,56 @@ class Harness {
                 overlay.Location = Screen.PrimaryScreen.WorkingArea.Location;
                 Cursor.Position = overlay.PointToScreen(new System.Drawing.Point(20, 45));
                 updatePointer.Invoke(overlay, null);
+                // ★ 独立审查报告-1 §4.2(b)：真源有两条互不相干的光标路径，必须分开断言 —— 
+                //   (1) 控件级 Strip.Cursor 只由 Hover/HoverItem（LyricsControls.cs:133/141/146）设置，
+                //       驱动它的 Strip.MouseMove += Hover（:69）读的是 e.Location，可控；
+                //       PointerToolStrip.WndProc（:18-22）只写进程级 Cursor.Current，从不碰 Strip.Cursor。
+                //   (2) 进程级 Cursor.Current 只由 WndProc 的 0x20 分支设置，它读
+                //       GetItemAt(PointToClient(Cursor.Position))。
+                //   旧写法把真实 Cursor.Position 混进了控件级断言：真实指针在断言前任何一次移动都会触发
+                //   Hover → GetItemAt 不命中 ⇒ 覆盖成 SizeAll ⇒ 偶发失败（报告实测 2/11≈18%）。
+                //   改后连跑 12 轮只余 1 次失败，且失败点是另一条断言 "overlay stole focus"（第 5 行），
+                //   不是本节这两条；再连跑 15 轮 0 失败。
                 Cursor.Position = strip.PointToScreen(new System.Drawing.Point(actionButton.Bounds.Left + actionButton.Bounds.Width / 2, actionButton.Bounds.Top + actionButton.Bounds.Height / 2));
                 Pump();
-                typeof(ToolStripItem).GetMethod("OnMouseEnter", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(actionButton, new object[] { EventArgs.Empty });
-                var cursorMessage = Message.Create(strip.Handle, 0x20, strip.Handle, (IntPtr)1);
-                var cursorArgs = new object[] { cursorMessage };
-                strip.GetType().GetMethod("WndProc", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(strip, cursorArgs);
-                Check(strip.Cursor == Cursors.Hand, "action button uses native hand cursor");
+                // 刻意不在这里预置 Cursor.Current：ToolStrip 的 base.WndProc 对 WM_SETCURSOR 会重新设成 Default，
+                // 预置不起作用；且一旦加了预置，「WndProc 整个不生效」的坏实现会被误判为通过（实测）。
+                // ★ LC1 变异曾漏网的真因（探针定案）：Pump() 期间真实指针在按钮上，WinForms 自己把
+                //   Cursor.Current 设成 Hand —— 「短路/删掉 0x20 赋值」类变异在断言前就已是 Hand，
+                //   断言区分不出 WndProc 写没写。所以把真实指针先挪到空白处：正确实现的
+                //   GetItemAt 命中 null ⇒ 设 SizeAll；坏实现（提前 return 不写光标）保持原值 ⇒ 红。
+                //   按钮中心的 Hand 断言放在指针移回按钮中心之后的第二次 Invoke。
+                //   （2026-10-20 压测后：这两条改为 CheckCursorAfterWndProc 有界重试，见该方法注释。）
+                CheckCursorAfterWndProc(strip, () => new System.Drawing.Point(0, 0), Cursors.SizeAll, "empty space under pointer resolves to drag cursor");
+                CheckCursorAfterWndProc(strip, () => new System.Drawing.Point(actionButton.Bounds.Left + actionButton.Bounds.Width / 2, actionButton.Bounds.Top + actionButton.Bounds.Height / 2), Cursors.Hand, "action button uses native hand cursor");
+                var hoverPoint = new System.Drawing.Point(actionButton.Bounds.Left + actionButton.Bounds.Width / 2, actionButton.Bounds.Top + actionButton.Bounds.Height / 2);
+                mouseMove.Invoke(strip, new object[] { new MouseEventArgs(MouseButtons.None, 0, hoverPoint.X, hoverPoint.Y, 0) });
+                Check(strip.Cursor == Cursors.Hand, "action button hover sets native hand cursor");
+                // ★ 控件级光标的第二个赋值点：HoverItem 的 item == _hovered 分支
+                //   （LyricsControls.cs:140-144）。ToolStrip.OnMouseMove 在按钮热区内不冒泡成
+                //   MouseMove 事件（实测 Invoke OnMouseMove 后 strip.Cursor 仍是 Arrow），所以
+                //   直接反射调私有 HoverItem：先人为把 strip.Cursor 打回 Arrow，若该分支不写
+                //   光标（LC4）或写成 SizeAll（LC3），这里都会红。
                 var actions = typeof(LyricsOverlayForm).GetField("_actions", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(overlay);
-                typeof(LyricsControls).GetMethod("ShowHint", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(actions, null);
+                var hoverItem = typeof(LyricsControls).GetMethod("HoverItem", BindingFlags.Instance | BindingFlags.NonPublic);
+                var showHint = typeof(LyricsControls).GetMethod("ShowHint", BindingFlags.Instance | BindingFlags.NonPublic);
+                strip.Cursor = Cursors.Arrow;
+                hoverItem.Invoke(actions, new object[] { actionButton });
+                Check(strip.Cursor == Cursors.Hand, "repeated hover keeps native hand cursor");
                 var hintWindow = (Form)typeof(LyricsControls).GetField("_hint", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(actions);
+                // ★ 2026-10-20 压测实证：ShowHint 有两道前置条件 —— `_hovered != null` 且
+                //   `GetItemAt(PointToClient(Cursor.Position)) == _hovered`。工具栏跟着浮层重排后，
+                //   真实指针会滑出按钮，此时**重试 ShowHint 永远返回**（实测连 6 次不显示）。
+                //   ⇒ 每轮重算按钮坐标 + 重设指针 + 重做 HoverItem，再 ShowHint。
+                //   判据强度不变：「ShowHint 根本不显示 / 不校验指针」的坏实现重试 8 次仍是 false。
+                for (int attempt = 0; attempt < 8 && !hintWindow.Visible; attempt++) {
+                    if (attempt > 0) System.Threading.Thread.Sleep(15);
+                    Cursor.Position = strip.PointToScreen(new System.Drawing.Point(actionButton.Bounds.Left + actionButton.Bounds.Width / 2, actionButton.Bounds.Top + actionButton.Bounds.Height / 2));
+                    Pump();
+                    hoverItem.Invoke(actions, new object[] { actionButton });
+                    showHint.Invoke(actions, null);
+                    Pump();
+                }
                 Check(hintWindow.Visible && hintWindow.Controls.OfType<Label>().Single().Text == "缩小歌词", "nonactivating toolbar shows Chinese hint");
                 Check((GetWindowLong(hintWindow.Handle, -20) & 0x80020) == 0x80020, "tooltip must be layered and transparent to pass clicks across windows");
                 int firstClickActions = 0; overlay.FontSizeChanged += value => firstClickActions++;

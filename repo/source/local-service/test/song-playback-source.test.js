@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { createOliviaService } from "../server.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 const hash = value => createHash("sha256").update(value).digest("hex");
 
@@ -18,8 +20,8 @@ async function fixture(t) {
     midiDurationProbe: async () => 120_000_000,
     fetch: async () => { throw new Error("External requests are forbidden in playback source tests"); },
   });
-  t.after(async () => { await service.close(); await rm(root, { recursive: true, force: true }); });
-  const address = await service.listen(0, "127.0.0.1");
+  t.after(async () => { await service.close(); await cleanupDir(root); });
+  const address = await listenOnFetchablePort(service, "127.0.0.1");
   const base = `http://127.0.0.1:${address.port}`;
   const json = async (path, body) => {
     const response = await fetch(base + path, body === undefined ? {} : {

@@ -28,6 +28,9 @@ import { DatabaseSync } from "node:sqlite";
 import { runProcess } from "./process-runner.js";
 import { logInfo, logWarn } from "./logs.js";
 import { fingerprintFile, verifyMatch } from "./fingerprint.js";
+// 时段槽位 → 人话（TOD12→白天…）。这张表本来就由 midi/time-of-day.js 定义并导出，
+// 这里直接复用，不再各写一份 —— 两边一旦分叉，界面上就会出现「白天 / 日间」两种叫法。
+import { TOD_LABELS } from "./time-of-day.js";
 
 /** 命名动作的撤回缓冲文件名 / 数量上限（目录在运行时才确定，见 undoFilePath()）。 */
 const UNDO_FILE_NAME = "listen-naming-undo.json";
@@ -97,7 +100,12 @@ let LOG_CSV = process.env.OLIVIA_LISTEN_LOG_CSV || "";
 /** 由 server.js 注入本机路径；注入值优先于环境变量，缺项保持原值。 */
 export function configure(options = {}) {
   const pick = (value, current) => (typeof value === "string" && value.trim() ? resolve(value.trim()) : current);
-  USER_DATA_DIR = pick(options.dataDir, USER_DATA_DIR);
+  // ★ 2026-10-19：USER_DATA_DIR 的语义是「用户数据根」，根下才有 database 子目录
+  //   （见下一行 join(USER_DATA_DIR, "database", ...) 的自证）。
+  //   以前把 dataDir（数据库目录）直接灌进来 ⇒ 搬家时算出 <UserData>\database\database 双层。
+  //   现在优先用显式传入的 userDataDir；旧调用方只传 dataDir 时，用 dirname 推导根兜底，
+  //   保证任何只传 dataDir 的调用方也不会退回双层。
+  USER_DATA_DIR = pick(options.userDataDir ?? (options.dataDir ? dirname(resolve(options.dataDir)) : ""), USER_DATA_DIR);
   if (USER_DATA_DIR && !DATABASE_PATH) DATABASE_PATH = join(USER_DATA_DIR, "database", "olivia-local.sqlite");
   DATABASE_PATH = pick(options.databasePath, DATABASE_PATH);
   BACKUP_DIR = pick(options.backupDir, BACKUP_DIR || (DATABASE_PATH ? dirname(DATABASE_PATH) : ""));
@@ -157,6 +165,23 @@ export function folderFromPath(value) {
 export function songNumber(folder) {
   const match = /^midi_(\d+)_/u.exec(String(folder ?? ""));
   return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+}
+
+/**
+ * 给 SQL 的 `LIKE ... ESCAPE '\'` 造匹配串。
+ * 文件夹名形如 midi_910_1700000000，里面的下划线是 LIKE 的通配符 ——
+ * 不转义就会把 midi_910_… 匹配到 midi1910… 这类无关记录上。
+ * 命名写库（只补空位）、改名（只改已命名的行）两处共用同一份规则。
+ *
+ * ★ 末尾那个 `/` 不是装饰：video_path 形如 `<folder>/DEFAULT.mp4`，
+ *   只写 `%<folder>%` 是**前缀匹配** —— 库里同时有 midi_1_1700000000 与
+ *   midi_1_17000000001 时，改一首会把另一首一起改掉（写入别人的作品比漏改严重得多）。
+ *   加上 `/` 就要求文件夹名后面紧接分隔符，边界才对得上。
+ */
+function folderLikePattern(folder) {
+  const escaped = String(folder ?? "")
+    .replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
+  return `%${escaped}/%`;
 }
 
 /** 时间戳，用于备份文件与 CSV 记录名。 */
@@ -343,6 +368,20 @@ function openWritable(path) {
  * @returns {Promise<(req: import('node:http').IncomingMessage, url: URL) => Promise<object|null>>}
  */
 export async function createListenNamingRoutes(options = {}) {
+  // ★ 2026-10-19 修（复审 E4-4 🟠）：这里原来只接 `databasePath`，而 `USER_DATA_DIR` 一直是空
+  //   ⇒ 下面那句 `userDataDir()` 一路回退到 DEFAULT_DATA_DIR = **安装树**的 UserData，
+  //   撤回/进度/标签/同款群/启动日志全写在那儿。dataDir 必须和 databasePath 一起注入。
+  //   （configure 是缺项保持原值的幂等写法，重复调用安全。）
+  //
+  // ★★ 2026-10-19 复验再补：上一版只转发了 `dataDir`，**没转发 `databasePath`** ⇒
+  //   模块级 `DATABASE_PATH` 永远停在 DEFAULT_DATABASE_PATH（安装树 UserData\database），
+  //   而本进程真正打开的库是 server.js 传进来的 `options.databasePath`。后果有两处：
+  //     ① 搬家护栏拿 `DATABASE_PATH` 当「服务实际打开的库」去比，必然不一致 ⇒
+  //        直接 500 MIGRATE_TARGET_MISMATCH（g28 H 组实测红，5/6 阶段失败）；
+  //     ② `currentTimeOfDayByFolder()` 里 `openReadOnly(DATABASE_PATH)` 读的是安装树那份库，
+  //        便携版 / 显式 dataDir 的部署会读到空库或报错。
+  //   所以三个路径必须一起注入。只传 dataDir 的老调用方仍由 configure() 用 dirname 推导兜底。
+  configure({ dataDir: options.dataDir, databasePath: options.databasePath, userDataDir: options.userDataDir });
   const databasePath = resolve(options.databasePath ?? DATABASE_PATH);
   // 状态文件（撤回/进度/标签/智能起点/同款群/启动日志）都放 <安装目录>\UserData 下。
   // 注意：server.js 调用本模块时只注入 libraryRoot，USER_DATA_DIR 通常是空的，
@@ -670,7 +709,9 @@ export async function createListenNamingRoutes(options = {}) {
   }
 
   /** 撤回一条：把 custom_name/corrected_name 清回 NULL，只清仍然是当初那个名字的行。
-      一条里可能是单次命名（name + rows），也可能是整批导入（groups: [{name, rows}]）。 */
+      一条里可能是单次命名（name + rows），也可能是整批导入（groups: [{name, rows}]）。
+      ★ 2026-10-20：改名（kind: "rename"）的撤回不是"清空"，而是把旧名字写回去 ——
+      每个 row 带 `from`（改名前那个名字）。没有 `from` 的老条目行为一字未变。 */
   function revertEntries(entries) {
     const reverted = [];
     const db = openWritable(databasePath);
@@ -681,15 +722,32 @@ export async function createListenNamingRoutes(options = {}) {
         + "corrected_name_key=NULL, time_of_day_mapping=NULL, updated_at=? WHERE id=? "
         + "AND custom_name = ?",
       );
+      // 改名的撤回：只把"当前值仍是改名后那个名字"的行写回旧名。
+      // 不动 time_of_day_mapping —— 改名不该碰时段，撤回更不该。
+      const restore = db.prepare(
+        "UPDATE user_songs SET custom_name=?, custom_name_key=?, corrected_name=?, "
+        + "corrected_name_key=?, updated_at=? WHERE id=? AND custom_name = ?",
+      );
       for (const entry of entries) {
         const groups = Array.isArray(entry?.groups)
           ? entry.groups
           : [{ name: entry?.name, rows: entry?.rows }];
         for (const group of groups) {
           for (const row of Array.isArray(group?.rows) ? group.rows : []) {
+            const previous = String(row?.from ?? group?.from ?? entry?.from ?? "").trim();
+            if (previous) {
+              const previousKey = previous.normalize("NFKC").toLocaleLowerCase();
+              const restored = restore.run(
+                previous, previousKey, previous, previousKey, nowSeconds(), row.id, group.name,
+              );
+              if (Number(restored?.changes ?? 0) > 0) {
+                reverted.push({ id: row.id, folder: row.folder ?? entry?.folder ?? "", name: previous, kind: "rename" });
+              }
+              continue;
+            }
             const result = clear.run(nowSeconds(), row.id, group.name);
             if (Number(result?.changes ?? 0) > 0) {
-              reverted.push({ id: row.id, folder: row.folder ?? entry?.folder ?? "", name: group.name });
+              reverted.push({ id: row.id, folder: row.folder ?? entry?.folder ?? "", name: group.name, kind: "name" });
             }
           }
         }
@@ -710,23 +768,32 @@ export async function createListenNamingRoutes(options = {}) {
     const entries = await loadUndo();
     const last = entries[entries.length - 1];
     if (!last) return { undone: false, reason: "没有可撤回的命名", remaining: 0 };
+    const isRename = last.kind === "rename";
     const reverted = revertEntries([last]);
     entries.pop();
     await saveUndo();
     const progress = await loadProgress();
-    progress.today = Math.max(0, progress.today - reverted.length);
-    progress.session = Math.max(0, progress.session - reverted.length);
-    await saveProgress();
+    // 改名不算"今天新命名了一首"，撤回改名也就不该把今天的计数扣掉。
+    if (!isRename) {
+      progress.today = Math.max(0, progress.today - reverted.length);
+      progress.session = Math.max(0, progress.session - reverted.length);
+      await saveProgress();
+    }
     invalidateListCache();
-    logInfo("撤回命名", `${last.name ?? ""} → ${reverted.length} 行`);
+    logInfo(isRename ? "撤回改名" : "撤回命名", `${last.name ?? ""} → ${reverted.length} 行`);
     return {
       undone: reverted.length > 0,
+      kind: isRename ? "rename" : "name",
       name: last.name ?? "",
+      // 改名的撤回：这是被还原回去的旧名字，前端用它说"已改回「…」"
+      restored: isRename && reverted.length ? reverted[0].name : "",
       folder: last.folder ?? "",
       reverted: reverted.length,
       folders: [...new Set(reverted.map(item => item.folder).filter(Boolean))],
       remaining: entries.length,
-      reason: reverted.length ? "" : "这条命名之后又被改过，未撤回",
+      reason: reverted.length ? "" : (isRename
+        ? "这条改名之后又被改过，未撤回"
+        : "这条命名之后又被改过，未撤回"),
     };
   }
 
@@ -772,7 +839,7 @@ export async function createListenNamingRoutes(options = {}) {
    */
   function currentTimeOfDayByFolder() {
     const map = new Map();
-    const labels = { TOD12: "白天", TOD1730: "傍晚", TOD20: "夜晚" };
+    const labels = TOD_LABELS;
     let db = null;
     try {
       db = openReadOnly(DATABASE_PATH);
@@ -1376,6 +1443,205 @@ export async function createListenNamingRoutes(options = {}) {
     };
   }
 
+  // ------------------------------------------------------------ 命名纠错（2026-10-20）
+  //
+  // 为什么需要：命名页过去只能给"还没有曲名"的作品写名（writeNames 只挑 custom_name 为空的行），
+  // 一旦写错过就再也改不了 —— 用户只能去改数据库。这里补上「查看全部已命名 + 就地改名」。
+  //
+  // 与「写库」的区别（别把两者混成一条路）：
+  //   · 写库（handleName）只补空位，绝不覆盖已有曲名（同款群连带命名也靠这条不变量）；
+  //   · 改名（handleRename）只改"已经有曲名"的行，并且必须点名要改成什么。
+  // 两条路都不动 time_of_day_mapping —— 改名字不该顺手把时段抹掉。
+
+  /** 读全部已命名的行（含时段与更新时间）。改名与清单共用同一份查询口径。 */
+  function readNamedRows() {
+    const db = openReadOnly(databasePath);
+    try {
+      return db.prepare(
+        "SELECT id, video_path, custom_name, time_of_day_mapping, updated_at FROM user_songs "
+        + "WHERE removed_at IS NULL AND custom_name IS NOT NULL AND custom_name <> ''",
+      ).all();
+    } finally {
+      db.close();
+    }
+  }
+
+  /** 把一个 time_of_day_mapping（JSON）说成人话：白天=DEFAULT · 夜晚=TOD20。 */
+  function timeOfDayText(mappingJson) {
+    if (!mappingJson) return "";
+    let parsed = null;
+    try { parsed = JSON.parse(String(mappingJson)); } catch { return ""; }
+    if (!parsed || typeof parsed !== "object") return "";
+    return Object.entries(TOD_LABELS)
+      .filter(([slot]) => parsed[slot])
+      .map(([slot, label]) => `${label}=${parsed[slot]}`)
+      .join(" · ");
+  }
+
+  /** 把 unix 秒说成"今天 14:32 / 10-18 09:12 / 2025-12-31 23:00"。 */
+  function formatUpdatedAt(seconds) {
+    const value = Number(seconds);
+    if (!Number.isFinite(value) || value <= 0) return "";
+    const date = new Date(value * 1000);
+    const pad = number => String(number).padStart(2, "0");
+    const hhmm = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    const today = new Date();
+    if (date.toDateString() === today.toDateString()) return `今天 ${hhmm}`;
+    if (date.getFullYear() === today.getFullYear()) return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${hhmm}`;
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${hhmm}`;
+  }
+
+  /**
+   * 已命名清单（「命名纠错」用）。
+   * 同一文件夹可能有多行（不同时段变体各一行），按文件夹去重，取最近更新那一行的曲名。
+   */
+  async function namedList(url) {
+    const query = String(url.searchParams.get("query") ?? "").trim();
+    const sort = String(url.searchParams.get("sort") ?? "recent") === "number" ? "number" : "recent";
+    const cursor = Math.max(0, Math.trunc(Number(url.searchParams.get("cursor") ?? 0)) || 0);
+    const pageSize = Math.min(500, Math.max(1, Math.trunc(Number(url.searchParams.get("pageSize") ?? 50)) || 50));
+
+    const byFolder = new Map();
+    for (const row of readNamedRows()) {
+      const folder = folderFromPath(String(row.video_path ?? ""));
+      if (!folder || !FOLDER_PATTERN.test(folder)) continue;
+      const name = String(row.custom_name ?? "").trim();
+      if (!name) continue;
+      const updatedAt = Number(row.updated_at ?? 0) || 0;
+      const previous = byFolder.get(folder);
+      if (previous && previous.updatedAt > updatedAt) continue;
+      byFolder.set(folder, {
+        folder,
+        number: songNumber(folder),
+        name,
+        timeOfDay: timeOfDayText(row.time_of_day_mapping),
+        updatedAt,
+        updatedAtText: formatUpdatedAt(updatedAt),
+      });
+    }
+
+    const all = [...byFolder.values()];
+    // 搜索：曲名 / 文件夹 / 编号 三样都能搜。NFKC 归一化与写库时的 key 规则一致
+    // （全角「ＡＢＣ」和半角「ABC」在用户眼里是同一个名字）。
+    const wanted = query.normalize("NFKC").toLocaleLowerCase();
+    const matched = wanted
+      ? all.filter(song => song.name.normalize("NFKC").toLocaleLowerCase().includes(wanted)
+        || song.folder.toLocaleLowerCase().includes(wanted)
+        || String(song.number).includes(wanted))
+      : all;
+
+    matched.sort(sort === "number"
+      ? (left, right) => left.number - right.number || left.folder.localeCompare(right.folder, "en")
+      : (left, right) => right.updatedAt - left.updatedAt
+        || left.number - right.number || left.folder.localeCompare(right.folder, "en"));
+
+    const slice = matched.slice(cursor, cursor + pageSize);
+    return {
+      songs: slice,
+      total: matched.length,
+      namedTotal: all.length,
+      query,
+      sort,
+      cursor,
+      pageSize,
+      hasMore: cursor + pageSize < matched.length,
+      nextCursor: cursor + pageSize < matched.length ? cursor + pageSize : 0,
+    };
+  }
+
+  /**
+   * 改一个文件夹下所有已命名行的曲名。
+   * 只碰名字字段，不碰 time_of_day_mapping（改名不等于重设时段）。
+   * 返回每行改之前的名字，供撤回写回。
+   */
+  function renameInFolder(folder, name) {
+    const nameKey = name.normalize("NFKC").toLocaleLowerCase();
+    const updatedAt = nowSeconds();
+    const db = openWritable(databasePath);
+    const changed = [];
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      const rows = db.prepare(
+        "SELECT id, custom_name FROM user_songs WHERE removed_at IS NULL "
+        + "AND custom_name IS NOT NULL AND custom_name <> '' "
+        + "AND video_path LIKE ? ESCAPE '\\'",
+      ).all(folderLikePattern(folder));
+      const update = db.prepare(
+        "UPDATE user_songs SET custom_name=?, custom_name_key=?, corrected_name=?, "
+        + "corrected_name_key=?, updated_at=? WHERE id=?",
+      );
+      for (const row of rows) {
+        update.run(name, nameKey, name, nameKey, updatedAt, row.id);
+        changed.push({ id: row.id, folder, from: String(row.custom_name ?? "").trim() });
+      }
+      if (changed.length) {
+        db.prepare("UPDATE media_library_meta SET revision = revision + 1 WHERE id = 1").run();
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch { /* 已经回滚或事务未开始 */ }
+      throw error;
+    } finally {
+      db.close();
+    }
+    return changed;
+  }
+
+  async function handleRename(req) {
+    const body = req.method === "POST" ? await readJson(req) : {};
+    const folder = String(body?.folder ?? "").trim();
+    const name = String(body?.name ?? "").trim();
+    if (!FOLDER_PATTERN.test(folder)) throw httpError(400, "文件夹名无效", "LISTEN_NAMING_FOLDER_INVALID");
+    if (!name) throw httpError(400, "曲名不能为空", "LISTEN_NAMING_NAME_INVALID");
+    // 与写库同一套口径：1–200 字符、不含控制字符。改名不是后门，校验必须一致。
+    if ([...name].length > 200 || /\p{Cc}/u.test(name))
+      throw httpError(400, "曲名须为 1–200 个字符，不能包含控制字符", "LISTEN_NAMING_NAME_INVALID");
+
+    const rows = readNamedRows().filter(row => folderFromPath(String(row.video_path ?? "")) === folder);
+    if (!rows.length)
+      throw httpError(404, "这首还没有曲名（未命名的作品请用上面的「写库」）", "LISTEN_NAMING_NOT_NAMED");
+
+    const before = [...new Set(rows.map(row => String(row.custom_name ?? "").trim()).filter(Boolean))];
+    if (before.length === 1 && before[0] === name) {
+      return {
+        folder, name, before, written: 0, unchanged: true,
+        backupFile: session.backupFile,
+        undoable: (await loadUndo()).length,
+      };
+    }
+
+    // 与写库一样：写库前先把数据库整体备份一次（一次会话只做一次）。
+    const backupFile = await ensureSessionBackup();
+    const changed = renameInFolder(folder, name);
+    if (!changed.length)
+      throw httpError(409, "这首曲名刚刚被别处改过，请刷新后重试", "LISTEN_NAMING_RENAME_RACE");
+
+    const note = `改名（原「${before.join(" / ")}」）`;
+    await appendLog({ folder, name, twins: [], backupFile, note });
+    // 改名进同一条撤回缓冲：Ctrl+Z 能把名字改回去（撤回逻辑见 revertEntries）。
+    await pushUndo({
+      at: nowSeconds(),
+      kind: "rename",
+      folder,
+      name,
+      from: before.join(" / "),
+      backupFile,
+      rows: changed.map(item => ({ id: item.id, folder, from: item.from })),
+    });
+    invalidateListCache();
+    logInfo("改名", `${folder}: ${before.join(" / ")} → ${name}（${changed.length} 行）`);
+
+    return {
+      folder,
+      name,
+      before,
+      written: changed.length,
+      unchanged: false,
+      backupFile,
+      undoable: (await loadUndo()).length,
+    };
+  }
+
   // ------------------------------------------------------------ 切片
 
   function clipPath(folder, segment) {
@@ -1532,7 +1798,7 @@ export async function createListenNamingRoutes(options = {}) {
       "SELECT id FROM user_songs WHERE removed_at IS NULL "
       + "AND (custom_name IS NULL OR custom_name = '') "
       + "AND video_path LIKE ? ESCAPE '\\'",
-    ).all(`%${folder.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`);
+    ).all(folderLikePattern(folder));
   }
 
   /**
@@ -1568,14 +1834,19 @@ export async function createListenNamingRoutes(options = {}) {
     return written;
   }
 
-  async function appendLog({ folder, name, twins, backupFile }) {
+  async function appendLog({ folder, name, twins, backupFile, note = "" }) {
     try {
       await mkdir(dirname(logPath), { recursive: true });
+      // 第 4 列原意是「连带命名的同款群」。改名（2026-10-20）没有连带，
+      // 就把「改名（原「旧名」）」这类说明写进同一列 —— 表头与列数保持不变，
+      // 已经在用 Excel 看这份历史的用户不会错位。
+      const extra = [twins.length ? `连带:${twins.join(",")}` : "", String(note ?? "").trim()]
+        .filter(Boolean).join(" ");
       const line = csvLine([
         logStamp(),
         folder,
         name,
-        twins.length ? `连带:${twins.join(",")}` : "",
+        extra,
         backupFile || "(未写库)",
       ]);
       const head = existsSync(logPath) ? "" : "\uFEFF时间,文件夹,曲名,连带,备份\r\n";
@@ -1725,6 +1996,14 @@ export async function createListenNamingRoutes(options = {}) {
     await mkdir(targetDir, { recursive: true });
     const targetDb = join(targetDir, "olivia-local.sqlite");
     const backup = join(targetDir, `backup-before-migrate-${stamp()}.sqlite`);
+    // ★ 2026-10-19 护栏（防复发）：targetDb 必须就是服务自己打开的那个库。
+    //   不一致说明「用户数据根」算错了（历史上算成过 <UserData>\database\database 双层），
+    //   继续写下去会把库与备份搬到一个服务根本不读的位置 —— 用户看到的是「搬完没变化」。
+    //   这种时候宁可不搬，也绝不能搬丢。
+    const expectedDb = DATABASE_PATH ? resolve(DATABASE_PATH) : "";
+    if (expectedDb && resolve(targetDb) !== expectedDb) {
+      throw httpError(500, `搬家目标路径与服务打开的库不一致（计算得到 ${targetDb}，实际使用 ${expectedDb}），已中止`, "MIGRATE_TARGET_MISMATCH");
+    }
     // 先 checkpoint 再快照：当前库的连接是我们自己一直开着的，
     // 直接 copyFile 可能丢掉还在 WAL 里的最近提交（g14 修过同样的坑）。
     if (existsSync(targetDb)) await snapshotDatabase(targetDb, backup);
@@ -1907,6 +2186,9 @@ export async function createListenNamingRoutes(options = {}) {
     if ((req.method === "GET" || req.method === "HEAD") && path === "/listen-naming/clip")
       return await handleClip(req, res, url);
     if (req.method === "POST" && path === "/listen-naming/name") return await handleName(req, res, url);
+    // 2026-10-20：命名纠错 —— 列全部已命名的歌 / 就地改名
+    if (req.method === "GET" && path === "/listen-naming/named") return await namedList(url);
+    if (req.method === "POST" && path === "/listen-naming/rename") return await handleRename(req);
     // g11：命名撤回（Ctrl+Z）
     if (req.method === "POST" && path === "/listen-naming/undo") return await handleUndo(req, res);
     if (req.method === "GET" && path === "/listen-naming/progress")

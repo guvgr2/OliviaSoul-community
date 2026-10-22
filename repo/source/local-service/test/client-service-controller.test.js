@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test, { beforeEach } from "node:test";
 import { DesktopController } from "../desktop/controller.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 // These orchestration fixtures model a local disk. Only replace the new OS
 // path probe; dispatch, operation guards and existing assertions remain real.
@@ -74,7 +76,7 @@ test("627 mount includes the native widget gates on clean installs and current v
 test("v31 archives alone cannot report fully mounted while native widget gates remain original", async t => {
   const ctx = fixture();
   const root = await mkdtemp(join(tmpdir(), "olivia-widget-state-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   ctx.layout.gameRoot = root;
   ctx.layout.version = "0.0.9.627";
   const studio = Buffer.concat([
@@ -299,7 +301,7 @@ test("elevated RefreshOriginal uses PowerShell switch binding without a position
   } finally {
     childProcess.spawn = original;
     syncBuiltinESMExports();
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });
 
@@ -427,7 +429,7 @@ test("initialize creates the backend without starting or waiting for legacy patc
 
 test("first mount and port-failure rollback never refresh already verified staged originals", async () => {
   const probe = createServer();
-  await new Promise(resolve => probe.listen(0, "127.0.0.1", resolve));
+  await listenOnFetchablePort(probe, "127.0.0.1");
   const port = probe.address().port;
   await new Promise(resolve => probe.close(resolve));
   const ctx = fixture();

@@ -1,6 +1,6 @@
 {
   "manifestVersion": 1,
-  "generatedAt": "2026-10-17T11:20:06+08:00",
+  "generatedAt": "2026-10-19T21:19:08+08:00",
   "source": "repo/source/harness",
   "sourceRepo": "E:/olivia-soul-community-kit",
   "status": "current",
@@ -27,9 +27,9 @@
     "开信.md": { "bytes": 406, "lines": 7, "sha256": "904c653f02ddc7787c9886c61ea8db6f42a081dc80db0aca58f93e43941b660f" },
     "写法.md": { "bytes": 9829, "lines": 155, "sha256": "45872552ca2d508de20131cacd67bb1d73b9e61d26bad1f745ecea49b2ea7acc" },
     "林离人设.md": { "relPath": "../林离人设.md", "bytes": 7550, "lines": 101, "sha256": "f43562f952a5f5a0214c296685a4fbe2eb65dbdcedf0c2a5d75d631263216e57" },
-    "行为参数.json": { "bytes": 11907, "lines": 152, "sha256": "aec146bcab43efaf48ddf5c66927099d6172fb7e1af21eb2879951807a9f186a" },
+    "行为参数.json": { "bytes": 11884, "lines": 152, "sha256": "92478bbc698bd4d1a7faaa21bca0ce369d6565f1c7aaa8377d7f048b8f0c8c6b" },
     "主动来信.md": { "bytes": 3966, "lines": 86, "sha256": "f0f59e9e22180c40c6a49095a2c04b6acbadd441be304b5e1120352b780da0e3" },
-    "主动信语料.md": { "bytes": 3474, "lines": 68, "sha256": "3bd72826523374aa54c116f56db19e5ca949eaa12240b8db212ba00d4a5423a0" },
+    "主动信语料.md": { "bytes": 3461, "lines": 68, "sha256": "68f6541396c0a82af77013d1b8ef2f6cce2640be6c7a5eee080e81cc8cb6be09" },
     "近况.md": { "bytes": 1903, "lines": 28, "sha256": "deadf04bd4a3f391180a806708d17be64eb6f4fd53d2ce799e3227c14782c1e8" }
   },
   "stepMap": {
@@ -76,8 +76,8 @@
     "写法.md": "P5 落地后两侧同源，两端现状由生成器现算：<!--AUTO:synced-写法.md-->本侧 9829 B / 45872552…；姊妹侧 9829 B / 45872552…；**逐字节相同**<!--/AUTO:synced-写法.md-->。语义：§四 的六段结构 / 场景矩阵 / 红线 / 天气规则已进两侧；§三 的「常规 250–450 字」刻意没有进来（与 行为参数.json 的 reply.maxChars 冲突），字数以该 JSON 为单一来源。",
     "林离人设.md": "S7 换代（`## 人格与气质` 换成升级版 §二 的结构化准则）后的两端现状由生成器现算：<!--AUTO:synced-林离人设.md-->本侧 7550 B / f43562f9…；姊妹侧 7550 B / f43562f9…；**逐字节相同**<!--/AUTO:synced-林离人设.md-->。不要用本文件的 bytes 去校验姊妹侧 —— 以现算块为准。",
     "主动来信.md": "两端现状由生成器现算：<!--AUTO:synced-主动来信.md-->本侧 3966 B / f0f59e9e…；姊妹侧 3966 B / f0f59e9e…；**逐字节相同**<!--/AUTO:synced-主动来信.md-->。差异在**结构**：本侧 System 段并入六步链的 {{rules}}，姊妹侧是 STEP6 单步渲染（见 stepMapNote 与同步方案 §5.1 的 S3）。",
-    "主动信语料.md": "S4 新建（5 封调性锚 + 使用声明 + 来源与授权留痕），两端现状由生成器现算：<!--AUTO:synced-主动信语料.md-->本侧 3474 B / 3bd72826…；姊妹侧 3474 B / 3bd72826…；**逐字节相同**<!--/AUTO:synced-主动信语料.md-->。",
-    "行为参数.json": "S5 新建，姊妹侧已按 T8 改成读它。两端现状由生成器现算：<!--AUTO:synced-行为参数.json-->本侧 11907 B / aec146bc…；姊妹侧 11907 B / aec146bc…；**逐字节相同**<!--/AUTO:synced-行为参数.json-->。",
+    "主动信语料.md": "S4 新建（5 封调性锚 + 使用声明 + 来源与授权留痕），两端现状由生成器现算：<!--AUTO:synced-主动信语料.md-->本侧 3461 B / 68f65413…；姊妹侧 3476 B / b77ef065…；**逐字节不同**<!--/AUTO:synced-主动信语料.md-->。",
+    "行为参数.json": "S5 新建，姊妹侧已按 T8 改成读它。两端现状由生成器现算：<!--AUTO:synced-行为参数.json-->本侧 11884 B / 92478bbc…；姊妹侧 11901 B / 0e605434…；**逐字节不同**<!--/AUTO:synced-行为参数.json-->。",
     "近况.md": "S9 新建，姊妹侧已同步同名文件。两端现状由生成器现算：<!--AUTO:synced-近况.md-->本侧 1903 B / deadf04b…；姊妹侧 1903 B / deadf04b…；**逐字节相同**<!--/AUTO:synced-近况.md-->。"
   },
   "tierThresholds": "已落到 行为参数.json 的 nearTerm 段（tiers 四档：0 封信不注入 / 4–20 / 21–60 / >60 或账本「关系」≥ 密友；thresholdMode=letters；allowRollback=false；userToggle=设置页「保持她现在的样子」；引擎接线由 server.js 的 resolveDriftTier(person) 算档后经 -DriftTier 走两条链路）。",

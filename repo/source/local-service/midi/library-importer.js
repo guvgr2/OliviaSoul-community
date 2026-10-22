@@ -564,7 +564,9 @@ export async function importPerformanceLibrary(preview, {
       videoByTodView = {};
       const stagingRoot = join(dirname(managedLibraryRoot), ".staging", importId);
       const targetRoot = join(managedLibraryRoot, importId);
-      await rm(stagingRoot, { recursive: true, force: true });
+      // ★ 2026-10-19 第三轮审查：目录级删除带重试（Windows pending-delete ⇒ rmdir 报 ENOTEMPTY）。
+      //   这里删的是上一次导入失败留下的 staging 目录，删不掉就等于这次导入直接失败。
+      await rm(stagingRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
       try {
         const copiedVariants = {};
         for (const [key, source] of variants) {
@@ -598,8 +600,10 @@ export async function importPerformanceLibrary(preview, {
         });
         rememberReferenceSource(libraryRoot, entry, contentHash, afterSourceSignature);
       } catch (error) {
-        await rm(stagingRoot, { recursive: true, force: true });
-        await rm(targetRoot, { recursive: true, force: true });
+        // 清理失败**不能掩盖**真正的错误：原来这两行 await 一旦抛 ENOTEMPTY，
+        // 用户看到的就是「删目录失败」而不是「导入为什么失败」。带重试 + 各自吞掉。
+        await rm(stagingRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }).catch(() => {});
+        await rm(targetRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }).catch(() => {});
         throw error;
       }
       imported += 1;

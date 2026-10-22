@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { MidiStore } from "../midi/store.js";
 import { createStorageMigrationManager } from "../storage-migration.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 async function waitForPreview(manager, jobId, expectedState = "ready") {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -40,7 +41,7 @@ async function fixture(options = {}) {
   const manager = createStorageMigrationManager({ db, midiStore: store, ...options });
   return {
     root, db, store, sourceRoot, sourceVideo, targetRoot, song, manager,
-    async close() { db.close(); await rm(root, { recursive: true, force: true }); },
+    async close() { db.close(); await cleanupDir(root); },
   };
 }
 

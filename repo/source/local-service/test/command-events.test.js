@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {createCommandEvents} from '../lyrics/command-events.js';
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 test('command notifications arrive immediately, remain bounded, and shutdown closes streams',async()=>{
  const events=createCommandEvents();
  const server=createServer((req,res)=>events.subscribe(req,res,'player',{}));
- await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ await listenOnFetchablePort(server, "127.0.0.1");
  const clients=[];
  try {
   for(let index=0;index<3;index++){

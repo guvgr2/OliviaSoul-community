@@ -16,30 +16,30 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { readSourceTextSync } from "./lib/read-source.mjs";
 import { createServer } from "node:net";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 import { DesktopController } from "../desktop/controller.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 const run = promisify(execFile);
 const powershell = (args) => run("powershell.exe",
   ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", ...args]);
 
 const here = dirname(fileURLToPath(import.meta.url));
-const controllerSource = readFileSync(join(here, "..", "desktop", "controller.js"), "utf8");
-const appSource = readFileSync(join(here, "..", "public", "app.js"), "utf8");
+const controllerSource = readSourceTextSync(join(here, "..", "desktop", "controller.js"));
+const appSource = readSourceTextSync(join(here, "..", "public", "app.js"));
 
 /** 占用一个随机的高位端口，返回 holder（保持占用）与端口号。 */
 async function occupyRandomPort() {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const holder = createServer();
-    await new Promise((resolve, reject) => {
-      holder.once("error", reject);
-      holder.listen(0, "127.0.0.1", resolve);
-    });
+    await listenOnFetchablePort(holder, "127.0.0.1");
     const port = holder.address().port;
     // 留出退让空间：pickAvailablePort 最多往后找 20 个端口。
     if (port <= 65500) return { holder, port };
@@ -48,8 +48,17 @@ async function occupyRandomPort() {
   throw new Error("未能取得可用的测试端口");
 }
 
+// ⚠️ 2026-10-19 修：原来写成 `.then(text => JSON.parse(text).port, () => null)`，
+//   那个 `() => null` 只接得住 **readFile 的 rejection**，接不住 JSON.parse 在
+//   onFulfilled 内部抛的错 —— 设置文件是 writeFile 直接覆写的（非原子写），
+//   轮询正好撞在写一半的窗口上就会读到半截 JSON，于是抛 Unexpected end of JSON input
+//   （实测 test 713）。改成 try/catch 才能把读半截当作「还没写完」，让轮询继续等。
 async function readSettingsPort(file) {
-  return readFile(file, "utf8").then(text => JSON.parse(text).port, () => null);
+  try {
+    return JSON.parse(await readFile(file, "utf8")).port;
+  } catch {
+    return null;
+  }
 }
 
 async function waitForPort(file, expected) {
@@ -83,7 +92,7 @@ test("实测：首选端口被占用时自动退让，并记下原端口供界�
   const { holder, port: taken } = await occupyRandomPort();
   t.after(async () => {
     await new Promise(resolve => holder.close(resolve));
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   });
   const appData = join(root, "app-data");
   const { controller, started } = await makeController(root, appData, { port: taken, clientExe: "" });
@@ -107,7 +116,7 @@ test("实测：首选端口空闲时不记录退让来源（不能无中生有�
   // 释放它，得到一个确信空闲的端口号。
   await new Promise(resolve => holder.close(resolve));
   t.after(async () => {
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   });
   const appData = join(root, "app-data");
   const { controller, started } = await makeController(root, appData, { port: free, clientExe: "" });
@@ -124,7 +133,7 @@ test("实测：退让来源端口随状态一起回报给界面（未选客户�
   const { holder, port: taken } = await occupyRandomPort();
   t.after(async () => {
     await new Promise(resolve => holder.close(resolve));
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   });
   const appData = join(root, "app-data");
   const { controller } = await makeController(root, appData, { port: taken, clientExe: "" });
@@ -200,7 +209,7 @@ test("界面：端口为什么变了要能解释（用后端回报的原端口�
 //   「FE-only 升级不打扰当前播放器」的设计意图从未生效。
 test("实测：播放器状态脚本会报出补丁里的服务端口", async t => {
   const root = await mkdtemp(join(tmpdir(), "olivia-webplayer-port-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   // 注意：不能用 PowerShell 的 ZipFile::CreateFromDirectory 造这个 fixture ——
   // PS 5.1（.NET Framework）会把条目名写成反斜杠 `assets\main-test.js`，
   // 而状态脚本要求正斜杠 `assets/main-*.js`（真实补丁包就是正斜杠）。
@@ -230,7 +239,7 @@ test("实测：播放器状态脚本会报出补丁里的服务端口", async t 
 });
 
 test("源码：播放器端口的提取不得参与挂载判定", () => {
-  const source = readFileSync(join(here, "..", "..", "tools", "get-webplayer-status.ps1"), "utf8");
+  const source = readSourceTextSync(join(here, "..", "..", "tools", "get-webplayer-status.ps1"));
   const managedAt = source.indexOf("$managed =");
   const mountedAt = source.indexOf("$mounted =");
   assert.ok(managedAt >= 0 && mountedAt > managedAt, "未找到 managed 判定");

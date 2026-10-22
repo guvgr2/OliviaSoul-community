@@ -4,6 +4,7 @@ import {mkdtemp,mkdir,writeFile,rm,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createOliviaService} from '../server.js';
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 // 外部驱动脚本（靠 argv[2] 拿 playwright 路径）：没设 OLIVIA_BROWSER_UI 就跳过，
 // 否则 node --test 的默认 glob 裸跑它会恒红（见 game-lyrics-browser.mjs 顶部说明）。
 if (process.env.OLIVIA_BROWSER_UI !== '1') {
@@ -15,7 +16,7 @@ const root=await mkdtemp(join(tmpdir(),'library-live-'));
 const service=await createOliviaService({root,dataDir:join(root,'data'),appData:join(root,'app'),worker:false,runMemoryRefresh:false,midiDurationProbe:async()=>1000000,fetch:async()=>{throw Error('offline');}});
 const browser=await chromium.launch({channel:'msedge',headless:true});
 try {
- const {port}=await service.listen(0,'127.0.0.1'),base=`http://127.0.0.1:${port}`;
+ const {port}=await listenOnFetchablePort(service, "127.0.0.1"),base=`http://127.0.0.1:${port}`;
  const oldPath=join(root,'old.mp4');await writeFile(oldPath,'old media');
  service.midiStore.upsertUserSong({id:'old',name:'天空旧歌',sourceKind:'official-import',videoPath:oldPath,externalRoot:root});
  const patch=await readFile(new URL('../../tools/patch-feapp-local.ps1',import.meta.url),'utf8');

@@ -74,7 +74,9 @@ export async function prepareWorkspaceIncrementally({ template, root, settings }
     join(resolvedRoot, ...parts),
   )));
   await Promise.all([
-    rm(join(resolvedRoot, ".cursor", "rules"), { recursive: true, force: true }),
+    // ★ 2026-10-19 第三轮审查：目录级删除必须带重试。Windows 上刚释放句柄的文件会让 rmdir
+    //   报 ENOTEMPTY（pending-delete），而这里是工作区初始化的必经步骤，一失败整个初始化就废。
+    rm(join(resolvedRoot, ".cursor", "rules"), { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }),
     rm(join(resolvedRoot, "harness", "00-strict-precheck.md"), { force: true }),
     rm(join(resolvedRoot, "harness", "00-脚本算术.md"), { force: true }),
     rm(join(resolvedRoot, "harness", "02-读信感.md"), { force: true }),

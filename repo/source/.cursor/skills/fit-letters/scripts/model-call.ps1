@@ -88,6 +88,26 @@ function Get-ModelFamily {
     return $null
 }
 
+# ★ 2026-10-19 数据安全审计：API Key 落盘已改成 Windows DPAPI 密文（前缀 `dpapi-v1:`）。
+#   写信这条链路是**直接读 model.env** 取 Key 的，所以必须跟着解 —— 不解密就会拿着 base64
+#   密文去请求，表现是「Key 无效」的 401，而且看起来像用户的错。
+#   没带前缀的值原样返回：兼容老版本留下的明文（迁移由 JS 侧启动时完成）。
+function ConvertFrom-SealedSecret {
+    param([string]$Value)
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) { return $text }
+    if (-not $text.StartsWith("dpapi-v1:")) { return $text }
+    try {
+        Add-Type -AssemblyName System.Security
+        $raw = [Convert]::FromBase64String($text.Substring(9))
+        $bytes = [Security.Cryptography.ProtectedData]::Unprotect($raw, $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+        return [Text.Encoding]::UTF8.GetString($bytes)
+    }
+    catch {
+        throw "无法解密 API Key：DPAPI 密文与当前 Windows 账户不匹配（换过账户或换过电脑时请在界面里重新填写 Key）"
+    }
+}
+
 function Import-ModelConfig {
     param([Parameter(Mandatory = $true)][string]$Root)
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -122,6 +142,8 @@ function Import-ModelConfig {
     $model = Get-ModelValue -Primary $config -PrimaryName ($prefix + "_MODEL") -Legacy $legacy -LegacyName $legacyModel -Default $defaultModel
     $authMode = Get-ModelValue -Primary $config -PrimaryName ($prefix + "_AUTH_MODE") -Legacy $null -LegacyName "" -Default $defaultAuth
     $apiKey = Get-ModelValue -Primary $config -PrimaryName ($prefix + "_API_KEY") -Legacy $legacy -LegacyName $legacyKey -Default ""
+    # 2026-10-19：落盘可能是 dpapi-v1 密文，这里就地解回明文（见 ConvertFrom-SealedSecret）。
+    $apiKey = ConvertFrom-SealedSecret -Value $apiKey
     # B1（2026-10-09 复审）：写信必须自己给输出预算。智谱 / 火山方舟的「最大回答」官方默认只有 4k，
     # 而推理 token 与正文共享这份预算 ⇒ 回信稍长就 finish_reason=length ⇒ Get-ModelFinalText 抛
     # "model did not produce complete text"，整封回信直接失败。默认 32768 对智谱（128k）与 DeepSeek（384K）都安全；

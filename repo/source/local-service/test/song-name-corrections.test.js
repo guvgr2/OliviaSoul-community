@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { MidiStore } from "../midi/store.js";
 import { createSongNameCorrections } from "../midi/song-name-corrections.js";
+import { cleanupDir, cleanupDirStrict } from "./lib/cleanup.mjs";
 
 async function fixture(run) {
   const root = await mkdtemp(join(tmpdir(), "olivia-name-corrections-"));
@@ -15,7 +16,7 @@ async function fixture(run) {
   const input = { id: "work", name: "Source", sourceKind: "import", contentHash: "b".repeat(64), videoPath: "source.mp4" };
   store.upsertUserSong(input);
   try { await run({ root, db, store, file, input }); }
-  finally { db.close(); await rm(root, { recursive: true, force: true }); }
+  finally { db.close(); await cleanupDir(root); }
 }
 
 test("portable corrections restore after database loss and concurrent saves keep every fingerprint", async () => fixture(async ({ root, store, file, input }) => {
@@ -40,7 +41,7 @@ test("startup retries DB projection and rejects malformed records without discar
   const saved = await manager.save("work", { permanentName: "DB winner" });
   assert.equal(saved.name, "DB winner");
   assert.equal(manager.status().state, "failed");
-  await rm(file, { recursive: true });
+  await cleanupDirStrict(file);
   const restarted = await createSongNameCorrections({ root, store });
   assert.equal(restarted.status().state, "synced");
   const previous = JSON.parse(await readFile(file, "utf8"));

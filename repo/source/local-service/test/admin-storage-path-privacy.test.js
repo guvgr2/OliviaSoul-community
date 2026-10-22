@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readSourceText } from "./lib/read-source.mjs";
 
 test("storage paths are hidden behind a collapsed disclosure by default", async () => {
-  const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+  const html = await readSourceText(new URL("../public/index.html", import.meta.url));
 
   const disclosure = html.match(/<details[^>]*id="storagePathDetails"[^>]*>([\s\S]*?)<\/details>/u);
   assert.ok(disclosure, "storagePathDetails disclosure should exist");

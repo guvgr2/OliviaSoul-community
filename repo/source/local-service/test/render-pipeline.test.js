@@ -8,7 +8,8 @@ import test from "node:test";
 import { MidiRenderPipeline } from "../midi/render-pipeline.js";
 import { runProcess } from "../midi/process-runner.js";
 import { MidiStore } from "../midi/store.js";
-import { endOfTrack, midiFile, noteOff, noteOn, track } from "./fixtures/midi-fixtures.js";
+import { endOfTrack, midiFile, noteOff, noteOn, track } from "./support/midi-fixtures.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 async function pipelineFixture(runOverride) {
   const root = await mkdtemp(join(tmpdir(), "olivia-render-pipeline-"));
@@ -61,7 +62,7 @@ async function pipelineFixture(runOverride) {
     pipeline,
     async close() {
       db.close();
-      await rm(root, { recursive: true, force: true });
+      await cleanupDir(root);
     },
   };
 }

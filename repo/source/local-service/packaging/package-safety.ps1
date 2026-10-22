@@ -93,6 +93,10 @@ function Assert-PackageTextContent {
         }
     }
 
+    # 作者路径护栏。放在显式禁止值之后、锚点预筛**之前**：作者路径里通常没有
+    # `Users` / `http` 这些隐私锚点，放到锚点短路后面就永远扫不到。
+    Assert-PackageNoAuthorAbsolutePath -Text $Text -RelativePath $RelativePath
+
     # Every generic rule below necessarily contains at least one of these
     # anchors. Most bytes in compressed executables contain none of them, so
     # avoid running all regular expressions for those windows while keeping
@@ -169,6 +173,95 @@ function Assert-PackageTextContent {
         if (-not (Test-PackageCredentialPlaceholder $match.Groups[1].Value)) {
             throw "[PRIVACY_CONTENT] Package privacy check rejected private content: $RelativePath"
         }
+    }
+}
+
+# ── 作者工程路径护栏（2026-10-19 第四轮审查 · 包内作者路径核查 §6-3）────────────────
+# `E:\olivia-soul-community-kit\...` / `E:\linli-letters\...` 这类**作者本机目录**曾随 1.2.3 包发出
+# （`resources/workspace-template/harness/行为参数.json` 两处、`发布说明.md` 一处）。
+# 它不含用户名，算不上「隐私」，但会把作者的磁盘布局与跨仓库关系带给每个装机用户，
+# 而且**没有任何东西会红** —— 只能等下一轮审查偶然发现。这条护栏就是为了让它会红。
+#
+# ⚠️ 判据刻意收窄成「像作者工程/仓库根目录」，**不是**「任何白名单外的绝对路径」：
+#    后者与既有契约冲突 —— `test/release-privacy.test.js` 里「发布隐私门禁允许公开盘符路径」
+#    明确放行 `D:\Games\OliviaSoul`（不含用户名就不算隐私）。那是产品决定，本轮不推翻；
+#    硬上通用规则只会把那条用例改绿，属于「为了让新护栏通过而改判据」。
+#    ⇒ 命中条件：**首段**以项目名前缀开头（olivia / linli），或**任意一段**是工程目录特征词。
+#
+# ⚠️ 正则本身也有两处刻意的收紧（都是实测出来的假红）：
+#    ① 冒号后必须是**长度 ≥ 2 的路径字符段** —— 裸写 `[A-Za-z]:[\\/]` 会被 JS 正则字面量
+#       （`\s*` / `\d+`）命中上百处，那种护栏一上就是满屏假红，最后一定被人关掉；
+#    ② `(?<![A-Za-z0-9_.])` 把 `https://` 这类 URL 排掉（`://` 前是字母 s）。
+$script:PackageAllowedAbsolutePathPrefixes = @(
+    'C:\Windows',
+    'C:\Program Files',
+    'C:\ProgramData',
+    'C:\Users\Public',
+    'C:\Users\Default',
+    'C:\Users\YOUR_NAME',
+    'C:\pagefile.sys',
+    'C:\Temp',
+    'X:\' # 文档/示例里的占位盘符（SKILL.md 的 `-Root "X:\OliviaSoul"`、diagnostic-package.js 的 `X:\a\b\c`）
+)
+# 工程/仓库目录特征词：出现在任意一段就判为「作者的工程树」。
+$script:PackageAuthorPathDevMarkers = @(
+    'repo', 'source', 'src', 'harness', 'kit', 'dev',
+    'workspace', 'workspace-template', 'projects', 'code',
+    'node_modules', 'dist-native', 'package-work', '.git', '.workbuddy'
+)
+# 项目名前缀（只看**首段**，避免把 `D:\Games\OliviaSoul` 这种文档示例也打红）
+$script:PackageAuthorPathProjectPrefixes = @('olivia', 'linli')
+
+function Get-PackageAuthorPathHits {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $found = New-Object 'Collections.Generic.List[string]'
+    # 两条并列：① 首段是 ASCII 路径字符（≥2 个）；② 首段以**非 ASCII** 开头（中文目录）。
+    # 后续段一律放宽（可含中文/空格），否则 `E:\我的文件夹\repo` 这种会整条漏掉。
+    $patterns = @(
+        '(?<![A-Za-z0-9_.])(?<drive>[A-Za-z]):[\\/](?<rest>[A-Za-z0-9._\-]{2,}(?:[ ]?[A-Za-z0-9._\- ]*)(?:[\\/][^\\/:*?"<>|\r\n]*)*)',
+        '(?<![A-Za-z0-9_.])(?<drive>[A-Za-z]):[\\/](?<rest>[^\x00-\x7F\\/:*?"<>|\r\n][^\\/:*?"<>|\r\n]*(?:[\\/][^\\/:*?"<>|\r\n]*)*)'
+    )
+    foreach ($pattern in $patterns) {
+        foreach ($authorMatch in [regex]::Matches($Text, $pattern)) {
+            $candidate = ("$($authorMatch.Groups['drive'].Value):\" + ($authorMatch.Groups['rest'].Value -replace '/', '\')).TrimEnd()
+            if (-not $candidate) { continue }
+            $allowed = $false
+            foreach ($prefix in $script:PackageAllowedAbsolutePathPrefixes) {
+                if ($candidate.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { $allowed = $true; break }
+            }
+            # 页面文件路径是**用户自己配的**（放哪个盘都行），不是作者的目录布局 ⇒ 任何盘符都放行。
+            # 用 `*` 结尾：`rest` 会把后面跟的参数（`D:\pagefile.sys 16384 40960`）一起吃进来。
+            if (-not $allowed -and $candidate -like '?:\pagefile.sys*') { $allowed = $true }
+            if ($allowed) { continue }
+            # 收窄：像不像作者的工程/仓库根目录？
+            $segments = @($candidate.Substring(3) -split '[\\/]' | Where-Object { $_ })
+            if (-not $segments.Count) { continue }
+            $first = $segments[0].ToLowerInvariant()
+            $looksLikeAuthorTree = $false
+            foreach ($projectPrefix in $script:PackageAuthorPathProjectPrefixes) {
+                if ($first.StartsWith($projectPrefix)) { $looksLikeAuthorTree = $true; break }
+            }
+            if (-not $looksLikeAuthorTree) {
+                foreach ($segment in $segments) {
+                    if ($script:PackageAuthorPathDevMarkers -contains $segment.ToLowerInvariant()) { $looksLikeAuthorTree = $true; break }
+                }
+            }
+            if ($looksLikeAuthorTree) { $found.Add($candidate) }
+        }
+    }
+    return @($found)
+}
+
+function Assert-PackageNoAuthorAbsolutePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)][string]$RelativePath
+    )
+
+    $hits = @(Get-PackageAuthorPathHits -Text $Text | Select-Object -Unique)
+    if ($hits.Count) {
+        throw "[AUTHOR_PATH] 包内出现疑似作者工程目录的绝对路径（会把作者的本机目录布局带给每个装机用户）：$RelativePath -> $($hits -join ' | ')"
     }
 }
 
@@ -408,7 +501,11 @@ function Assert-PackageModelDefaults {
         $unsupportedApiKeyAssignments = @($apiKeyAssignmentLines | Where-Object {
             $_ -notmatch '(?i)\$apiKey\s*=\s*["''][^"'']*["'']' -and
             $_ -notmatch '(?i)\$apiKey\s*=\s*Get-ModelValue\b' -and
-            $_ -notmatch '(?i)\$apiKey\s*=\s*Assert-ModelSingleLine\s+-Value\s+\$apiKey\b'
+            $_ -notmatch '(?i)\$apiKey\s*=\s*Assert-ModelSingleLine\s+-Value\s+\$apiKey\b' -and
+            # 2026-10-19 数据安全审计：Key 落盘改成 DPAPI 密文，写信脚本必须就地解密。
+            # 这是**唯一**新增的允许形态，且形态写死（值必须来自 $apiKey 自己），
+            # 免得有人借这个口子塞 `$apiKey = "sk-..."` 之类的常量。
+            $_ -notmatch '(?i)\$apiKey\s*=\s*ConvertFrom-SealedSecret\s+-Value\s+\$apiKey\b'
         })
         if ($models.Count -lt 1 -or 'local-model' -notin $models -or @($models | Where-Object { $_ -notin $allowedModels }).Count -gt 0 -or
             @($bases | Where-Object { $_ -cne 'https://api.deepseek.com' -and $_ -notmatch '^http://(?:127\.0\.0\.1|localhost)(?::[0-9]+)?(?:/|$)' }).Count -gt 0 -or

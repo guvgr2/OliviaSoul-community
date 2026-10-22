@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import vm from 'node:vm';
 import { createOliviaService } from '../server.js';
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 // 这组测试守两件事：
 // ① 游戏「我的信箱」页面上那个「一键导出」按钮背后的本地接口，真能落盘、内容完整、且不含隐私
@@ -18,8 +20,8 @@ async function fixture(t) {
   const service = await createOliviaService({ root, dataDir, appData: join(root, 'app-data'),
     runtimeDir: join(root, 'runtime'), worker: false, runMemoryRefresh: false,
     fetch: async () => { throw new Error('No external requests allowed'); } });
-  const { port } = await service.listen(0, '127.0.0.1');
-  t.after(async () => { await service.close(); await rm(root, { recursive: true, force: true }); });
+  const { port } = await listenOnFetchablePort(service, "127.0.0.1");
+  t.after(async () => { await service.close(); await cleanupDir(root); });
   return { root, dataDir, base: `http://127.0.0.1:${port}` };
 }
 

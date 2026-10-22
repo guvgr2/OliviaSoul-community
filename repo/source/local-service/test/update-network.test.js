@@ -4,9 +4,10 @@ import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createUpdateFetch, isUpdateFallbackHost, planUpdateRoutes, selectSystemProxy } from '../update-network.js';
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 async function listen(server) {
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  await listenOnFetchablePort(server, "127.0.0.1");
   return `http://127.0.0.1:${server.address().port}`;
 }
 async function fixture(t) {

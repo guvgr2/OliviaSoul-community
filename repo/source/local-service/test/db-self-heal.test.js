@@ -2,10 +2,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mainDatabaseLooksIntact, openDatabaseHealing } from "../midi/db-self-heal.js";
+import { cleanupDirSync } from "./lib/cleanup.mjs";
 
 function makeDatabase(dir) {
   const path = join(dir, "olivia-local.sqlite");
@@ -21,29 +22,46 @@ const openPlain = path => {
   return db;
 };
 
+// ★ B5（2026-10-19 第三轮独立审查）：这里原来有三处 `assert.deepEqual(readdirSync(dir).sort(), before)`。
+//   被它误伤的正是这个：SQLite 在收尾时会**瞬态**造出 `OLIVIA-LOCAL.SQLITE-SHM.tmp`
+//   （2026-10-19 门禁 shard 3 实测抓到一次，文件名的 `.tmp` 后缀连大小写都不跟主库一致）。
+//   `-wal` / `-shm` / `-journal` 以及它们的 `.tmp` 变体，生命周期都归 SQLite 管
+//   （内核句柄延迟释放 10~24ms，见 test/helpers/cleanup.mjs 的注释），测试对它做「逐字相等」
+//   比对就是在赌一个自己管不了的时钟 ⇒ 偶发红。
+//   判据改成：① 目录里**跟主库无关**的文件集合必须一字不差（这才是「没被碰过」）；
+//   ② 主库本身大小与 mtime 不变（这才是「自愈没改写库」）；③ 需要时**显式**断言某个伴随文件还在。
+const DB_BASENAME = "olivia-local.sqlite";
+const listing = dir => readdirSync(dir)
+  .filter(name => !name.toLowerCase().startsWith(DB_BASENAME))
+  .sort();
+
 test("正常数据库：直接打开，不产生也不改动任何文件", () => {
   const dir = mkdtempSync(join(tmpdir(), "heal-ok-"));
   try {
     const path = makeDatabase(dir);
-    const before = readdirSync(dir).sort();
+    const before = listing(dir);
+    const beforeStat = statSync(path);
     const result = openDatabaseHealing(path, () => openPlain(path));
     try {
       assert.equal(result.healed, false, "正常库不应触发自愈");
       assert.equal(result.db.prepare("SELECT COUNT(*) AS n FROM t").get().n, 1);
     } finally { result.db.close(); }
-    assert.deepEqual(readdirSync(dir).sort(), before, "目录内容不应变化");
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    assert.deepEqual(listing(dir), before, "目录内容不应变化（只比非伴随文件）");
+    const afterStat = statSync(path);
+    assert.equal(afterStat.size, beforeStat.size, "主库大小不应变化");
+    assert.equal(afterStat.mtimeMs, beforeStat.mtimeMs, "主库不应被改写");
+  } finally { cleanupDirSync(dir); }
 });
 
 test("非损坏类错误：原样抛出，连完整性检查都不做", () => {
   const dir = mkdtempSync(join(tmpdir(), "heal-other-"));
   try {
     const path = makeDatabase(dir);
-    const before = readdirSync(dir).sort();
+    const before = listing(dir);
     const failOpen = () => { throw new Error("EACCES: permission denied"); };
     assert.throws(() => openDatabaseHealing(path, failOpen), /EACCES/u);
-    assert.deepEqual(readdirSync(dir).sort(), before, "不该动任何文件");
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    assert.deepEqual(listing(dir), before, "不该动任何文件");
+  } finally { cleanupDirSync(dir); }
 });
 
 test("主库自身损坏：判为不完整，绝不擅自清理，原样抛出", () => {
@@ -54,12 +72,13 @@ test("主库自身损坏：判为不完整，绝不擅自清理，原样抛出",
     assert.equal(mainDatabaseLooksIntact(path), false, "损坏的主库不应判为完好");
     const shm = `${path}-shm`;
     writeFileSync(shm, Buffer.alloc(4096, 7)); // 放一个残留 sidecar
-    const before = readdirSync(dir).sort();
+    const before = listing(dir);
     const failOpen = () => { throw new Error("database disk image is malformed"); };
     assert.throws(() => openDatabaseHealing(path, failOpen), /malformed/u);
-    assert.deepEqual(readdirSync(dir).sort(), before, "主库坏了就不能动任何文件（含 sidecar）");
+    // 伴随文件在这里**单独断言**（下一行），不混进目录逐字比对里 —— 理由见 listing() 的注释。
+    assert.deepEqual(listing(dir), before, "主库坏了就不能动任何文件（伴随文件另见下一条断言）");
     assert.equal(existsSync(shm), true, "残留 sidecar 必须原样保留");
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { cleanupDirSync(dir); }
 });
 
 test("残留 sidecar 导致打不开：只移开 sidecar，重开一次", () => {
@@ -90,5 +109,5 @@ test("残留 sidecar 导致打不开：只移开 sidecar，重开一次", () => 
       assert.equal(existsSync(path), true, "主库文件必须还在");
       assert.equal(result.db.prepare("SELECT COUNT(*) AS n FROM t").get().n, 1, "重开后数据可读");
     } finally { result.db.close(); }
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { cleanupDirSync(dir); }
 });

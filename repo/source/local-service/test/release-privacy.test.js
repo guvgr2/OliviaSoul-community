@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 const project = fileURLToPath(new URL("../", import.meta.url));
 const repository = resolve(project, "../");
@@ -54,7 +55,7 @@ function runPrivacyGate(root, { forbiddenValues = [], trustedFiles = {} } = {}) 
 
 test("本地兼容 API 在没有保存模型名时使用中性默认名", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   await put(root, ".cursor/secrets/model.env", "MODEL_ACTIVE_PROVIDER=local\n");
 
   const result = powershell(`$ErrorActionPreference='Stop'; . ${quote(modelScript)}; Import-ModelConfig -Root ${quote(root)}; if($script:ModelName -ne 'local-model'){throw 'local model default is not neutral'}`);
@@ -64,7 +65,7 @@ test("本地兼容 API 在没有保存模型名时使用中性默认名", async 
 
 test("发布隐私门禁会检查隐藏目录并拒绝非中性的本地默认模型", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   await put(root, ".cursor/skills/fit-letters/scripts/model-call.ps1", `
 if ($provider -eq "local") {
   $prefix = "MODEL_LOCAL"
@@ -86,7 +87,7 @@ test("发布隐私门禁拒绝 UserData、secrets 和数据库状态文件", asy
     "database/olivia-local.sqlite",
   ]) {
     const root = await fixture();
-    t.after(() => rm(root, { recursive: true, force: true }));
+    t.after(() => cleanupDir(root));
     await put(root, name, "PRIVATE FIXTURE\n");
 
     const result = runPrivacyGate(root);
@@ -105,7 +106,7 @@ test("发布隐私门禁拒绝用户绝对路径、私网地址和非空 API Key
   ];
   for (const [name, content] of cases) {
     const root = await fixture();
-    t.after(() => rm(root, { recursive: true, force: true }));
+    t.after(() => cleanupDir(root));
     await put(root, name, content);
 
     const result = runPrivacyGate(root);
@@ -118,7 +119,7 @@ test("发布隐私门禁拒绝用户绝对路径、私网地址和非空 API Key
 
 test("发布隐私门禁接受中性模型默认值和公开示例配置", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   await put(root, ".cursor/skills/fit-letters/scripts/model-call.ps1", `
 if ($provider -eq "local") {
   $prefix = "MODEL_LOCAL"
@@ -135,7 +136,7 @@ if ($provider -eq "local") {
 
 test("当前发布源中的两套本地模型默认值通过中性配置门禁", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   await put(root, ".cursor/skills/fit-letters/scripts/model-call.ps1", await readFile(modelScript, "utf8"));
   await put(root, "app/model-config.js", await readFile(join(project, "model-config.js"), "utf8"));
 
@@ -154,7 +155,7 @@ test("发布隐私门禁扫描无扩展名、source map 和 UTF-16 二进制字�
   ];
   for (const [name, content] of cases) {
     const root = await fixture();
-    t.after(() => rm(root, { recursive: true, force: true }));
+    t.after(() => cleanupDir(root));
     await putBytes(root, name, content);
 
     const result = runPrivacyGate(root, { forbiddenValues: [privateRoot] });
@@ -232,7 +233,7 @@ export const DEFAULT_LOCAL_PROFILE = Object.freeze({
   ];
   for (const [kind, content] of cases) {
     const root = await fixture();
-    t.after(() => rm(root, { recursive: true, force: true }));
+    t.after(() => cleanupDir(root));
     if (!kind.endsWith("model config")) await put(root, ".cursor/skills/fit-letters/scripts/model-call.ps1", content);
     else {
       await put(root, ".cursor/skills/fit-letters/scripts/model-call.ps1", '$prefix="MODEL_LOCAL"\n$defaultModel="local-model"\n');
@@ -249,7 +250,7 @@ export const DEFAULT_LOCAL_PROFILE = Object.freeze({
 
 test("model-call 的 CRLF API Key 默认行必须逐行校验且只能为空", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const source = (await readFile(modelScript, "utf8"))
     .replace('-Default ""', '-Default "fixture-arbitrary-key"')
     .replace(/\r?\n/gu, "\r\n");
@@ -275,7 +276,7 @@ test("发布隐私门禁拒绝 JSON 密钥和 IPv6 私网地址", async t => {
   ];
   for (const [name, content] of cases) {
     const root = await fixture();
-    t.after(() => rm(root, { recursive: true, force: true }));
+    t.after(() => cleanupDir(root));
     await put(root, `assets/${name}.json`, content);
 
     const result = runPrivacyGate(root);
@@ -294,7 +295,7 @@ test("发布隐私门禁拒绝代码变量中的非空凭据字面量", async t 
   ];
   for (const [name, content] of cases) {
     const root = await fixture();
-    t.after(() => rm(root, { recursive: true, force: true }));
+    t.after(() => cleanupDir(root));
     await put(root, `app/${name}.txt`, content);
 
     const result = runPrivacyGate(root);
@@ -307,7 +308,7 @@ test("发布隐私门禁拒绝代码变量中的非空凭据字面量", async t 
 
 test("发布隐私门禁允许公开盘符路径和明确凭据占位符", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   await put(root, ".cursor/skills/fit-letters/scripts/model-call.ps1", '$prefix="MODEL_LOCAL"\n$defaultModel="local-model"\n');
   await put(root, "docs/examples.txt", [
     "INSTALL_DIR=D:\\Games\\OliviaSoul",
@@ -325,7 +326,7 @@ test("发布隐私门禁允许公开盘符路径和明确凭据占位符", async
 
 test("发布隐私门禁不会把代码参数默认值误判为环境密钥", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   await put(root, "app/storage-migration.js", [
     "export function createMigration({",
     "  randomToken = randomUUID,",
@@ -366,7 +367,7 @@ test("隐私锚点预筛保留全部通用拒绝分支", async t => {
   ];
   for (const [name, content] of cases) {
     const root = await fixture();
-    t.after(() => rm(root, { recursive: true, force: true }));
+    t.after(() => cleanupDir(root));
     await put(root, `assets/${name}.txt`, content);
 
     const result = runPrivacyGate(root);
@@ -391,7 +392,7 @@ test("隐私锚点预筛保留跨块、UTF-16 奇偏移和显式禁止值检查"
   ];
   for (const [name, bytes, forbiddenValues] of fixtures) {
     const root = await fixture();
-    t.after(() => rm(root, { recursive: true, force: true }));
+    t.after(() => cleanupDir(root));
     await putBytes(root, `assets/${name}`, bytes);
 
     const result = runPrivacyGate(root, { forbiddenValues });
@@ -426,7 +427,7 @@ test("生产 trusted 文件白名单使用源码固定 SHA-256 常量", async ()
 
 test("只有固定 SHA-256 匹配的第三方大文件可以跳过内容扫描", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const privateRoot = "C:\\Users\\PrivacyFixture\\source";
   const bytes = Buffer.from(`third-party fixture ${privateRoot}`, "utf8");
   const relative = "runtime/whisper/ggml-small.bin";
@@ -451,7 +452,7 @@ test("只有固定 SHA-256 匹配的第三方大文件可以跳过内容扫描",
 
 test("ZIP 审计逐 entry 对照 stage 文件集合和 SHA-256", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const stage = join(root, "stage");
   const archive = join(root, "candidate.zip");
   await put(stage, ".cursor/skills/fit-letters/scripts/model-call.ps1", '$prefix="MODEL_LOCAL"\n$defaultModel="local-model"\n');
@@ -467,7 +468,7 @@ test("ZIP 审计逐 entry 对照 stage 文件集合和 SHA-256", async t => {
 
 test("ZIP 审计会重新扫描 entry 内容而不是只信任 stage", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const stage = join(root, "stage");
   const altered = join(root, "altered");
   const archive = join(root, "altered.zip");
@@ -484,7 +485,7 @@ test("ZIP 审计会重新扫描 entry 内容而不是只信任 stage", async t =
 
 test("ZIP 审计拒绝 traversal、反斜杠和仅大小写不同的重复 entry", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const stage = join(root, "stage");
   await put(stage, "assets/NOTICE", "public fixture\n");
   const cases = [
@@ -503,7 +504,7 @@ test("ZIP 审计拒绝 traversal、反斜杠和仅大小写不同的重复 entry
 
 test("候选 ZIP 明确包含普通隐藏路径并继续接受内容审计", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const stage = join(root, "stage");
   const candidate = join(root, "work/candidate.zip");
   const audited = join(root, "work/audited.zip");
@@ -516,7 +517,7 @@ test("候选 ZIP 明确包含普通隐藏路径并继续接受内容审计", asy
 
 test("发布 hook 在隐私失败时不创建最终 ZIP 或输出目录", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const stage = join(root, "stage");
   const candidate = join(root, "work/candidate.zip");
   const destination = join(root, "output/OliviaSoul.zip");
@@ -533,7 +534,7 @@ test("发布 hook 在隐私失败时不创建最终 ZIP 或输出目录", async 
 
 test("冻结 stage 快照必须与审计源逐文件一致", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const sourceStage = join(root, "source-stage");
   const snapshotStage = join(root, "work/frozen-stage");
   await put(sourceStage, "app/public.txt", "public fixture\n");
@@ -546,7 +547,7 @@ test("冻结 stage 快照必须与审计源逐文件一致", async t => {
 
 test("最终发布拒绝审计后变化的候选目录且不创建 OutputDirectory", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const candidate = join(root, "work/release-candidate");
   const output = join(root, "final/OliviaSoul-release");
   await put(candidate, "OliviaSoul.zip", "audited bytes\n");
@@ -561,7 +562,7 @@ test("最终发布拒绝审计后变化的候选目录且不创建 OutputDirecto
 
 test("最终发布只原子公开与候选目录完全一致的已审计字节", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const candidate = join(root, "work/release-candidate");
   const output = join(root, "final/OliviaSoul-release");
   await put(candidate, "OliviaSoul.zip", "audited bytes\n");
@@ -576,7 +577,7 @@ test("最终发布只原子公开与候选目录完全一致的已审计字节",
 
 test("最终发布对已完成内容审计的大文件只复核固定 SHA-256", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const candidate = join(root, "work/release-candidate");
   const output = join(root, "final/OliviaSoul-release");
   const privateRoot = "C:\\Users\\PrivacyFixture\\source";
@@ -593,7 +594,7 @@ test("最终发布对已完成内容审计的大文件只复核固定 SHA-256", 
 
 test("安装器来源证明拒绝审计 stage 之外的附加载荷", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const stage = join(root, "stage");
   await put(stage, "app/public.txt", "public\n");
   const safeIss = await put(root, "safe.iss", '[Files]\nSource: "{#StageDir}\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs\n');
@@ -632,7 +633,7 @@ test("安装器来源证明拒绝审计 stage 之外的附加载荷", async t =>
 
 test("安装器来源采用闭集规则并拒绝重定义、外部宏与 Languages 文件", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const stage = join(root, "stage");
   await put(stage, "app/public.txt", "public\n");
   const files = '[Files]\nSource: "{#StageDir}\\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs\n';
@@ -659,7 +660,7 @@ test("安装器来源采用闭集规则并拒绝重定义、外部宏与 Languag
 
 test("安装器编译前 stage 必须与已发布 Portable 的审计快照一致", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const stage = join(root, "stage");
   const candidate = join(root, "work/candidate.zip");
   const destination = join(root, "output/OliviaSoul.zip");
@@ -675,7 +676,7 @@ test("安装器编译前 stage 必须与已发布 Portable 的审计快照一致
 
 test("显式 ISS Source 集合必须与 audited manifest 逐文件完全一致", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const stage = join(root, "frozen-stage");
   await put(stage, "app/public.txt", "audited bytes\n");
   await put(stage, ".hidden/NOTICE", "hidden bytes\n");
@@ -698,7 +699,7 @@ test("显式 ISS Source 集合必须与 audited manifest 逐文件完全一致",
 
 test("fake ISCC 的瞬时新增文件不会进入预先冻结的显式 Source 列表", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const stage = join(root, "frozen-stage");
   const workSetup = join(root, "work/OliviaSoul-Setup.exe");
   await put(stage, "app/public.txt", "audited bytes\n");
@@ -713,7 +714,7 @@ test("fake ISCC 的瞬时新增文件不会进入预先冻结的显式 Source �
 
 test("fake ISCC 无法修改或删除显式列出的冻结文件", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const stage = join(root, "frozen-stage");
   const workSetup = join(root, "work/OliviaSoul-Setup.exe");
   const deleteMarker = join(root, "work/delete-was-blocked.txt");
@@ -732,7 +733,7 @@ test("fake ISCC 无法修改或删除显式列出的冻结文件", async t => {
 
 test("build-release 在 PowerShell 5.1 拒绝未知参数且不创建最终输出", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const output = join(root, "final-output");
   const buildScript = join(project, "packaging/build-release.ps1");
   const result = spawnSync("powershell.exe", [
@@ -752,7 +753,7 @@ test("build-release 在 PowerShell 5.1 拒绝未知参数且不创建最终输�
 
 test("当前 Inno Setup 脚本只从绑定的审计 stage 嵌入文件", async t => {
   const root = await fixture();
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const stage = join(root, "stage");
   await put(stage, "app-v9.ico", "fixture icon\n");
   await put(stage, "installer/ChineseSimplified.isl", await readFile(join(project, "packaging/languages/ChineseSimplified.isl"), "utf8"));

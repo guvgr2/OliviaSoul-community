@@ -407,7 +407,19 @@ function clientMountErrorMessage(error) {
 }
 
 async function refreshClientMountStatus({ preserveResult = false, expectedChange = false } = {}) {
-  if (!window.oliviaDesktop || clientMountAction) return null;
+  // ★ E6（独立审查报告-1）：无桌面桥（浏览器直开管理页 / 桥未注入）时不能停在
+  //   index.html 的初始值「正在检测」—— 那会让用户永远等一个不会到来的结果。
+  //   无桥不是故障，是环境事实：写一个稳定态，并显式禁用挂载/停用/回退按钮（此环境没有可操作的客户端）。
+  if (!window.oliviaDesktop) {
+    const badge = $("#serviceMountStatus");
+    if (badge) { badge.className = "mountStatus unmounted"; badge.textContent = "未在桌面应用内运行"; }
+    for (const id of ["#mountService", "#restoreClient", "#rollbackPatch", "#selectClient"]) {
+      const button = $(id);
+      if (button) button.disabled = true;
+    }
+    return null;
+  }
+  if (clientMountAction) return null;
   const generation = clientMountGeneration;
   const request = ++clientMountStatusRequest;
   let timer;
@@ -562,11 +574,29 @@ function renderRemotePresets() {
   select.append(custom);
 }
 
+// ★ 2026-10-19 第四轮审查 N2：`keyError` 终于有消费方了。
+//   Windows DPAPI 是按「当前用户 + 当前机器」加密的 ⇒ 换账户、换电脑、把 UserData 整个拷走
+//   之后解不开。隐私说明里承诺了「那时程序会提示你重新填 Key」，以前界面上什么都没有 ——
+//   用户看到的是「我的 Key 凭空消失了」，而且要点一次「保存并测试」才知道出了什么事。
+//   现在把它显示在这两个输入框下面。
+const KEY_ERROR_LEAD = "已保存的 API Key 在这台机器上解不开（换过 Windows 账户、换过电脑，或把 UserData 拷到别的机器都会这样）。请重新填一次。";
+
+function renderKeyError(selector, reason) {
+  const element = $(selector);
+  if (!element) return;
+  const detail = String(reason ?? "").trim();
+  element.hidden = !detail;
+  element.textContent = detail ? `${KEY_ERROR_LEAD}\n${detail}` : "";
+}
+
 function renderDeepSeek(profile) {
   renderRemotePresets();
-  $("#apiKey").value = profile.apiKey ?? "";
-  $("#apiKey").placeholder = "填写远程接口 API Key";
+  // ★ 2026-10-19 数据安全审计：接口**不再回显 API Key**（避免 Key 出现在页面内存/开发者工具/截图里）。
+  //   所以这里永远清空，用 placeholder 说明「已经存过了，留空就是不改」。
+  $("#apiKey").value = "";
+  $("#apiKey").placeholder = profile.keyConfigured ? "已保存（留空表示不修改）" : "填写远程接口 API Key";
   resetSecretInput("#apiKey", "#toggleApiKey");
+  renderKeyError("#apiKeyError", profile.keyError);
   const preset = presetOf(profile);
   $("#customModel").checked = !preset;
   $("#modelPreset").value = preset ? preset.id : CUSTOM_MODEL_PRESET;
@@ -576,8 +606,11 @@ function renderDeepSeek(profile) {
 }
 
 function renderLocalModel(profile) {
-  $("#localApiKey").value = profile.apiKey ?? "";
+  // 同上：本地档案也不回显 Key；要清空请用「重置」。
+  $("#localApiKey").value = "";
+  $("#localApiKey").placeholder = profile.keyConfigured ? "已保存（留空表示不修改）" : "本地服务若不需要鉴权可留空";
   resetSecretInput("#localApiKey", "#toggleLocalApiKey");
+  renderKeyError("#localApiKeyError", profile.keyError);
   replaceModelOptions("#localModelName", [profile.model], profile.model);
   $("#localModelBaseUrl").value = profile.baseUrl;
   $("#localAuthMode").value = profile.authMode;

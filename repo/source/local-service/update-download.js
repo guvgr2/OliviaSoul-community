@@ -104,8 +104,16 @@ export async function createUpdateDownloader({ root, fetchRelease, request = fet
         const previous = paths(info);
         info = renewed;
         // 旧地址的部分下载已经没用了（新地址落在新目录），顺手清掉，别在 UserData 里留几百 MB。
-        try { await safePath(root, previous.dir); await rm(previous.dir, { recursive: true, force: true }); }
-        catch { /* 清不掉旧目录不影响新任务 */ }
+        // ★ 2026-10-20 两小时压测实证：这里原来是裸的 `rm(..., { force: true })`（Node 默认
+        //   maxRetries = 0），刚写完/刚改名的文件在 Windows 上会短暂处于 pending-delete，
+        //   删除抛 EBUSY/ENOTEMPTY，而 catch 把它吞了 ⇒ 旧目录留在磁盘上（实测 test.1 下残留 2 个目录，
+        //   测试红在「旧地址留下的部分下载目录要被清掉」）。payload 越大越容易撞上，
+        //   而这里残留的正是几百 MB 的安装包。⇒ 打开 Node 内建退避重试；仍删不掉才放行下一步
+        //   （不阻断新任务，但那是真删不掉，不是我们没重试）。
+        try {
+          await safePath(root, previous.dir);
+          await rm(previous.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+        } catch { /* 清不掉旧目录不影响新任务 */ }
       }
     }
   }

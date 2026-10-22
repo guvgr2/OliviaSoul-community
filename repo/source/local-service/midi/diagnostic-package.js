@@ -22,8 +22,34 @@ const here = dirname(fileURLToPath(import.meta.url));
 const INSTALL_ROOT = resolve(here, "..", "..");
 import { probeSystem } from "./system-probe.js";
 
-const USER_DATA = process.env.OLIVIA_USER_DATA || join(INSTALL_ROOT, "UserData");
-const OUT_DIR = join(USER_DATA, "diagnostics");
+// ★ 2026-10-19 修（复审 E4-1 🔴）：这两个原来定死成模块级常量 —— 与 logs.js 修之前同一种病。
+//   而且在这里**更糟**：logs.js 已经改成落真实 dataDir 之后，真实日志**不在安装树**了
+//   ⇒ 诊断包里 `listen-naming.log.txt` 会变成空/读不到。诊断包是「出问题时才生成」的东西，
+//   路径错了会把排查引到反方向，所以这条比 E4 别的几处更急。
+//
+//   形状与 logs.js 保持一致：setter 优先 > 环境变量 > 旧的安装树默认值（兼容独立调用）。
+let injectedDataDir = "";
+let injectedDatabasePath = "";
+
+export function setDiagnosticDataDir(dir, dbPath) {
+  if (dir) injectedDataDir = resolve(String(dir));
+  if (dbPath) injectedDatabasePath = resolve(String(dbPath));
+}
+
+/** 每次现算 —— 模块加载时固化成常量，正是 E4 那种「设定之后仍写旧位置」的坑。 */
+function userData() {
+  if (injectedDataDir) return injectedDataDir;
+  return process.env.OLIVIA_userData() || join(INSTALL_ROOT, "UserData");
+}
+
+function databasePath() {
+  if (injectedDatabasePath) return injectedDatabasePath;
+  return join(userData(), "database", "olivia-local.sqlite");
+}
+
+function outDir() {
+  return join(userData(), "diagnostics");
+}
 const APPDATA = process.env.APPDATA || "";
 const GAME_ROOT = join(APPDATA, "miHoYo", "Olivia-steam");
 const CRASH_DIR = join(GAME_ROOT, "crash");
@@ -34,10 +60,10 @@ const MAX_LOG_BYTES = 512 * 1024;   // 每份日志最多带 512 KB 尾巴
 
 /** 需要被替换掉的绝对路径（越长的排前面，避免短路径先把长路径切碎）。 */
 async function sensitivePaths() {
-  const list = [USER_DATA, INSTALL_ROOT, process.env.USERPROFILE || "", APPDATA, GAME_ROOT].filter(Boolean);
+  const list = [userData(), INSTALL_ROOT, process.env.USERPROFILE || "", APPDATA, GAME_ROOT].filter(Boolean);
   // 曲库根目录：settings 里形如 X:\... 的值
   try {
-    const db = new DatabaseSync(join(USER_DATA, "database", "olivia-local.sqlite"), { readOnly: true });
+    const db = new DatabaseSync(databasePath(), { readOnly: true });
     try {
       for (const row of db.prepare("SELECT value FROM settings").all()) {
         const value = String(row.value ?? "");
@@ -170,7 +196,7 @@ function dbSummary(dbPath) {
 
 async function mountSummary() {
   try {
-    const data = JSON.parse(await readFile(join(USER_DATA, "settings", "client-patches.json"), "utf8"));
+    const data = JSON.parse(await readFile(join(userData(), "settings", "client-patches.json"), "utf8"));
     return (data.clients ?? []).map(client => ({
       clientRoot: "<客户端目录>",   // 绝对路径不进包
       version: client.version,
@@ -297,11 +323,13 @@ const EXCLUDED = [
 
 async function collect() {
   const paths = await sensitivePaths();
-  const dbPath = join(USER_DATA, "database", "olivia-local.sqlite");
+  const dbPath = databasePath();
 
   const [dependencies, startup, mount, crashes, gameLogs, system] = await Promise.all([
-    dependencyReport().catch(error => ({ error: error.message })),
-    startupReport({ userDataDir: USER_DATA, limit: 3 }).catch(error => ({ error: error.message })),
+    // ★ 复审 E4-1：不传参就会被 resolvePaths() 的默认值顶回安装树 ⇒ 报告里那句
+    //   「异位 dataDir 下仍写安装树」在诊断包里同样成立。
+    dependencyReport({ dataDir: userData(), databasePath: databasePath() }).catch(error => ({ error: error.message })),
+    startupReport({ userDataDir: userData(), limit: 3 }).catch(error => ({ error: error.message })),
     mountSummary(),
     crashSummary(),
     gameLogSummary(),
@@ -332,9 +360,9 @@ async function collect() {
     };
   } catch (error) { crashAnalysis = { error: error.message }; }
 
-  const runtimeLog = await tailOf(join(USER_DATA, "runtime.log"));
-  const runtimePrev = await tailOf(join(USER_DATA, "runtime.previous.log"));
-  const namingLog = await tailOf(join(USER_DATA, "listen-naming.log"));
+  const runtimeLog = await tailOf(join(userData(), "runtime.log"));
+  const runtimePrev = await tailOf(join(userData(), "runtime.previous.log"));
+  const namingLog = await tailOf(join(userData(), "listen-naming.log"));
 
   const env = {
     程序版本: process.env.OLIVIA_SOUL_VERSION || "(见 package.json)",
@@ -395,7 +423,14 @@ async function collect() {
 
 // ---------------------------------------------------------------- 路由
 
-export async function createDiagnosticRoutes() {
+/**
+ * @param {{dataDir?: string, databasePath?: string}} [options]
+ *        由 server.js 传入本次启动的真实 dataDir / 库路径。
+ *        不给时退回旧的安装树默认值 —— 只有独立调用（脚本、测试）才会走到。
+ */
+export async function createDiagnosticRoutes(options = {}) {
+  // 在**建路由时**就把路径灌进来：诊断包是"用到才生成"的，不能等到第一次请求再猜位置。
+  setDiagnosticDataDir(options.dataDir, options.databasePath);
   return async function handle(req, url) {
     const path = String(url?.pathname || "").replace(/^\/toy/u, "");
 
@@ -420,7 +455,7 @@ export async function createDiagnosticRoutes() {
           bytes: Buffer.isBuffer(entry.data) ? entry.data.length : Buffer.byteLength(String(entry.data), "utf8"),
         })),
         excluded: EXCLUDED,
-        outDir: OUT_DIR,
+        outDir: outDir(),
       };
     }
 
@@ -429,9 +464,9 @@ export async function createDiagnosticRoutes() {
       if (req.method !== "POST") return null;
       const { entries } = await collect();
       const zip = makeZip(entries);
-      await mkdir(OUT_DIR, { recursive: true });
+      await mkdir(outDir(), { recursive: true });
       const stamp = new Date().toISOString().replace(/[:.]/gu, "-").slice(0, 19);
-      const file = join(OUT_DIR, `olivia-diagnostics-${stamp}.zip`);
+      const file = join(outDir(), `olivia-diagnostics-${stamp}.zip`);
       await writeFile(file, zip);
       logInfo("已导出诊断包", `${file}（${zip.length} 字节）`);
       return {
@@ -445,10 +480,10 @@ export async function createDiagnosticRoutes() {
     // 打开诊断包所在目录
     if (path === "/listen-naming/diagnostics/package/reveal") {
       if (req.method !== "POST") return null;
-      await mkdir(OUT_DIR, { recursive: true });
-      try { spawn("explorer.exe", [OUT_DIR], { detached: true, stdio: "ignore" }).unref(); }
+      await mkdir(outDir(), { recursive: true });
+      try { spawn("explorer.exe", [outDir()], { detached: true, stdio: "ignore" }).unref(); }
       catch (error) { logWarn("打开诊断包目录失败", error.message); }
-      return { opened: OUT_DIR };
+      return { opened: outDir() };
     }
 
     return null;

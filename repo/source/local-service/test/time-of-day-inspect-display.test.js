@@ -14,10 +14,10 @@
  */
 
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readSourceText } from "./lib/read-source.mjs";
 
-const source = await readFile(new URL("../public/time-of-day-inspect.js", import.meta.url), "utf8");
+const source = await readSourceText(new URL("../public/time-of-day-inspect.js", import.meta.url));
 const FOLDER = "midi_900_1700000000";
 const REWORK_LABEL = "按画面判定重写这一首";
 
@@ -136,7 +136,7 @@ test("拿不到亮度与色温时显示问号，不猜数字", async () => {
 // 作用域下，复核面板挂在试听工具页、父级也不是 .ln-clueOut，于是完全匹配不到：
 // 卡片退化成竖排、没有内边距。这里盯住「至少要有一条不带页面限定的规则」。
 test("卡片排布样式不能被单一页面作用域卡住", async () => {
-  const css = await readFile(new URL("../public/listen-naming.css", import.meta.url), "utf8");
+  const css = await readSourceText(new URL("../public/listen-naming.css", import.meta.url));
   const lines = css.split(/\r?\n/u);
   const scoped = (needle) => lines.filter(line => line.includes(needle));
   for (const [needle, label] of [[".ln-todRow", "卡片行"], [".ln-todCard", "卡片"]]) {
@@ -160,7 +160,7 @@ test("卡片排布样式不能被单一页面作用域卡住", async () => {
 // 一大票 DOM 才跑得起来，为一个 4 行函数搭假环境不划算；仓库对这类前端文件已有源码级
 // 断言的先例（test/no-autoplay.test.js、test/runtime-bootstrap.test.js）。
 test("「曲名与时段」页的就地依据也走同一个取整函数", async () => {
-  const listenNaming = await readFile(new URL("../public/listen-naming.js", import.meta.url), "utf8");
+  const listenNaming = await readSourceText(new URL("../public/listen-naming.js", import.meta.url));
   assert.match(
     listenNaming,
     /function formatMetric\(value\) \{\s*if \(value == null \|\| value === ""\) return "\?";/u,

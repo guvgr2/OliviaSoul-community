@@ -24,6 +24,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { createOliviaService } from "../server.js";
 import { DEFAULT_PERIODIC_BACKUP_KEEP, listBackups } from "../midi/data-safety.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = relative => readFileSync(join(here, "..", relative), "utf8");
@@ -42,7 +44,7 @@ async function bootOnce(t) {
     root, dataDir: join(root, "data"),
     worker: false, runMemoryRefresh: false, delaySeconds: 300,
   });
-  const address = await service.listen(0);
+  const address = await listenOnFetchablePort(service);
   const base = `http://127.0.0.1:${address.port}`;
   let cookie = "";
   async function request(path, init = {}) {
@@ -56,7 +58,7 @@ async function bootOnce(t) {
   }
   t.after(async () => {
     await service.close().catch(() => {});
-    await rm(root, { recursive: true, force: true }).catch(() => {});
+    await cleanupDir(root).catch(() => {});
   });
   return { root, service, request, databasePath: join(root, "data", "olivia-local.sqlite") };
 }
@@ -130,7 +132,8 @@ test("真服务：删单份的四道防护、真删（含伴生文件）、保�
   // ------------------------------------------------ ② 没确认不许删
   for (const body of [{ file: "backup-manual-20200202-000000.sqlite" }, { file: "backup-manual-20200202-000000.sqlite", confirm: false }]) {
     const rejected = await request("/toy/listen-naming/data/backup/delete", { method: "POST", body: JSON.stringify(body) });
-    assert.equal(rejected.status, 200, "/toy/* 下的业务错误统一 HTTP 200 + code≠0");
+    // ★ E5（2026-10-18）：/toy/* 的错误回真实状态码（没确认 = httpError(400)），envelope 仍是 code≠0。
+    assert.equal(rejected.status, 400, "没确认要删必须回 400 + code≠0");
     assert.notEqual(rejected.body.code, 0, "没确认就要删，必须被拒");
     assert.ok(await exists(victim), "被拒的请求不许碰文件");
   }
@@ -246,7 +249,7 @@ test("真服务：删单份的四道防护、真删（含伴生文件）、保�
 
 test("汇总：summary 按全部备份统计，不受列表 limit 截断", async t => {
   const root = await mkdtemp(join(tmpdir(), "olivia-cleanup-summary-"));
-  t.after(async () => { await rm(root, { recursive: true, force: true }).catch(() => {}); });
+  t.after(async () => { await cleanupDir(root).catch(() => {}); });
   const databasePath = join(root, "olivia-local.sqlite");
   const live = new DatabaseSync(databasePath);
   live.exec("CREATE TABLE demo(key TEXT PRIMARY KEY)");

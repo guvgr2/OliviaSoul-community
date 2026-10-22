@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSongPreviewResolver } from "../midi/song-preview-source.js";
 import { scanPerformanceLibrary } from "../midi/library-importer.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 const hash = value => createHash("sha256").update(value).digest("hex");
 async function fixture(t, { legacy = true, resolverOptions = {} } = {}) {
@@ -15,7 +16,7 @@ async function fixture(t, { legacy = true, resolverOptions = {} } = {}) {
   const testRoot = join(tmpdir(), "olivia-preview-source");
   await mkdir(testRoot, { recursive: true });
   const root = await mkdtemp(join(testRoot, "olivia-preview-source-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const library = join(root, "library");
   await mkdir(join(library, "midi_work"), { recursive: true });
   const contents = { DEFAULT: "original day", ALT_2: "original evening", ALT_3: "original night" };

@@ -23,6 +23,8 @@ import test from "node:test";
 
 import { TIME_OF_DAY_DEFAULTS, configure } from "../midi/time-of-day.js";
 import { createOliviaService } from "../server.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 test("configure({ databasePath }) 之后备份目录跟着那份库走", () => {
   const databasePath = join(tmpdir(), "olivia-tod-backup-unit", "database", "olivia-local.sqlite");
@@ -54,7 +56,7 @@ test("真实服务：异位数据目录下，手动指定的备份写在那份�
   });
   t.after(async () => {
     await service.close();
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   });
 
   const libraryRoot = service.midiStore.root;
@@ -77,7 +79,7 @@ test("真实服务：异位数据目录下，手动指定的备份写在那份�
   });
   service.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES('midi_library_root', ?)").run(libraryRoot);
 
-  const address = await service.listen(0);
+  const address = await listenOnFetchablePort(service);
   const base = `http://127.0.0.1:${address.port}`;
 
   // /status 直接报出它打算把备份写到哪：这就是缺陷的观测点

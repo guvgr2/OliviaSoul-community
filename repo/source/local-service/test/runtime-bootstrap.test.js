@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readSourceText } from "./lib/read-source.mjs";
 
 test("Windows 安装包不再包含 MIDI 演奏视频生成运行时", async () => {
   const [buildScript, installer] = await Promise.all([
-    readFile(new URL("../packaging/build-release.ps1", import.meta.url), "utf8"),
-    readFile(new URL("../packaging/OliviaSoul.iss", import.meta.url), "utf8"),
+    readSourceText(new URL("../packaging/build-release.ps1", import.meta.url)),
+    readSourceText(new URL("../packaging/OliviaSoul.iss", import.meta.url)),
   ]);
 
   assert.doesNotMatch(buildScript, /midi-renderer\\godot|runtime-manifest\.json|install-midi-renderer\.ps1/u);
@@ -21,11 +21,11 @@ test("Windows 安装包不再包含 MIDI 演奏视频生成运行时", async () 
 
 test("Windows 宿主将耐久数据固定在安装目录 UserData 并传入游戏设置文件", async () => {
   const [appPaths, backend, nodeHost, controller, installer] = await Promise.all([
-    readFile(new URL("../native-host/AppPaths.cs", import.meta.url), "utf8"),
-    readFile(new URL("../native-host/NodeBackend.cs", import.meta.url), "utf8"),
-    readFile(new URL("../desktop/node-host.js", import.meta.url), "utf8"),
-    readFile(new URL("../desktop/controller.js", import.meta.url), "utf8"),
-    readFile(new URL("../packaging/OliviaSoul.iss", import.meta.url), "utf8"),
+    readSourceText(new URL("../native-host/AppPaths.cs", import.meta.url)),
+    readSourceText(new URL("../native-host/NodeBackend.cs", import.meta.url)),
+    readSourceText(new URL("../desktop/node-host.js", import.meta.url)),
+    readSourceText(new URL("../desktop/controller.js", import.meta.url)),
+    readSourceText(new URL("../packaging/OliviaSoul.iss", import.meta.url)),
   ]);
 
   assert.match(appPaths, /var userData = Path\.Combine\(baseDirectory, "UserData"\)/u);
@@ -49,8 +49,8 @@ test("Windows 宿主将耐久数据固定在安装目录 UserData 并传入游�
 
 test("WebView2 与 Electron 仅在可编辑文本中提供右键编辑菜单并保留托盘菜单", async () => {
   const [nativeMain, desktopMain] = await Promise.all([
-    readFile(new URL("../native-host/MainForm.cs", import.meta.url), "utf8"),
-    readFile(new URL("../desktop/main.js", import.meta.url), "utf8"),
+    readSourceText(new URL("../native-host/MainForm.cs", import.meta.url)),
+    readSourceText(new URL("../desktop/main.js", import.meta.url)),
   ]);
 
   assert.match(nativeMain, /ContextMenuRequested\s*\+=/u);
@@ -64,9 +64,9 @@ test("WebView2 与 Electron 仅在可编辑文本中提供右键编辑菜单并�
 
 test("原生宿主显示窗口后才初始化 WebView，避免隐藏预热触发图形内核异常", async () => {
   const [nativeMain, startupContext, splash] = await Promise.all([
-    readFile(new URL("../native-host/MainForm.cs", import.meta.url), "utf8"),
-    readFile(new URL("../native-host/StartupContext.cs", import.meta.url), "utf8"),
-    readFile(new URL("../native-host/SplashForm.cs", import.meta.url), "utf8"),
+    readSourceText(new URL("../native-host/MainForm.cs", import.meta.url)),
+    readSourceText(new URL("../native-host/StartupContext.cs", import.meta.url)),
+    readSourceText(new URL("../native-host/SplashForm.cs", import.meta.url)),
   ]);
 
   assert.match(nativeMain, /var\s+uiTask\s*=\s*EnsureUiShellAsync\(\);[\s\S]*var\s+backendTask\s*=\s*InitializeBackendAsync\(\);/u);
@@ -84,7 +84,7 @@ test("原生宿主显示窗口后才初始化 WebView，避免隐藏预热触发
 });
 
 test("原生托盘左键立即打开窗口且右键只交给菜单", async () => {
-  const nativeMain = await readFile(new URL("../native-host/MainForm.cs", import.meta.url), "utf8");
+  const nativeMain = await readSourceText(new URL("../native-host/MainForm.cs", import.meta.url));
 
   assert.doesNotMatch(nativeMain, /_tray\.Click\s*\+=/u);
   assert.match(nativeMain, /_tray\.MouseClick\s*\+=/u);
@@ -95,7 +95,7 @@ test("原生托盘左键立即打开窗口且右键只交给菜单", async () =>
 });
 
 test("Electron 备用宿主先创建加载窗口再等待后台", async () => {
-  const desktopMain = await readFile(new URL("../desktop/main.js", import.meta.url), "utf8");
+  const desktopMain = await readSourceText(new URL("../desktop/main.js", import.meta.url));
 
   assert.match(desktopMain, /function loadingDocumentUrl/u);
   assert.match(desktopMain, /mainWindow\.loadURL\(loadingDocumentUrl\(\)\)/u);

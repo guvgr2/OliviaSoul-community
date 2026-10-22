@@ -5,6 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { createOliviaService } from "../server.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 // g14：「时段可视化」以前只看 user_songs.video_path，一首歌永远只列 1 段画面 ——
 // 于是 seg=1/2 必然 404「这首歌没有这一段视频」，按画面判定也只按 1 段算，
@@ -30,7 +32,7 @@ const service = await createOliviaService({
   runMemoryRefresh: false,
   midiDurationProbe: async () => 120_000_000,
 });
-const address = await service.listen(0);
+const address = await listenOnFetchablePort(service);
 const base = `http://127.0.0.1:${address.port}`;
 // 曲库根直接落在受管目录里：store 存的是相对路径（用 / 分隔），既能命中
 // video_path LIKE '%/<folder>/%'，又能靠 midi_library_root 还原成绝对路径。
@@ -65,7 +67,7 @@ service.db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES('midi_lib
 
 test.after(async () => {
   await service.close();
-  await rm(root, { recursive: true, force: true });
+  await cleanupDir(root);
 });
 
 async function inspect(folder) {
@@ -139,8 +141,8 @@ async function setSlot(payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  // /toy/* 的错误也走 HTTP 200，真正的结果在 body.code 里
-  assert.equal(response.status, 200);
+  // ★ E5（2026-10-18）：/toy/* 的错误回真实状态码；helper 不再断 status，
+  //   成功路径由各用例断 body.code === 0，错误路径断具体码（TIME_OF_DAY_VARIANT_NOT_FOUND 等）。
   return await response.json();
 }
 

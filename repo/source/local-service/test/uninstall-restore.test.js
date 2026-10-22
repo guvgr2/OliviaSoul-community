@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 
 import { readClientPatchRegistry, registerMountedClientPatch } from "../desktop/client-patch-registry.js";
 import { canonicalProcessRoot, restoreAllClientPatches } from "../desktop/uninstall-restore.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 async function rootFixture() {
   const tempRoot = resolve(tmpdir());
@@ -16,7 +17,7 @@ async function rootFixture() {
     const target = resolve(root);
     if (dirname(target) !== tempRoot || !/^uninstall-restore-[A-Za-z0-9]+$/u.test(basename(target)))
       throw new Error("unsafe fixture cleanup target");
-    await rm(target, { recursive: true, force: true });
+    await cleanupDir(target);
   });
   const userData = join(root, "UserData");
   await mkdir(userData, { recursive: true });

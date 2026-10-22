@@ -4,20 +4,17 @@ import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { blockedFetchPorts } from "./fixtures/fetch-ports.js";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 import { createOliviaService } from "../server.js";
-import { endOfTrack, midiFile, noteOff, noteOn, track } from "./fixtures/midi-fixtures.js";
+import { endOfTrack, midiFile, noteOff, noteOn, track } from "./support/midi-fixtures.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 const execFileAsync = promisify(execFile);
 const enabled = process.env.OLIVIA_MIDI_E2E === "1";
 const runtimeRoot = "X:\\OliviaSoulData\\MidiRenderer";
 async function listen(service) {
-  let address = await service.listen(0);
-  while (blockedFetchPorts.has(address.port)) {
-    await new Promise(resolveClose => service.server.close(resolveClose));
-    address = await service.listen(0);
-  }
+  let address = await listenOnFetchablePort(service);
   return `http://127.0.0.1:${address.port}`;
 }
 
@@ -60,7 +57,7 @@ test("real local MIDI pipeline survives restart and can become a video reply", {
   let service;
   t.after(async () => {
     await service?.close();
-    if (process.env.OLIVIA_MIDI_E2E_KEEP !== "1") await rm(root, { recursive: true, force: true });
+    if (process.env.OLIVIA_MIDI_E2E_KEEP !== "1") await cleanupDir(root);
   });
 
   service = await createOliviaService(serviceOptions);

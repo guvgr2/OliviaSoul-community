@@ -142,6 +142,18 @@
       loading: false,
       // 上一张卡片时光标是否在输入框里（决定换歌后要不要抢焦点；Esc 移出后就不再抢）
       focusInput: true,
+      // 2026-10-20「命名纠错」：已命名清单的状态（与"待命名"的 songs 完全分开）
+      fix: {
+        loaded: false,
+        loading: false,
+        songs: [],
+        total: 0,
+        namedTotal: 0,
+        query: "",
+        sort: "recent",
+        cursor: 0,
+        hasMore: false,
+      },
     };
   }
 
@@ -242,7 +254,7 @@
     guideSteps.append(
       node("li", "听一段 15 秒，听出来就把曲名打进输入框按回车；听不出点「跳过」——同一首的多个版本按 Ctrl+→ 可以整组跳过。"),
       node("li", "想更快：「导出命名表」把待命名清单存成 CSV，在表格里一次填几十首再导入；也可以点「社区名单比对」让程序猜一首。"),
-      node("li", "填错不怕：按 Ctrl+Z 撤回（连带命名的一起回退）。更多工具在「试听工具」页（同款群核对、时段依据复核）和「高级设置」页（排障）。"),
+      node("li", "填错不怕：按 Ctrl+Z 撤回（连带命名的一起回退）；已经写进库的旧名字，在下面「命名纠错」里点「修改命名」就地改。更多工具在「试听工具」页（同款群核对、时段依据复核）和「高级设置」页（排障）。"),
     );
     const guideNote = node("p",
       "找不到某个功能？「基础设置」页顶部有一张「功能地图：想做什么 → 去哪一页」。要报障就到「更新与维护 → 高级设置」最下面用「一键诊断包」导一个 zip。",
@@ -285,6 +297,45 @@
     tableActions.append(exportButton, importButton, importInput);
 
     progressBox.append(progressHead, progressLine, progressActions, tableActions);
+
+    // 2026-10-20「命名纠错」：过去写过名字就再也改不了（写库只补空位），只能去改数据库。
+    // 这里把"已经命名的作品"全列出来，每行右侧一个「修改命名」，就地改。
+    // 默认收起：它是修错工具，不该把下面的试听卡片挤下去；点开时才去读服务端。
+    const fix = node("details", null, "settingsBlock ln-fix");
+    const fixHead = node("summary", null, "settingsBlockHead ln-fixHead");
+    fixHead.append(
+      node("strong", "命名纠错：已命名的歌可以随时改名"),
+      node("small", "点开看全部已命名的作品；每行右侧「修改命名」就地改，改完自动备份，Ctrl+Z 能撤回"),
+    );
+    const fixBody = node("div", null, "ln-fixBody");
+    const fixSearchRow = node("div", null, "actions ln-fixSearch");
+    const fixQuery = node("input");
+    fixQuery.type = "search";
+    fixQuery.className = "ln-fixQuery";
+    fixQuery.placeholder = "搜曲名 / 文件夹 / 编号（例如 千本樱、midi_910、910）";
+    fixQuery.setAttribute("aria-label", "搜索已命名的作品");
+    fixQuery.autocomplete = "off";
+    const fixSort = node("select", null, "ln-fixSort");
+    fixSort.setAttribute("aria-label", "排序方式");
+    for (const [value, label] of [["recent", "最近改过的在前"], ["number", "按编号排"]]) {
+      const option = node("option", label);
+      option.value = value;
+      fixSort.append(option);
+    }
+    const fixRefresh = node("button", "刷新", "secondary");
+    fixRefresh.type = "button";
+    fixSearchRow.append(fixQuery, fixSort, fixRefresh);
+    const fixCount = node("p", "", "fieldHint ln-fixCount");
+    const fixList = node("ul", null, "ln-fixList");
+    const fixMoreRow = node("div", null, "actions ln-fixMore");
+    const fixMore = node("button", "加载更多", "secondary");
+    fixMore.type = "button";
+    fixMoreRow.append(fixMore);
+    const fixStatus = node("p", "", "fieldHint ln-fixStatus");
+    fixStatus.setAttribute("role", "status");
+    fixStatus.setAttribute("aria-live", "polite");
+    fixBody.append(fixSearchRow, fixCount, fixList, fixMoreRow, fixStatus);
+    fix.append(fixHead, fixBody);
 
     const card = node("section", null, "taskCard ln-card");
 
@@ -372,7 +423,7 @@
     );
 
     card.append(folder, meta, audio, segmentProgress, nameRow, nameGuard, clueActions, clueOut, actions, status, info, help);
-    host.append(panelHead, guide, progressBox, card);
+    host.append(panelHead, guide, progressBox, fix, card);
     host.dataset.listenNamingReady = "1";
 
     const collected = collect(host);
@@ -426,6 +477,16 @@
       guideTools: host.querySelectorAll(".ln-guideActions button")[1],
       guideDiagnostics: host.querySelectorAll(".ln-guideActions button")[2],
       guideClose: host.querySelectorAll(".ln-guideActions button")[3],
+      // 2026-10-20 命名纠错（已命名清单 + 就地改名）
+      fix: host.querySelector(".ln-fix"),
+      fixQuery: host.querySelector(".ln-fixQuery"),
+      fixSort: host.querySelector(".ln-fixSort"),
+      fixRefresh: host.querySelector(".ln-fixSearch button"),
+      fixCount: host.querySelector(".ln-fixCount"),
+      fixList: host.querySelector(".ln-fixList"),
+      fixMoreRow: host.querySelector(".ln-fixMore"),
+      fixMore: host.querySelector(".ln-fixMore button"),
+      fixStatus: host.querySelector(".ln-fixStatus"),
     };
   }
 
@@ -454,6 +515,15 @@
     ui.guideClose?.addEventListener("click", () => hideGuide(true));
     // 进度面板里的「使用引导」：把收起的引导重新打开
     ui.guideButton?.addEventListener("click", () => showGuide());
+    // 2026-10-20：命名纠错 —— 点开时才读服务端，避免每次进页面都多打一次库
+    ui.fix?.addEventListener("toggle", () => { if (ui.fix.open && !state.fix.loaded) void loadFixList(); });
+    ui.fixRefresh?.addEventListener("click", () => { void loadFixList(); });
+    ui.fixSort?.addEventListener("change", () => {
+      state.fix.sort = ui.fixSort.value === "number" ? "number" : "recent";
+      void loadFixList();
+    });
+    ui.fixQuery?.addEventListener("input", () => scheduleFixSearch());
+    ui.fixMore?.addEventListener("click", () => { void loadFixList({ append: true }); });
     ui.replay.addEventListener("click", () => { markUserStartedPlayback(); void replay(); });
     ui.nextSegment.addEventListener("click", () => { markUserStartedPlayback(); void shiftSegment(); });
     ui.skip.addEventListener("click", () => { markUserStartedPlayback(); moveNext(); });
@@ -557,13 +627,19 @@
       }
       state.undoable = Number(result?.remaining) || 0;
       if (result?.undone) {
-        setStatus(`↩ 已撤回「${result.name}」的命名（${result.reverted} 行）`
-          + (result.folders?.length ? `：${result.folders.join("、")}` : "")
-          + "；该作品已放回列表，刷新页面即可继续听。", "done");
+        const isRename = result.kind === "rename";
+        setStatus(isRename
+          ? `↩ 已把「${result.name}」改回「${result.restored || "（旧名）"}」`
+            + (result.folders?.length ? `：${result.folders.join("、")}` : "")
+            + "；「命名纠错」清单已同步。"
+          : `↩ 已撤回「${result.name}」的命名（${result.reverted} 行）`
+            + (result.folders?.length ? `：${result.folders.join("、")}` : "")
+            + "；该作品已放回列表，刷新页面即可继续听。", "done");
       } else {
         setStatus(`没能撤回：${result?.reason || "没有可撤回的命名"}`, "warn");
       }
       renderProgress();
+      if (elements.fix?.open && state.fix.loaded) void loadFixList();
     } catch (error) {
       setStatus(`撤回失败：${error.message}`, "fault");
       renderProgress();
@@ -795,6 +871,232 @@
     }
   }
 
+  // ------------------------------------------------------------ 2026-10-20：命名纠错
+
+  let fixSearchTimer = 0;
+
+  function setFixStatus(message, kind) {
+    if (!elements?.fixStatus) return;
+    elements.fixStatus.textContent = message || "";
+    if (kind) elements.fixStatus.dataset.kind = kind;
+    else delete elements.fixStatus.dataset.kind;
+  }
+
+  /** 输入停顿 300ms 再查：曲库大时每敲一个字打一次库没必要。 */
+  function scheduleFixSearch() {
+    clearTimeout(fixSearchTimer);
+    fixSearchTimer = setTimeout(() => {
+      if (!elements?.fixQuery) return;
+      state.fix.query = elements.fixQuery.value.trim();
+      void loadFixList();
+    }, 300);
+  }
+
+  /**
+   * 读已命名清单。
+   * 与 load()（待命名）分开：这条只在「命名纠错」展开时按需调用，不影响试听台状态。
+   */
+  async function loadFixList(options = {}) {
+    if (!elements?.fixList) return;
+    const fix = state.fix;
+    if (fix.loading) return;
+    const append = options.append === true;
+    fix.loading = true;
+    if (elements.fixMore) elements.fixMore.disabled = true;
+    if (!append) setFixStatus("正在读取已命名的作品…");
+    try {
+      const params = new URLSearchParams({
+        query: fix.query,
+        sort: fix.sort,
+        pageSize: "50",
+        cursor: String(append ? fix.cursor : 0),
+      });
+      const data = await request("/toy/listen-naming/named?" + params.toString());
+      const songs = Array.isArray(data?.songs) ? data.songs : [];
+      fix.songs = append ? [...fix.songs, ...songs] : songs;
+      fix.total = Number(data?.total) || 0;
+      fix.namedTotal = Number(data?.namedTotal) || 0;
+      fix.cursor = Number(data?.nextCursor) || 0;
+      fix.hasMore = data?.hasMore === true;
+      fix.loaded = true;
+      renderFixList();
+      if (!fix.total) {
+        setFixStatus(fix.query ? `没有匹配「${fix.query}」的曲名。` : "还没有已命名的作品。", "warn");
+      } else {
+        setFixStatus(fix.hasMore
+          ? `共 ${fix.total} 首，先列前 ${fix.songs.length} 首；点「加载更多」继续。`
+          : `共 ${fix.total} 首，已全部列出。`, "done");
+      }
+    } catch (error) {
+      setFixStatus(error && error.needsLibrary ? error.message : `读取失败：${error.message}`, "fault");
+    } finally {
+      fix.loading = false;
+      renderFixCount();
+      if (elements.fixMore) elements.fixMore.disabled = !fix.hasMore;
+    }
+  }
+
+  function renderFixCount() {
+    if (!elements?.fixCount) return;
+    const fix = state.fix;
+    if (!fix.namedTotal) { elements.fixCount.textContent = "还没有已命名的作品。"; return; }
+    const parts = [`全库已命名 ${fix.namedTotal} 首`];
+    if (fix.query) parts.push(`匹配「${fix.query}」${fix.total} 首`);
+    if (fix.songs.length && fix.songs.length < fix.total) parts.push(`已列出 ${fix.songs.length} 首`);
+    elements.fixCount.textContent = parts.join(" · ");
+  }
+
+  function renderFixList() {
+    if (!elements?.fixList) return;
+    const fix = state.fix;
+    elements.fixList.replaceChildren();
+    if (!fix.songs.length) {
+      elements.fixList.append(node("li",
+        fix.query ? "没有匹配的曲名。" : "还没有已命名的作品：先在上面听一首，听出来就写库。",
+        "empty"));
+    } else {
+      for (const song of fix.songs) elements.fixList.append(fixRow(song));
+    }
+    renderFixCount();
+    if (elements.fixMoreRow) elements.fixMoreRow.hidden = !fix.hasMore;
+  }
+
+  /** 一行：曲名 + 文件夹 + 时段 + 「修改命名」；点开后原地变成输入框。 */
+  function fixRow(song) {
+    const row = node("li", null, "ln-fixRow");
+    row.dataset.folder = song.folder;
+    row.dataset.name = song.name;
+
+    const main = node("div", null, "ln-fixMain");
+    const nameLine = node("div", null, "ln-fixNameLine");
+    nameLine.append(node("strong", song.name, "ln-fixName"));
+    if (song.timeOfDay) nameLine.append(node("span", song.timeOfDay, "ln-chip ln-fixTod"));
+    main.append(
+      nameLine,
+      node("small",
+        [song.folder, song.updatedAtText ? `改于 ${song.updatedAtText}` : ""].filter(Boolean).join(" · "),
+        "ln-fixMeta"),
+    );
+
+    const edit = node("div", null, "ln-fixEdit");
+    edit.hidden = true;
+    const input = node("input");
+    input.type = "text";
+    input.className = "ln-fixInput";
+    input.maxLength = 200;
+    input.autocomplete = "off";
+    input.value = song.name;
+    input.setAttribute("aria-label", `把「${song.name}」改成什么`);
+    const save = node("button", "保存", "secondary ln-fixSave");
+    const cancel = node("button", "取消", "secondary ln-fixCancel");
+    save.type = "button";
+    cancel.type = "button";
+    edit.append(input, save, cancel);
+
+    const rename = node("button", "修改命名", "secondary ln-fixBtn");
+    rename.type = "button";
+    rename.title = `修改「${song.name}」的曲名`;
+
+    rename.addEventListener("click", () => startFixEdit(row));
+    cancel.addEventListener("click", () => cancelFixEdit(song.folder));
+    save.addEventListener("click", () => { void saveFixName(song, row); });
+    input.addEventListener("keydown", event => {
+      if (event.key === "Enter") { event.preventDefault(); void saveFixName(song, row); }
+      else if (event.key === "Escape") { event.preventDefault(); cancelFixEdit(song.folder); }
+    });
+
+    row.append(main, edit, rename);
+    return row;
+  }
+
+  /** 打开某一行的编辑框（同一时间只开一个，列表很长时开一堆输入框只会更乱）。 */
+  function startFixEdit(row) {
+    if (!elements?.fixList) return;
+    for (const other of elements.fixList.querySelectorAll(".ln-fixRow")) {
+      if (other !== row) cancelFixEdit(other.dataset.folder);
+    }
+    const edit = row.querySelector(".ln-fixEdit");
+    const button = row.querySelector(".ln-fixBtn");
+    const input = row.querySelector(".ln-fixInput");
+    if (!edit || !button || !input) return;
+    edit.hidden = false;
+    button.hidden = true;
+    input.focus();
+    if (typeof input.select === "function") input.select();
+    setFixStatus(`正在改「${row.dataset.name}」：改完按回车或点「保存」，Esc 取消。`);
+  }
+
+  function cancelFixEdit(folder) {
+    if (!elements?.fixList) return;
+    let row = null;
+    for (const item of elements.fixList.querySelectorAll(".ln-fixRow")) {
+      if (item.dataset.folder === folder) { row = item; break; }
+    }
+    if (!row) return;
+    const edit = row.querySelector(".ln-fixEdit");
+    const button = row.querySelector(".ln-fixBtn");
+    const input = row.querySelector(".ln-fixInput");
+    if (edit) edit.hidden = true;
+    if (button) button.hidden = false;
+    // 取消后把输入框恢复成当前曲名，下次点开不会还留着上次没保存的半截内容
+    if (input) input.value = row.dataset.name || "";
+  }
+
+  /** 保存改名：同名冲突先问一句（与写库一样只是提醒，不拦死）→ 写库 → 重读清单。 */
+  async function saveFixName(song, row) {
+    if (!elements) return;
+    const input = row.querySelector(".ln-fixInput");
+    const save = row.querySelector(".ln-fixSave");
+    const cancel = row.querySelector(".ln-fixCancel");
+    const value = String(input?.value ?? "").trim();
+    if (!value) {
+      setFixStatus("曲名不能为空。", "warn");
+      input?.focus();
+      return;
+    }
+    if (value === song.name) {
+      setFixStatus("名字没有变化，不用保存。", "warn");
+      cancelFixEdit(song.folder);
+      return;
+    }
+    if (save) save.disabled = true;
+    if (cancel) cancel.disabled = true;
+    try {
+      let conflicts = [];
+      try {
+        const check = await request("/toy/listen-naming/name-check?name=" + encodeURIComponent(value)
+          + "&folder=" + encodeURIComponent(song.folder));
+        conflicts = Array.isArray(check?.conflicts) ? check.conflicts : [];
+      } catch { /* 检查失败不拦改名 */ }
+      if (conflicts.length && !global.confirm(
+        `「${value}」已经用在 ${conflicts.length} 个别的编号上：\n`
+        + `${conflicts.slice(0, 5).map(item => item.folder).join("、")}${conflicts.length > 5 ? " …" : ""}\n\n`
+        + `仍然要把这首改成「${value}」吗？`)) {
+        if (save) save.disabled = false;
+        if (cancel) cancel.disabled = false;
+        return;
+      }
+      const result = await request("/toy/listen-naming/rename", {
+        method: "POST",
+        body: JSON.stringify({ folder: song.folder, name: value }),
+      });
+      state.undoable = Number(result?.undoable ?? state.undoable) || state.undoable;
+      renderProgress();
+      if (result?.unchanged) {
+        setFixStatus(`名字没有变化：「${value}」。`, "warn");
+      } else {
+        setFixStatus(`✓ 已改名：「${song.name}」→「${value}」`
+          + (Number(result?.written) > 1 ? `（${result.written} 行）` : "")
+          + `；备份：${result?.backupFile || "本次会话已有备份"}。按 Ctrl+Z 可撤回。`, "done");
+      }
+      await loadFixList();
+    } catch (error) {
+      setFixStatus(`改名失败：${error.message}`, "fault");
+      if (save) save.disabled = false;
+      if (cancel) cancel.disabled = false;
+    }
+  }
+
   function renderCard() {
     if (!elements) return;
     const song = current();
@@ -984,6 +1286,8 @@
       elements.submit.disabled = false;
       elements.nameInput.disabled = false;
       renderCard();
+      // 刚写库的作品会进「命名纠错」清单；那个面板正开着就顺手刷新，别让用户看到旧名单
+      if (elements.fix?.open && state.fix.loaded) void loadFixList();
     } catch (error) {
       if (token !== requestEpoch) return;
       elements.submit.disabled = false;
@@ -1039,6 +1343,13 @@
 
   function keydown(event) {
     if (!elements || elements.host.hidden) return;
+    const target = event.target;
+    // 2026-10-20：焦点在「命名纠错」的改名输入框里时，全局快捷键一律让位给输入框本身。
+    // 否则打字时的空格会被当成「重播」、Ctrl+Z 会把上一条命名撤掉（而不是撤销你刚打的字）。
+    const inFixEditor = target instanceof HTMLInputElement
+      && typeof target.closest === "function"
+      && target.closest(".ln-fix") !== null;
+    if (inFixEditor) return;
     // g11：撤回（Ctrl+Z / Cmd+Z）—— 必须在下面那道"带修饰键直接 return"之前处理
     if ((event.ctrlKey || event.metaKey) && !event.altKey && (event.key === "z" || event.key === "Z")) {
       event.preventDefault();
@@ -1055,7 +1366,6 @@
       return;
     }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
-    const target = event.target;
     const editable = target instanceof HTMLInputElement
       || target instanceof HTMLTextAreaElement
       || target instanceof HTMLSelectElement

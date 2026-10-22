@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readSourceText } from "./lib/read-source.mjs";
 
 test("admin layout keeps controls usable at desktop, middle, and compact widths", async () => {
   const [styles, app, html] = await Promise.all([
-    readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
-    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
-    readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+    readSourceText(new URL("../public/styles.css", import.meta.url)),
+    readSourceText(new URL("../public/app.js", import.meta.url)),
+    readSourceText(new URL("../public/index.html", import.meta.url)),
   ]);
 
-  assert.match(styles, /html, body \{[\s\S]*overflow: hidden/u);
+  // ★ 必须用 [^}]*（块内）而不是 [\s\S]*（跨块）：styles.css 里有 14 处 overflow: hidden，
+  //   跨块匹配会把「别的块里的同名属性」当成这一块的 ⇒ 注释掉这一个也照样绿（U3 假绿的根因）。
+  assert.match(styles, /html, body \{[^}]*overflow: hidden/u);
   assert.match(styles, /\.workspace \{[^}]*height: 100%;[^}]*align-items: stretch;[^}]*overflow: hidden/u);
   assert.match(styles, /\.content \{[^}]*display: block;[^}]*height: 100%;[^}]*min-height: 0;[^}]*overflow-y: auto/u);
   assert.match(styles, /\.tabPage \{[^}]*height: max-content/u);

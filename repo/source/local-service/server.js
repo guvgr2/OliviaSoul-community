@@ -9,7 +9,7 @@ import { createCrashRoutes } from "./midi/crash-report.js";
 import { createGameLogRoutes } from "./midi/game-log.js";
 import { backupSqlite, createDataSafetyRoutes, prepareDatabaseBeforeOpen, stamp, startPeriodicBackup } from "./midi/data-safety.js";
 import { createGameStabilityRoutes } from "./midi/game-stability.js";
-import { createLogRoutes, logError } from "./midi/logs.js";
+import { createLogRoutes, flushLogs, logError, resumeLogPersistence, setUserDataDir, stopLogPersistence } from "./midi/logs.js";
 import { createCommunityRoutes } from "./midi/community-catalog.js";
 import { createTimeOfDayRoutes } from "./midi/time-of-day.js";
 // 歌单二维码：纯 JS 的 QR 编码库（MIT，无原生扩展、无子依赖）。
@@ -84,6 +84,7 @@ import {
   buildChatRequest,
   buildModelListRequest,
   DEFAULT_DEEPSEEK_PROFILE,
+  migratePlaintextSecrets,
   outputBudgetFor,
   probeNeedsReasoningBudget,
   readModelConfig,
@@ -99,6 +100,10 @@ const STATUS = Object.freeze({ PENDING: 1, AUDITING: 2, LLM_PROCESSING: 3, REPLI
 const JSON_HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
   "Cache-Control": "no-store",
+  // 2026-10-19 数据安全审计顺手补：禁止浏览器猜 MIME。没有这一条时，某些响应会被
+  // 当成 HTML/脚本去嗅探 —— 而本地服务的响应里有用户自己写的内容（曲名、信件相关文本），
+  // 嗅探成标记语言就等于多了一条不需要跨域许可的注入面。
+  "X-Content-Type-Options": "nosniff",
 };
 const REPLY_DELAY_SECONDS = 300;
 // 主动来信：多久看一次「她能不能先写一封」（由头判定很便宜，真正的生成只在判定通过时发生）。
@@ -210,19 +215,34 @@ function openExternalLink(url) {
   return target;
 }
 
+// ★ 2026-10-19 数据安全审计：**接口不再回显 API Key**。
+//   原来这里 `{ ...config.profiles.deepseek }` 会把已保存的 Key 原样发给调用方，前端直接塞进输入框。
+//   风险不是「跨域读」（管理接口已只认自身源），而是：Key 会出现在浏览器开发者工具、
+//   页面内存快照、以及任何能读到该页面 DOM/网络面板的东西里 —— 用户截个图就泄漏了。
+//   现在只回 `keyConfigured`（配没配），前端输入框留空 = 不修改（见 app.js 的 placeholder）。
+//   真要看 Key 的用户可以自己打开 model.env 所在目录（本机文件，权限归他）。
 function modelConfigPayload(config) {
+  const pick = profile => ({
+    provider: profile.provider,
+    baseUrl: profile.baseUrl,
+    model: profile.model,
+    authMode: profile.authMode,
+    keyConfigured: Boolean(profile.keyConfigured),
+    ...(profile.keyError ? { keyError: profile.keyError } : {}),
+  });
   return {
     activeProvider: config.activeProvider,
     profiles: {
-      deepseek: { ...config.profiles.deepseek },
-      local: { ...config.profiles.local },
+      deepseek: pick(config.profiles.deepseek),
+      local: pick(config.profiles.local),
     },
   };
 }
 
 function legacyDeepSeekPayload(profile) {
   return {
-    apiKey: profile.apiKey,
+    // 同上：不回显 Key。老前端读的是 apiKey 字段，给空串 + keyConfigured 让它退化成「未填」。
+    apiKey: "",
     keyConfigured: profile.keyConfigured,
     custom: profile.model !== DEFAULT_DEEPSEEK_PROFILE.model || profile.baseUrl !== DEFAULT_DEEPSEEK_PROFILE.baseUrl,
     model: profile.model,
@@ -397,6 +417,7 @@ function normalizeOfflineIdentity(value) {
 const ERR = {
   // ── 通用（请求体、来源、路由）
   COMMON_BODY_TOO_LARGE: "COMMON_BODY_TOO_LARGE",
+  COMMON_BODY_TIMEOUT: "COMMON_BODY_TIMEOUT",
   COMMON_BODY_INVALID_JSON: "COMMON_BODY_INVALID_JSON",
   COMMON_ORIGIN_UNTRUSTED: "COMMON_ORIGIN_UNTRUSTED",
   COMMON_ROUTE_NOT_FOUND: "COMMON_ROUTE_NOT_FOUND",
@@ -549,15 +570,30 @@ function httpError(status, message, code = -1) {
   return error;
 }
 
-// 写操作来源闸门。
-// /toy/* 为了游戏端补丁页面必须反射任意 Origin，/admin/* 又只要同源就放行 ——
-// 两者都挡不住「用户浏览器里打开的任意网页」：它可以直接对 http://127.0.0.1:27149
-// 发一个写请求（Cookie/IP 都自动带上），读不到响应也照样把数据写进本地库（CSRF）。
-// 所以写方法（POST/PUT/PATCH/DELETE）一律先过这道来源校验：
-//   1. 完全没有 Origin / Referer → 认为是本机脚本、node 测试、Electron 主进程这类非浏览器客户端，放行；
+// 请求来源闸门。
+//
+// 2026-10-19 数据安全审计（本轮新增）：
+//   旧实现**只挡写方法**（POST/PUT/PATCH/DELETE）。原因是当初只想到 CSRF（"读不到响应也能把数据写进去"）。
+//   但真正更贵的一条被漏了：**读也是泄露**。`/toy/*` 的 GET 会返回信件正文（/toy/letter/list、
+//   /toy/letter/detail）、用户信息（/toy/getUserInfo）、曲库与上传列表、诊断包与运行日志
+//   （后者含本机绝对路径），而 `corsHeaders()` 对 `/toy/*` 是**反射任意 Origin** 的。
+//   ⇒ 用户在任意网站打开一个页面，那段 JS 执行
+//        fetch('http://127.0.0.1:27149/toy/letter/list')
+//      浏览器就会把响应交给它（ACAO 反射回它的源，还带 Credentials）—— 信件全文可读。
+//      本机监听 127.0.0.1 挡不住这一条：请求是用户自己的浏览器发出去的。
+//   ⇒ 闸门从「只挡写」扩成「`/toy/` 与 `/admin/api/` 前缀下**所有方法**」。
+//   为什么可以放心扩：这个函数本来就挡写，而游戏端「加歌 / 发信」在生产里一直走它 ⇒
+//   判据（自身源 / 环回 / 游戏源 / 无来源）已经被真实使用验证过，不是新发明的规则。
+//   `/admin/` 的静态文件不过闸门：它们不含用户数据，而且 GET 导航的 Referer 来自外部站点时
+//   误伤代价很高（用户从文档里点链接进来会被 403）。
+//
+//   1. 完全没有 Origin / Referer → 认为是本机脚本、node 测试、Electron 主进程、curl 这类非浏览器客户端，
+//      以及 `<video src>` / `<img>` 这种**不带 Origin 的子资源请求**，放行；
 //   2. 有来源 → 只认服务自身源、环回地址、以及游戏页面自己的源；
 //   3. 其余（含 Origin: null，"null" 来源）一律拒绝。
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+// 需要过来源闸门的路径前缀（读 + 写）。
+const GUARDED_PATH_PREFIXES = ["/toy/", "/admin/api/"];
 // 单机模式下游戏前端跑在 https://olivia.local 这个虚拟源上（未打补丁的真机是
 // https://toy-<环境>.olivia.miyoushe.com），这两种源都要放行，否则游戏里加歌会失败。
 const GAME_ORIGIN_PATTERNS = [
@@ -590,6 +626,27 @@ function writeSourceAllowed(req) {
   return GAME_ORIGIN_PATTERNS.some(pattern => pattern.test(origin));
 }
 
+// 这个路径要不要过闸门。写方法**一律**过（保持旧行为，含 /admin/ 下的写），
+// 读方法只过「会吐用户数据」的两个前缀（见上面 GUARDED_PATH_PREFIXES 的注释）。
+function needsSourceGate(req, path) {
+  if (WRITE_METHODS.has(req.method)) return true;
+  return GUARDED_PATH_PREFIXES.some(prefix => path.startsWith(prefix));
+}
+
+// ★ 2026-10-19 数据安全审计：**Host 头必须指向本机**。
+//   为什么单靠 Origin 不够：DNS rebinding 攻击下，攻击者把自己的域名解析到 127.0.0.1，
+//   然后页面里 fetch('http://evil.example:27149/toy/letter/list') —— 这对浏览器是**同源**请求，
+//   于是 ① 不发 Origin 头（走"无来源 → 放行"那一支）、② 即使发了，
+//   `origin === 'http://' + req.headers.host` 也会因为两边都是 evil.example 而判为可信。
+//   ⇒ 上面那道来源闸门会被整条绕过。唯一的判别信号只剩 Host 本身。
+//   服务只监听 127.0.0.1，所以「Host 不是环回」必然不是正常客户端。
+function hostIsLoopback(value) {
+  const host = String(value ?? "").trim().toLowerCase();
+  if (!host) return false;
+  const name = host.replace(/:\d+$/u, "").replace(/^\[/u, "").replace(/\]$/u, "");
+  return name === "127.0.0.1" || name === "localhost" || name === "::1" || name === "::ffff:127.0.0.1";
+}
+
 function normalizeMaterial(material) {
   if (!material) return null;
   return {
@@ -598,16 +655,95 @@ function normalizeMaterial(material) {
   };
 }
 
+// 请求体上限。集中成常量，测试与变异都对着这个名字改。
+const MAX_JSON_BODY_BYTES = 2 * 1024 * 1024;
+// 收请求体的时限。2026-10-18 独立审查 P1-1 实测：不设时长时，半开请求会把
+// `for await (const chunk of req)` 永久挂住（15 秒观察窗内 0 响应、连接不断），
+// 挂 1000 个就白占约 30 MB + 750 个句柄，且不回收。
+const READ_BODY_TIMEOUT_MS = 30_000;
+// 排空请求体的上限：超限后最多再把这么多字节读完，再多就直接断开。
+// 理由：不排空的代价是「打死整条 keep-alive 连接」，而无限排空的代价是「让对端白占带宽」。
+// 2MB 上限之外的流量按 16MB 封顶 —— 正常客户端发一个超限的 JSON 不会超过这个量级。
+const DRAIN_BODY_MAX_BYTES = 16 * 1024 * 1024;
+
+/**
+ * 把同一个迭代器读到结束，让这条连接能被干净地复用。
+ * 只数字节、不留内容；超过 DRAIN_BODY_MAX_BYTES 就放弃（对端在灌垃圾，没必要陪着玩）。
+ */
+async function drainRequestBody(iterator) {
+  let drained = 0;
+  try {
+    for (;;) {
+      const step = await iterator.next();
+      if (step.done) return;
+      drained += step.value.length;
+      if (drained > DRAIN_BODY_MAX_BYTES) return;
+    }
+  } catch {
+    // 对端自己断了：连接本来就要结束，不需要再做什么
+  }
+}
+
 async function readJson(req) {
   const chunks = [];
   let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > 2 * 1024 * 1024) throw httpError(413, "请求体过大", ERR.COMMON_BODY_TOO_LARGE);
-    chunks.push(chunk);
+  let timedOut = false;
+  let timer = null;
+  const bodyTimeout = new Promise(resolvePromise => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      resolvePromise();
+    }, READ_BODY_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  const iterator = req[Symbol.asyncIterator]();
+  try {
+    for (;;) {
+      const step = await Promise.race([iterator.next(), bodyTimeout]);
+      if (timedOut) break;
+      if (step.done) break;
+      const chunk = step.value;
+      size += chunk.length;
+      if (size > MAX_JSON_BODY_BYTES) {
+        // ★ 2026-10-18 独立审查 P1-4：超限时**不能只 throw**。
+        // 响应发出去而请求体还没读完时，Node 会直接 RST 这条 socket，同一个 keep-alive
+        // 连接上的后续请求全部 ECONNRESET。实测：一个 2MB 请求后紧跟的正常 GET 100% 失败；
+        // 8 客户端混合流量下 1410 次请求里 83 次（5.9%）。
+        // ⚠️ 实测订正：`req.resume()` 在这里**救不了** —— `for await` 已经把流的 'data'
+        // 监听接管了，resume() 只是把流设成 flowing，没有消费者真去读，连接照样被判死
+        // （三种写法逐条实测：直接 return / throw / resume+throw，后续 GET 都是 ECONNRESET）。
+        // 唯一有效的是**继续从这个迭代器读到结束**：连接才会干净归还。
+        await drainRequestBody(iterator);
+        throw httpError(413, "请求体过大", ERR.COMMON_BODY_TOO_LARGE);
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+    // 提前退出（超限 / 超时 / JSON 解析失败）时收掉迭代器：不这么做，流的监听与剩余 data
+    // 事件会继续挂着，句柄收不回来（P1-1 的「+750 句柄」正是这么来的）。
+    try {
+      await iterator.return?.();
+    } catch {
+      // 流已经断了：不需要再做什么，异常没有意义
+    }
   }
+  if (timedOut && size === 0)
+    throw httpError(408, "接收请求体超时（连接没有把内容发完）", ERR.COMMON_BODY_TIMEOUT);
+  // 超时但已经收到一部分：按收到多少算多少 —— 慢网络下把已经完整送达的 JSON 判死不合适。
   const text = Buffer.concat(chunks).toString("utf8");
-  return text ? JSON.parse(text) : {};
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    // ★ 2026-10-19 修（复审 N2 🟠）：这里的 `SyntaxError` 既没有 `.status` 也没有 `.code`
+    //   ⇒ 落到 `error.status ?? 500`、响应里 `code = -1`，客户端只看到裸的解析器原文
+    //   （`Unexpected token 'o', "not json at all" is not valid JSON`）。
+    //   而 ERR 表里**早就备好了** `COMMON_BODY_INVALID_JSON`，全仓却从没有人发过它 ——
+    //   又是「号登记了、代码不发」。
+    //   ⇒ 固定回 400 + 登记号，且**不回吐解析器原文**（那等于把实现细节漏给客户端）。
+    throw httpError(400, "请求体不是合法 JSON", ERR.COMMON_BODY_INVALID_JSON);
+  }
 }
 
 function detectImport(content) {
@@ -1068,6 +1204,14 @@ export async function createOliviaService(options = {}) {
   installProcessSafetyNets();
   const root = resolve(options.root ?? workspaceRoot);
   const dataDir = resolve(options.dataDir ?? join(here, "data"));
+  // 每个服务实例启动时都要恢复落盘（上一个实例 close 时停过）—— 见 resumeLogPersistence 的注释。
+  resumeLogPersistence();
+  // ★ 2026-10-19 修（复审 E4-5 🟠）：`setUserDataDir()` 原来只在 route() 的请求段里调
+  //   （「运行日志」那条分支）⇒ 服务起来后、还没人打过 `/toy/listen-naming/logs*` 之前，
+  //   `logError`（uncaughtException / unhandledRejection / 检查更新失败）仍然落**安装树**。
+  //   日志路径必须在启动早期就定下来，不能等某个请求把它"顺带"设置上。
+  //   （route() 里那处保留：幂等，且能为将来换 dataDir 的场景兜底。）
+  setUserDataDir(dataDir);
   const mediaIndexRoot = resolve(options.mediaIndexRoot ?? options.midiDataRoot ?? join(dataDir, "media"));
   const appData = resolve(options.appData ?? join(process.env.APPDATA ?? dataDir, "OliviaSoul"));
   const updateDataRoot = resolve(options.updateDataRoot ?? join(dataDir, "updates"));
@@ -1091,6 +1235,14 @@ export async function createOliviaService(options = {}) {
     sourceRoots: Array.isArray(options.legacyWorkspaceRoots) ? options.legacyWorkspaceRoots : [],
     allowImport: options.allowLegacyModelConfigImport === true,
   });
+  // ★ 2026-10-19 数据安全审计：把老版本留下的**明文** API Key 原地加密成 dpapi-v1。
+  //   放在启动早期、且和搬家/导入一样「失败不阻断」：宁可这次没迁移（下次启动再试），
+  //   也不能因为本机 PowerShell/DPAPI 的问题让人打不开程序。
+  try {
+    await migratePlaintextSecrets({ root, log: message => console.log(String(message)) });
+  } catch (error) {
+    console.warn(`[model-config] 明文密钥迁移跳过：${error instanceof Error ? error.message : error}`);
+  }
   const databasePath = join(dataDir, "olivia-local.sqlite");
   // g14 数据安全：必须在打开连接之前处理两件事 ——
   //   ① 应用用户安排的"从备份恢复"（此时没有任何连接，文件才能安全替换）；
@@ -1305,14 +1457,66 @@ export async function createOliviaService(options = {}) {
   // 甚至几天前的 Release 信息，在发布页撤下或重传过安装包之后就会把一个死地址交给下载器。
   // 顺序不能反：刷新失败（限流 / 断网）要退回旧结果，绝不能反过来变成「检查成功、下载失败」。
   const UPDATE_RELEASE_REUSE_MS = Math.max(0, Number(options.updateReleaseReuseMs ?? 600_000) || 0);
+  // ★ 2026-10-18 独立审查 P1-2：**失败也要缓存**，而且要按原因分档 ——
+  //   403 / 限流：配额按出口 IP 每小时 60 次共享，越查越黑，必须退得久一点；
+  //   断网 / 超时：恢复可能很快，退得短一点。
+  // 不缓存失败时，界面上四个入口（检查更新按钮、切通道、更新面板每次创建、切页签刷新）每个都真打一次外网，
+  // 实测 64 并发 p50 2885ms；本机 api.github.com 回 403 时端点 p50 467ms，其余 13 个只读端点 1.0–1.7ms。
+  const UPDATE_FAILURE_TTL_RATE_LIMITED_MS = 5 * 60_000;
+  const UPDATE_FAILURE_TTL_MS = 60_000;
   let lastReleaseCheck = null; // { channel, at, release }
+  // 同一通道上「正在进行的那次查询」。不设它的话，N 个客户端 = N 次外网往返（突发放大）。
+  const releaseInflight = new Map();
+
+  const failureTtl = error =>
+    error?.code === "UPDATE_RATE_LIMITED" || error?.status === 403 || error?.status === 429
+      ? UPDATE_FAILURE_TTL_RATE_LIMITED_MS
+      : UPDATE_FAILURE_TTL_MS;
+
+  /**
+   * 同一通道的查询合并成一次：并发的后来者等同一个 Promise。
+   * 注意**必须**在 reject 后把它摘掉 —— 否则一次失败会把这条通道永久钉死在这份 rejected Promise 上。
+   */
+  function coalesceReleaseCheck(channel, run) {
+    const pending = releaseInflight.get(channel);
+    if (pending) return pending;
+    const task = (async () => run())().finally(() => {
+      if (releaseInflight.get(channel) === task) releaseInflight.delete(channel);
+    });
+    releaseInflight.set(channel, task);
+    return task;
+  }
+
+  /**
+   * 缓存条目现在是否还有效：成功结果用 20 秒去重，失败结果用它自己记下的退避时长。
+   * 写成函数而不是内联三元，是为了让「失败退避」这件事只有一个判定点（改一处即全改）。
+   */
+  const releaseCacheFresh = () =>
+    lastReleaseCheck ? Date.now() - lastReleaseCheck.at < (lastReleaseCheck.error ? lastReleaseCheck.ttl : UPDATE_CHECK_TTL_MS) : false;
 
   async function fetchLatestReleaseShared(signal, channel) {
-    if (lastReleaseCheck?.channel === channel && Date.now() - lastReleaseCheck.at < UPDATE_CHECK_TTL_MS)
-      return lastReleaseCheck.release;
-    const release = await fetchLatestRelease(signal, channel);
-    lastReleaseCheck = { channel, at: Date.now(), release };
-    return release;
+    const cached = lastReleaseCheck?.channel === channel && releaseCacheFresh() ? lastReleaseCheck : null;
+    if (cached) {
+      if (cached.error) throw cached.error;
+      return cached.release;
+    }
+    return coalesceReleaseCheck(channel, async () => {
+      // 排队等锁期间前一个查询可能已经写好了缓存（成功或失败两种都算），先复查一次再用。
+      const fresh = lastReleaseCheck?.channel === channel && releaseCacheFresh() ? lastReleaseCheck : null;
+      if (fresh) {
+        if (fresh.error) throw fresh.error;
+        return fresh.release;
+      }
+      try {
+        const release = await fetchLatestRelease(signal, channel);
+        lastReleaseCheck = { channel, at: Date.now(), release };
+        return release;
+      } catch (error) {
+        // 退避时长单独存：它比成功结果的 20 秒去重长得多，两者不能共用同一个 TTL。
+        lastReleaseCheck = { channel, at: Date.now(), error, ttl: failureTtl(error) };
+        throw error;
+      }
+    });
   }
 
   /** 强制重查（绕过复用）。给「下载发现地址/摘要和记录不符」用：这时只认发布页上的当下事实。 */
@@ -1328,7 +1532,7 @@ export async function createOliviaService(options = {}) {
     fetchRelease: async signal => {
       // 下载必须跟着用户选的通道走：beta 用户看到的是测试版，点「下载安装包」就得拿到那个测试版。
       const channel = updateChannel();
-      const cached = lastReleaseCheck?.channel === channel ? lastReleaseCheck : null;
+      const cached = lastReleaseCheck?.channel === channel && !lastReleaseCheck.error ? lastReleaseCheck : null;
       // 刻意不给复用设「过期就不复用」的硬门槛：用户「先检查、翻一眼说明再点下载」常常超过 20 秒，
       // 这时重新查一次就可能正好撞上限流（1.1.1 当天用户遇到的就是「检查成功、下载失败」）。
       // 所以超龄只是「先确认一次发布页」（真查，不再吃 fetchLatestReleaseShared 的 20 秒去重），
@@ -2719,7 +2923,35 @@ export async function createOliviaService(options = {}) {
     return lines.join("\n").trim();
   }
 
+  // ★ 2026-10-19 修（复审 N1 🔴）：并发写同一归档文件 → Windows `rename` EPERM → HTTP 500。
+  //   压测 84 条 5xx 全部来自这里。A/B 决定性复验：同一 2MB 目标「严格串行 200 次 = 0 次 EPERM」、
+  //   「8 路并发 200 次 = 3 次 EPERM」⇒ 是并发竞态，不是杀软/权限（杀软的话串行也会失败）。
+  //   ⇒ 按 person 串行：不同 person 写不同文件，不必互相等。
+  //
+  //   ⚠️ 为什么**不**用 `BEGIN IMMEDIATE` 把「INSERT → 重建」包起来（报告原本的建议）：
+  //     重建里有 await 文件 IO，事务跨越 await 会让出事件循环，而本文件另有 7 处
+  //     同步 `BEGIN IMMEDIATE` ⇒ 别的请求这时进来会直接撞
+  //     「cannot start a transaction within a transaction」。所以改用
+  //     「插入后重建失败 ⇒ 补偿删除」来保证「重建失败则信不落库」。
+  const archiveProjectionChains = new Map();
+  function withArchiveLock(key, task) {
+    const prev = archiveProjectionChains.get(key) ?? Promise.resolve();
+    // 前一个失败也要继续往下跑 —— 否则一次 EPERM 会把这条 person 永久钉死在 rejected 链条上
+    const run = prev.then(task, task);
+    const chained = run.then(() => {}, () => {});   // 链条本身吞错，避免未处理拒绝
+    archiveProjectionChains.set(key, chained);
+    chained.then(() => {
+      if (archiveProjectionChains.get(key) === chained) archiveProjectionChains.delete(key);
+    });
+    return run;
+  }
+
+  /** 对外入口：一律走锁（13 个调用点都不用改）。内部实现见下面那个 Unlocked。 */
   async function rebuildArchiveProjection(user = localUser) {
+    return withArchiveLock(user.person, () => rebuildArchiveProjectionUnlocked(user));
+  }
+
+  async function rebuildArchiveProjectionUnlocked(user = localUser) {
     const rememberedRows = memoryRows(user.id);
     const rows = archiveRows(user.id);
     const archivePath = join(archiveDir, `${assertPerson(user.person)}.md`);
@@ -3689,10 +3921,12 @@ export async function createOliviaService(options = {}) {
   function corsHeaders(req) {
     const origin = req.headers.origin;
     if (!origin) return {};
-    // 游戏端补丁页面是从游戏自己的源去调 /toy/* 的，所以那些路由必须反射来源。
-    // 但 /admin/* 是本机管理界面（同源加载），而 /admin/api/model 会把已保存的 API Key
-    // 回给调用方 —— 对管理接口反射任意 Origin，等于让用户浏览器里打开的任意网页
-    // 都能跨域读到这个 Key。所以管理接口只认自己的源。
+    // ★ 2026-10-19 数据安全审计：**反射 Origin 只在来源可信时才做**。
+    //   旧实现只对 /admin/ 做了同源限制，/toy/* 是无条件反射 —— 而 /toy/* 恰恰是吐信件正文、
+    //   用户信息、曲库、诊断包的地方。虽然上面 route() 的来源闸门已经把不可信来源 403 掉了，
+    //   但那是"请求层"的一道；这里补"响应头层"的第二道：即使将来某条路由绕过了闸门，
+    //   浏览器也不会把响应交给不可信的页。判据复用同一个函数，不另立一套标准。
+    if (!writeSourceAllowed(req)) return {};
     const pathname = String(req.url ?? "").split("?")[0];
     if (pathname.startsWith("/admin/")) {
       const selfOrigin = `http://${req.headers.host ?? ""}`;
@@ -3887,6 +4121,12 @@ export async function createOliviaService(options = {}) {
   async function route(req, res) {
     const url = new URL(req.url, "http://127.0.0.1");
     const path = url.pathname;
+    // ★ DNS rebinding 的唯一判别信号（见 hostIsLoopback 的注释）。放在最前面：
+    //   OPTIONS 与 /admin 静态文件同样要过 —— 绕过闸门的第一步往往就是先读界面。
+    if (!hostIsLoopback(req.headers.host)) {
+      console.error(`[source-guard] 拒绝非本机 Host 的请求：Host=${req.headers.host ?? "(空)"} ${req.method} ${path}`);
+      throw httpError(403, "请求来源不被信任", ERR.COMMON_ORIGIN_UNTRUSTED);
+    }
     if (path.startsWith("/toy/letter/"))
       console.log(`[letter-request] ${req.method} ${req.url}`);
     if (path === "/toy/addToPlaylist" || path === "/toy/delFromPlaylist" || path === "/toy/searchPlaylist")
@@ -3895,9 +4135,9 @@ export async function createOliviaService(options = {}) {
       res.writeHead(204, corsHeaders(req));
       return res.end();
     }
-    if (WRITE_METHODS.has(req.method) && !writeSourceAllowed(req)) {
+    if (needsSourceGate(req, path) && !writeSourceAllowed(req)) {
       const source = String(req.headers.origin ?? req.headers.referer ?? "");
-      console.error(`[write-guard] 拒绝来源 ${source || "(空)"} 的写请求：${req.method} ${path}`);
+      console.error(`[source-guard] 拒绝来源 ${source || "(空)"} 的请求：${req.method} ${path}`);
       throw httpError(403, "请求来源不被信任", ERR.COMMON_ORIGIN_UNTRUSTED);
     }
     if (path.startsWith("/toy/")) lastClientAt = nowSeconds();
@@ -3938,6 +4178,13 @@ export async function createOliviaService(options = {}) {
     if (lyricsResult !== null) return ok(req, res, lyricsResult, { "Cache-Control": "no-store" });
 
     // 「运行日志」：独立模块，路由 /toy/listen-naming/logs*
+    // ★ E4（2026-10-18 独立审查报告-1）：日志必须落到真实 dataDir，不能落到安装树。
+    //   审查实测安装树里已经躺了 633,887 B / 6671 行的 listen-naming.log。
+    // ★ 2026-10-19（复审 E4-5）：日志目录的设置已提到 createOliviaService 的**启动早期**
+    //   （dataDir 一算出来就设）。这里不再重复 —— 否则就又变成
+    //   「要等某个请求把路径顺带设置上」，中间那段 logError 照样落安装树。
+    //   （注意：本段注释刻意不写出那个函数调用的完整字面量 ——
+    //     契约测试是按字面量计数的，注释里出现一次会让它以为有第二处调用。）
     logRoutesPromise ??= createLogRoutes();
     {
       const routes = await logRoutesPromise;
@@ -3954,7 +4201,11 @@ export async function createOliviaService(options = {}) {
         // 与下面的「画面识别（时段）」同理：数据库路径必须跟着本次启动的 dataDir 走，
         // 否则显式指定的 dataDir（测试、便携版异位数据目录）会被模块级默认值顶掉 ——
         // 那时这一页会去开安装目录下的库，界面顶部报「读取失败：unable to open database file」。
-        listenNamingRoutesPromise = createListenNamingRoutes({ libraryRoot: currentRoot, databasePath });
+        // ★ 2026-10-19：必须显式传「用户数据根」。只传 dataDir 时，listen-naming 里
+        //   那个名叫 USER_DATA_DIR 的变量会被灌进「数据库目录」而非「用户数据根」，
+        //   于是搬家把库与备份写进 <UserData>\database\database\ 双层目录 ——
+        //   搬完服务仍打开单层那个库，用户看起来等于「没搬成 / 数据丢了」。
+        listenNamingRoutesPromise = createListenNamingRoutes({ libraryRoot: currentRoot, databasePath, dataDir, userDataDir: root });
         listenNamingRoutesRoot = currentRoot;
       }
     }
@@ -3979,7 +4230,9 @@ export async function createOliviaService(options = {}) {
 
 
 // 「依赖自检」：独立模块，路由 /toy/listen-naming/dependencies
-    dependencyCheckRoutesPromise ??= createDependencyCheckRoutes();
+    // ★ E4（2026-10-18 独立审查报告-1）：必须把真实 dataDir 传进去。
+    //   不传时模块会把「程序目录\UserData」当成数据目录，界面因此报出安装树里的假路径（实测 ENOENT）。
+    dependencyCheckRoutesPromise ??= createDependencyCheckRoutes({ dataDir, databasePath });
     {
       const routes = await dependencyCheckRoutesPromise;
       const result = await routes(req, new URL(req.url ?? "/", "http://127.0.0.1"));
@@ -3989,7 +4242,9 @@ export async function createOliviaService(options = {}) {
 
 
     // 「诊断包」：独立模块，路由 /toy/listen-naming/diagnostics/package*
-    diagnosticRoutesPromise ??= createDiagnosticRoutes();
+    // ★ 复审 E4-1：诊断包必须拿到真实 dataDir / 库路径 —— 否则诊断 zip 会指向安装树，
+    //   而 logs.js 修好之后真实日志已不在安装树里 ⇒ 包里的日志会变成空，比不修更误导。
+    diagnosticRoutesPromise ??= createDiagnosticRoutes({ dataDir, databasePath });
     {
       const routes = await diagnosticRoutesPromise;
       const result = await routes(req, new URL(req.url ?? "/", "http://127.0.0.1"));
@@ -4041,7 +4296,7 @@ export async function createOliviaService(options = {}) {
     // 「画面识别（时段）」：独立模块，路由前缀 /toy/listen-naming/*
     // 曲库根目录仍然由模块内部现读，但数据库路径必须跟着本次启动的 dataDir 走，
     // 否则显式指定的 dataDir（测试、便携版异位数据目录）会被模块级默认值顶掉。
-    timeOfDayRoutesPromise ??= createTimeOfDayRoutes({ databasePath });
+    timeOfDayRoutesPromise ??= createTimeOfDayRoutes({ databasePath, dataDir });
     {
       const routes = await timeOfDayRoutesPromise;
       const result = await routes(req, res, new URL(req.url ?? "/", "http://127.0.0.1"));
@@ -4051,7 +4306,7 @@ export async function createOliviaService(options = {}) {
 
 
     // 「社区曲目名单」：独立模块，路由前缀 /toy/listen-naming/*
-    communityCatalogRoutesPromise ??= createCommunityRoutes({ databasePath });
+    communityCatalogRoutesPromise ??= createCommunityRoutes({ databasePath, dataDir });
     {
       const routes = await communityCatalogRoutesPromise;
       const result = await routes(req, res, new URL(req.url ?? "/", "http://127.0.0.1"));
@@ -4467,7 +4722,16 @@ export async function createOliviaService(options = {}) {
         VALUES(?, ?, ?, ?, ?, ?, ?, ?)
       `).run(id, user.id, user.person, content, body.material ? JSON.stringify(normalizeMaterial(body.material)) : null, STATUS.PENDING, createdAt, createdAt + delay);
       bumpLetterRevision();
-      await rebuildArchiveProjection(user);
+      try {
+        await rebuildArchiveProjection(user);
+      } catch (error) {
+        // ★ 复审 N1：重建失败必须把刚插入的信撤掉 —— 否则就是「接口报 500，信却已经在库里」。
+        //   调用方见 500 会重发，而 letters 表**没有幂等键** ⇒ 重发会造出无法区分的重复信。
+        //   （这一句是「串行化」之外的第二道保险：锁挡住并发，补偿挡住万一还失败的那次。）
+        db.prepare("DELETE FROM letters WHERE id = ?").run(id);
+        bumpLetterRevision();
+        throw error;
+      }
       console.log(`[letter-send] id=${id} delay=${delay} memoryState=${getMemoryStatus(user.person).state} memoryJob=${memoryJobs.has(user.person)}`);
       triggerMemoryRefresh(user.person);
       wakeWorker();
@@ -5562,11 +5826,12 @@ export async function createOliviaService(options = {}) {
       if (!previous) throw httpError(400, "provider 只能是 deepseek 或 local", ERR.MODEL_PROVIDER_INVALID);
       let call;
       try {
+        // 2026-10-19 起接口不回显 Key ⇒ 前端提交空串是常态，必须解释成「沿用已保存的那个」。
         call = buildModelListRequest({
           provider,
           baseUrl: body.baseUrl ?? previous.baseUrl,
           authMode: body.authMode ?? previous.authMode,
-          apiKey: body.apiKey === undefined ? previous.apiKey : body.apiKey,
+          apiKey: String(body.apiKey ?? "").trim() || previous.apiKey,
         });
       } catch (error) {
         throw httpError(400, safeModelError(error), ERR.MODEL_CONFIG_INVALID);
@@ -5599,8 +5864,11 @@ export async function createOliviaService(options = {}) {
       const provider = String(body.provider ?? "").trim();
       const previous = current.profiles[provider];
       if (!previous) throw httpError(400, "provider 只能是 deepseek 或 local", ERR.MODEL_PROVIDER_INVALID);
+      // 2026-10-19 起接口不回显 Key ⇒ 输入框为空是常态，解释成「不修改」而不是「清空」。
+      // 真的要清空请用「重置」（/admin/api/model/reset）。空提交 + 已保存的 Key 解不开时，
+      // previous.apiKey 本来就是空 ⇒ 仍然会走「Bearer 需要填 Key」的报错，不会把配置写坏。
       const suppliedKey = body.apiKey === undefined ? previous.apiKey : String(body.apiKey).trim();
-      const apiKey = provider === "deepseek" && !suppliedKey ? previous.apiKey : suppliedKey;
+      const apiKey = suppliedKey || previous.apiKey;
       try {
         const saved = await queueModelConfigWrite(async () => {
           assertCurrentModelMutation(operationGeneration);
@@ -5666,7 +5934,8 @@ export async function createOliviaService(options = {}) {
         baseUrl: body.baseUrl ?? previous.baseUrl,
         model: body.model ?? previous.model,
         authMode: body.authMode ?? previous.authMode,
-        apiKey: body.apiKey === undefined ? previous.apiKey : String(body.apiKey).trim(),
+        // 同上：空串 = 沿用已保存的 Key（接口已不回显，输入框本来就是空的）
+        apiKey: String(body.apiKey ?? "").trim() || previous.apiKey,
       };
       let call;
       try {
@@ -6130,7 +6399,12 @@ export async function createOliviaService(options = {}) {
       // 这一层绝不能再抛：catch 回调里抛出的异常是未捕获异常，会直接结束进程。
       try {
         const status = error.status ?? 500;
-        const responseStatus = req.url.startsWith("/toy/") && !error.mediaResponse ? 200 : status;
+        // ★ E5（独立审查报告-1）：旧版把 /toy/* 的错误一律强制成 HTTP 200（只靠 envelope.code 区分），
+        //   导致前端 6 处 `if (!response.ok)`（song-editor.js / game-lyrics.js / lyrics-settings.js /
+        //   game-letter-export.js / listen-naming-tools.js）与游戏端注入侧的 `response.ok` 判断
+        //   （tools/patch-feapp-local.ps1 生成代码里 `ye=Ee.ok&&code===0` 等 4 处）永远不触发。
+        //   现在回真实状态码；envelope {code,message,data} 结构不变，只判 code 的调用方行为完全不变。
+        const responseStatus = status;
         if (req.url.startsWith("/toy/letter/"))
           console.error(`[letter-error] ${req.method} ${req.url} code=${error.code ?? -1} message=${
           error.message}`);
@@ -6145,6 +6419,11 @@ export async function createOliviaService(options = {}) {
           || req.url.includes("/favicon");
         if (!noisy) logError(`请求处理失败 ${req.method} ${req.url}`, error && error.stack ? error.stack : String(error));
         sendJson(req, res, { code: error.code ?? -1, message: error.message, data: null }, responseStatus);
+        // ★ 2026-10-18 独立审查 P1-4 的兜底：任何错误路径（不只 readJson）只要发响应时请求体
+        // 还没读完，Node 会 RST 掉这条 socket，同一 keep-alive 连接上的后续请求全部 ECONNRESET。
+        // readJson 自己已经排空过；这里兜住别的路径（路由在处理请求体之前就抛错，例如来源校验、
+        // 方法不匹配、路由不存在）—— 这些路径上流没被 for-await 接管过，resume() 够用。
+        if (!req.readableEnded && !req.destroyed) req.resume();
       } catch (secondary) {
         logError("错误处理自身失败", secondary && secondary.stack ? secondary.stack : String(secondary));
         try { if (!res.writableEnded) res.end(); } catch { /* 连接可能已经断了 */ }
@@ -6178,6 +6457,16 @@ export async function createOliviaService(options = {}) {
     readProactiveLetterSettings,
     saveProactiveLetterSettings,
     async listen(port = 27149, host = "127.0.0.1") {
+      // ★ 2026-10-18 独立审查 P1-1：三个超时一个都不能省，而且各有各的语义 ——
+      //   headersTimeout：只等请求头。默认 60 秒；半开连接最容易卡在这一步。
+      //   requestTimeout：只等请求体（头收完之后）。默认 300 秒，实测 300 秒里句柄就一直挂着。
+      //   keepAliveTimeout：keep-alive 连接空闲多久后关闭。**必须比 requestTimeout 小**
+      //     （Node 的硬性要求：否则收请求体时的计时会与空闲关闭打架）。
+      // 注意别把 requestTimeout 当成"整条连接的总时长"：它不管 keep-alive 空闲，也不管
+      // 响应写完之后的等待，所以不会把正常的长连接掐掉。
+      server.headersTimeout = 60_000;
+      server.requestTimeout = 30_000;
+      server.keepAliveTimeout = 5_000;
       await new Promise((resolvePromise, reject) => {
         server.once("error", reject);
         server.listen(port, host, resolvePromise);
@@ -6248,6 +6537,11 @@ export async function createOliviaService(options = {}) {
       // 周期备份不会再往数据目录里写东西（否则调用方紧接着清理/搬动目录会撞上 .tmp）。
       if (periodicBackup) await periodicBackup.stop();
       periodicBackup = null;
+      // ★ 2026-10-19：日志写入是 fire-and-forget，close() 返回后它可能还在往 dataDir
+      //   mkdir/appendFile ⇒ 调用方紧接着删除数据目录会撞 ENOTEMPTY（Windows 尤其明显）。
+      //   与上面等周期备份收尾同理，这里也要等日志落完。
+      await flushLogs();
+      stopLogPersistence();   // 之后来的 log() 只进内存，不再碰那个目录
       midiLibraryWatcher?.close();
       midiLibraryWatcher = null;
       for (const job of memoryJobs.values()) {

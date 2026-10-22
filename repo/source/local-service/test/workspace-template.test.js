@@ -5,10 +5,11 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { prepareWorkspaceIncrementally } from "../desktop/workspace-template.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 test("工作区模板未变化时跳过复制且始终保留用户信件", async t => {
   const base = await mkdtemp(join(tmpdir(), "olivia-workspace-template-"));
-  t.after(() => rm(base, { recursive: true, force: true }));
+  t.after(() => cleanupDir(base));
   const template = join(base, "template");
   const root = join(base, "UserData");
   const settings = join(root, "settings");

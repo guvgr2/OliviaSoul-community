@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { buildPlayerUploadManifest } from "../midi/catalog-manifest.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 test("player upload manifest leaves unverified positional catalog entries unnamed", async () => {
   const root = await mkdtemp(join(tmpdir(), "olivia-player-library-"));
@@ -41,7 +42,7 @@ test("player upload manifest leaves unverified positional catalog entries unname
     });
     assert.match(manifest.warnings.join("\n"), /1 条曲目尚未建立已验证的目录绑定/u);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });
 
@@ -80,6 +81,6 @@ test("player upload manifest uses explicit share-code bindings instead of direct
     assert.equal(manifest.namedCount, 2);
     assert.equal(manifest.fallbackCount, 0);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   }
 });

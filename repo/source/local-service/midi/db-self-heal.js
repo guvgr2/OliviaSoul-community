@@ -20,14 +20,47 @@
 //   3. 只碰 -wal / -shm 这两个可重建的伴随文件，**永不改动主库**；
 //   4. 主库自身也坏了 → 原样抛出，绝不擅自清理。
 import { DatabaseSync } from "node:sqlite";
-import { copyFileSync, existsSync, mkdtempSync, renameSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 const SQLITE_CORRUPTION = /malformed|not a database|unsupported file format|file is encrypted/iu;
 
+// ★ E2（2026-10-18 独立审查报告-1）：`.broken-*` 留档**必须有上限**。
+// 实测：真实库目录 16 天攒了 224 个 .broken-* 文件（-shm 112 + -wal 112，全是 0 字节）——
+// 每次启动判定一次陈旧就留一份档，只增不减。留档本身是为了「万一要查」，但没人会翻 112 份 0 字节文件；
+// 留最近几轮足够定位，再往后就是纯垃圾。
+// 保留份数按「文件」而不是「轮次」算：一轮会同时留 -shm 与 -wal 两份。
+const BROKEN_KEEP_FILES = 12;
+
 function sidecarPaths(databasePath) {
   return [`${databasePath}-wal`, `${databasePath}-shm`];
+}
+
+/**
+ * 清掉过旧的 `.broken-*` 留档，只保留按名字（含 ISO 时间戳，字典序即时间序）最新的若干份。
+ * 出错一律吞掉：这是清理，不是业务逻辑，绝不能因为它启动失败。
+ */
+function pruneBrokenArchives(databasePath, log) {
+  try {
+    // ⚠️ 必须用 path.basename/dirname，不能手写 `lastIndexOf("/")`：
+    //    Windows 路径用反斜杠，`lastIndexOf("/")` 会返回 -1（曾经的真实 bug）——
+    //    base 变成整条路径、startsWith 永不命中，清理**静默失效**且抛不出任何错。
+    const base = basename(databasePath);
+    const directory = dirname(databasePath);
+    const stale = readdirSync(directory)
+      .filter(name => name.startsWith(`${base}-`) && name.includes(".broken-"))
+      .sort();
+    const excess = stale.length - BROKEN_KEEP_FILES;
+    if (excess <= 0) return 0;
+    for (const name of stale.slice(0, excess)) {
+      try { rmSync(join(directory, name), { force: true }); } catch { /* 单个删不掉不影响其它 */ }
+    }
+    log(`[db-self-heal] 清理了 ${excess} 份过旧的伴随文件留档（保留最近 ${BROKEN_KEEP_FILES} 份）`);
+    return excess;
+  } catch {
+    return 0;
+  }
 }
 
 /** 把伴随文件挪到 .broken-<时间戳> 留档；挪不动就删；都不行返回 null。 */
@@ -70,6 +103,7 @@ export function cleanStaleSidecars(databasePath, { log = () => {} } = {}) {
     }
     if (moved.length) {
       log(`[db-self-heal] 发现陈旧的伴随文件（-shm 在、-wal 为空），已移开：${moved.join("、")}`);
+      pruneBrokenArchives(databasePath, log);
     }
     return { cleaned: moved.length > 0, moved };
   } catch (error) {
@@ -93,7 +127,14 @@ export function mainDatabaseLooksIntact(databasePath) {
     return false;
   } finally {
     try { db?.close(); } catch { /* 忽略 */ }
-    rmSync(sandbox, { recursive: true, force: true });
+    // ★ B5 续（2026-10-19 第三轮审查）：这里原来是裸的 `rmSync(sandbox, { recursive: true, force: true })`。
+    //   SQLite 关闭连接后，-wal/-shm 的内核句柄还会延迟释放 10~24ms（Windows pending-delete：
+    //   unlink 成功、目录项在 readdir 里已消失，但 rmdir 报 ENOTEMPTY）。而这一句在 finally 里、
+    //   又没有 try/catch ⇒ `mainDatabaseLooksIntact()` 这个**契约上只返回布尔值**的函数会直接抛异常，
+    //   上层把异常当成「探测失败」，测试里表现为偶发 ENOTEMPTY（实测 18 轮 2 次）。
+    //   修法两条缺一不可：① 打开 Node 自带的重试（`maxRetries` 默认 0 = 不重试，等于没写）；
+    //   ② 吞掉残留错误 —— 一个临时目录清不干净，绝不能影响「主库是否完好」这个判定。
+    try { rmSync(sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); } catch { /* 残留不影响判定 */ }
   }
 }
 
@@ -151,6 +192,7 @@ export function openDatabaseHealing(databasePath, open, { log = () => {}, verify
       if (parked) moved.push(parked);
     }
     log(`[db-self-heal] 残留的 WAL/SHM 与主库不匹配，已移开：${moved.join("、") || "（目录里没有 sidecar）"}`);
+    if (moved.length) pruneBrokenArchives(databasePath, log);
 
     // 重开后同样真读验证；仍然失败就抛给上层，不再掩盖
     return { db: openAndVerify(), healed: true, moved };

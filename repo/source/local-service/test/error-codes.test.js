@@ -182,3 +182,17 @@ test("⑥ 响应体把号带回给调用方（程序识别的通道必须是通�
   assert.ok(keys.length >= 100, `ERR 表解析出 ${keys.length} 个键，少于 100 —— 解析可能失败了`);
   assert.ok(keys.every(k => /^[A-Z][A-Z0-9_]*$/u.test(k)), "错误号必须是大写下划线形式（便于日志检索）");
 });
+
+test("⑦ E5：/toy/* 的错误回真实状态码，不再强制 HTTP 200（2026-10-18）", () => {
+  // 旧实现（已删）：const responseStatus = req.url.startsWith("/toy/") && !error.mediaResponse ? 200 : status;
+  // 强制 200 会让前端 6 处 `if (!response.ok)`（song-editor.js / game-lyrics.js / lyrics-settings.js /
+  // game-letter-export.js / listen-naming-tools.js）与游戏端注入侧的 response.ok 判断永不触发。
+  assert.doesNotMatch(src, /startsWith\("\/toy\/"\)[^\n]*\? 200/u,
+    "统一 catch 里不得再按 /toy/ 前缀把错误强制成 HTTP 200");
+  // 响应状态码必须来自真实 status（mediaResponse 的媒体流路径例外，仍由各自分支处理）
+  assert.match(src, /const responseStatus = status;/u,
+    "错误响应必须回真实状态码（responseStatus = status）");
+  // envelope 结构不变：调用方只判 code 的行为完全不受影响
+  assert.match(src, /code: error\.code \?\? -1, message: error\.message, data: null/u,
+    "envelope {code,message,data} 结构必须保持不变");
+});

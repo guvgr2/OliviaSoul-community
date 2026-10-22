@@ -4,10 +4,10 @@
 // 行为改为：首次进入只载入不播放；用户主动操作（播放器上的播放键、空格、重播/换段/跳过/上一首）
 // 之后才继续自动播放。本测试锁住这个约定，防止以后被无意改回去。
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readSourceText } from "./lib/read-source.mjs";
 
-const source = await readFile(new URL("../public/listen-naming.js", import.meta.url), "utf8");
+const source = await readSourceText(new URL("../public/listen-naming.js", import.meta.url));
 
 test("试听首次进入不自动播放：存在主动开始开关", () => {
   assert.match(source, /let userStartedPlayback = false;/u, "缺少 userStartedPlayback 开关");

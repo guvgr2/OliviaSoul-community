@@ -11,10 +11,12 @@ import {
   setActiveProvider,
   writeModelProfile,
 } from "../model-config.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { powerShellInvokeCount, resetSecretCaches } from "../midi/secure-secret.js";
 
 test("模型档案从旧 DeepSeek 配置迁移且两套配置互不覆盖", async t => {
   const root = await mkdtemp(join(tmpdir(), "olivia-model-profiles-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const secrets = join(root, ".cursor", "secrets");
   await mkdir(secrets, { recursive: true });
   const legacyPath = join(secrets, "deepseek.env");
@@ -154,7 +156,7 @@ test("智谱 GLM 用自己那套推理参数，且不会被要求关闭思考", 
 
 test("公网明文 http 被拒绝（否则 API Key 明文过网），本机与局域网仍允许", async t => {
   const root = await mkdtemp(join(tmpdir(), "olivia-model-http-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const save = baseUrl => writeModelProfile({
     root,
     provider: "local",
@@ -184,7 +186,7 @@ test("公网明文 http 被拒绝（否则 API Key 明文过网），本机与�
 
 test("模型档案拒绝非法 provider 地址换行和缺失的 Bearer 密钥", async t => {
   const root = await mkdtemp(join(tmpdir(), "olivia-model-invalid-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
 
   await assert.rejects(
     setActiveProvider({ root, provider: "automatic" }),
@@ -217,7 +219,7 @@ test("模型档案拒绝非法 provider 地址换行和缺失的 Bearer 密钥",
 
 test("重置模型配置只删除两个模型文件并返回中性状态", async t => {
   const root = await mkdtemp(join(tmpdir(), "olivia-model-reset-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => cleanupDir(root));
   const secrets = join(root, ".cursor", "secrets");
   await mkdir(join(root, "database"), { recursive: true });
   await mkdir(join(root, "信件往来"), { recursive: true });
@@ -241,4 +243,104 @@ test("重置模型配置只删除两个模型文件并返回中性状态", async
   assert.equal(reset.profiles.deepseek.keyConfigured, false);
   assert.equal(reset.profiles.local.baseUrl, "http://127.0.0.1:8000/v1");
   assert.equal(reset.profiles.local.model, "local-model");
+});
+
+// ── 2026-10-19 数据安全审计：API Key 落盘加密（Windows DPAPI）────────────────────
+// 守三件事：① 磁盘上没有明文密钥；② 读回来还能用；③ 老版本的明文会被原地加密；
+// 另外补一条「解不开时不能把密文当 Key 用」—— 换 Windows 账户 / 换电脑就是这个场景。
+
+test("写入 Key 后磁盘上没有明文，读回来仍然可用（dpapi-v1）", async t => {
+  const root = await mkdtemp(join(tmpdir(), "olivia-model-sealed-"));
+  t.after(() => cleanupDir(root));
+  const plain = "olivia-plain-secret-1234";
+
+  await writeModelProfile({
+    root,
+    provider: "deepseek",
+    profile: { baseUrl: "https://api.deepseek.com", model: "deepseek-flash", authMode: "bearer", apiKey: plain },
+  });
+
+  const text = await readFile(join(root, ".cursor", "secrets", "model.env"), "utf8");
+  assert.equal(text.includes(plain), false, "磁盘上不能出现明文 Key");
+  assert.match(text, /MODEL_DEEPSEEK_API_KEY=dpapi-v1:[A-Za-z0-9+/=]+/u, "落盘形态必须是带版本前缀的密文");
+
+  const back = await readModelConfig({ root });
+  assert.equal(back.profiles.deepseek.apiKey, plain, "读回来必须还是原来的明文（否则请求头就是密文）");
+  assert.equal(back.profiles.deepseek.keyConfigured, true);
+
+  // 内存里拿明文继续能构造请求头 —— 加密只影响落盘，不影响调用链
+  const call = buildChatRequest(back.profiles.deepseek, { messages: [] });
+  assert.equal(call.headers.Authorization, `Bearer ${plain}`);
+});
+
+test("老版本留下的明文 Key 会被原地加密，且迁移幂等", async t => {
+  const root = await mkdtemp(join(tmpdir(), "olivia-model-migrate-"));
+  t.after(() => cleanupDir(root));
+  const secrets = join(root, ".cursor", "secrets");
+  await mkdir(secrets, { recursive: true });
+  const plain = "olivia-legacy-plain-9999";
+  await writeFile(join(secrets, "model.env"), [
+    "MODEL_ACTIVE_PROVIDER=deepseek",
+    "MODEL_DEEPSEEK_BASE=https://api.deepseek.com",
+    "MODEL_DEEPSEEK_MODEL=deepseek-flash",
+    "MODEL_DEEPSEEK_AUTH_MODE=bearer",
+    `MODEL_DEEPSEEK_API_KEY=${plain}`,
+    "",
+  ].join("\n"), "utf8");
+
+  const modelModule = await import("../model-config.js");
+  assert.equal(typeof modelModule.migratePlaintextSecrets, "function");
+  const first = await modelModule.migratePlaintextSecrets({ root });
+  assert.equal(first.migrated, true, "发现明文就该迁移");
+
+  const text = await readFile(join(secrets, "model.env"), "utf8");
+  assert.equal(text.includes(plain), false, "迁移后磁盘上不能留明文");
+  assert.match(text, /MODEL_DEEPSEEK_API_KEY=dpapi-v1:/u);
+  assert.equal((await readModelConfig({ root })).profiles.deepseek.apiKey, plain, "迁移后要还能读出来");
+
+  const second = await modelModule.migratePlaintextSecrets({ root });
+  assert.equal(second.migrated, false, "已经全是密文时不该重复写盘");
+});
+
+test("密文解不开时按「未配置」处理，绝不把密文当 Key 发出去", async t => {
+  const root = await mkdtemp(join(tmpdir(), "olivia-model-badseal-"));
+  t.after(() => cleanupDir(root));
+  const secrets = join(root, ".cursor", "secrets");
+  await mkdir(secrets, { recursive: true });
+  // 合法 base64、但不是本机本账户能解的 DPAPI 数据（等价于把 UserData 拷到别的电脑）
+  const alien = `dpapi-v1:${Buffer.from("not-a-real-dpapi-blob").toString("base64")}`;
+  await writeFile(join(secrets, "model.env"), [
+    "MODEL_ACTIVE_PROVIDER=deepseek",
+    "MODEL_DEEPSEEK_BASE=https://api.deepseek.com",
+    "MODEL_DEEPSEEK_MODEL=deepseek-flash",
+    "MODEL_DEEPSEEK_AUTH_MODE=bearer",
+    `MODEL_DEEPSEEK_API_KEY=${alien}`,
+    "",
+  ].join("\n"), "utf8");
+
+  const config = await readModelConfig({ root });
+  assert.equal(config.profiles.deepseek.apiKey, "", "解不开就当没有，不能把密文当 Key");
+  assert.equal(config.profiles.deepseek.keyConfigured, false);
+  assert.ok(config.profiles.deepseek.keyError, "要把原因带给界面，让用户知道该重填");
+});
+
+test("保存一次的开销有上限（别再往 persist 里塞子进程）", async t => {
+  // ★ 2026-10-19 第四轮审查 N5：实测「保存 ~1.2s / 保存后首次读 ~0.56s」是可接受的，
+  //   但**没有测试守着这个下限** —— 将来再往 persist() 里多加一次子进程没人会发现。
+  //   判据两道：耗时上限（松，8s，抗门禁并发抖动）+ 起子进程个数（紧，与负载无关）。
+  const root = await mkdtemp(join(tmpdir(), "olivia-model-persist-cost-"));
+  t.after(() => cleanupDir(root));
+  resetSecretCaches();
+  const started = Date.now();
+  await writeModelProfile({
+    root,
+    provider: "deepseek",
+    profile: { baseUrl: "https://api.example/v1", model: "cost-guard-model", authMode: "bearer", apiKey: "olivia-persist-cost-guard" },
+  });
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed < 8000, `保存耗时 ${elapsed}ms（基线约 1.2s）：超过 8s 说明有人往 persist 里又加了子进程`);
+  assert.ok(
+    powerShellInvokeCount() <= 2,
+    `一次保存起了 ${powerShellInvokeCount()} 个子进程（基线 1：把 Key 加密成密文）`,
+  );
 });

@@ -9,6 +9,7 @@
 // 另钉一个安全属性：改小保留份数只记设置、不删文件，必须用户点「确认清理」才真删。
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { readSourceTextSync } from "./lib/read-source.mjs";
 import { mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -28,9 +29,10 @@ import {
   parsePeriodicBackupInput,
   readPeriodicBackupConfig,
 } from "../midi/data-safety.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const safetySource = readFileSync(join(here, "..", "midi", "data-safety.js"), "utf8");
+const safetySource = readSourceTextSync(join(here, "..", "midi", "data-safety.js"));
 const DAY = 24 * 60 * 60 * 1000;
 
 /** 建一个真库（arrangeRestore 会做完整性检查，所以备份必须是真 sqlite）。 */
@@ -44,7 +46,7 @@ function makeDatabase(file) {
 
 async function makeDir(t, label) {
   const dir = await mkdtemp(join(tmpdir(), `olivia-delete-${label}-`));
-  t.after(async () => { await rm(dir, { recursive: true, force: true }).catch(() => {}); });
+  t.after(async () => { await cleanupDir(dir).catch(() => {}); });
   return dir;
 }
 

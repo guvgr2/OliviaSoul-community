@@ -1,10 +1,11 @@
 // faststart 缓存的行为测试：核心是「没有缓存时不阻塞播放」和「任何失败都不影响播放」
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFaststartCache } from "../midi/faststart-cache.js";
+import { cleanupDirSync } from "./lib/cleanup.mjs";
 
 const HASH = "a".repeat(64);
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -40,7 +41,7 @@ test("没有缓存时先返回 null（不阻塞这次播放），随后后台生
     const target = join(f.root, ".faststart-cache", HASH, "DEFAULT.mp4");
     assert.ok(existsSync(target), "生成后缓存应就位");
     assert.equal(f.cache.prefer(f.video, HASH, "DEFAULT"), target, "第二次应直接命中缓存");
-  } finally { f.cache.close(); rmSync(f.dir, { recursive: true, force: true }); }
+  } finally { f.cache.close(); cleanupDirSync(f.dir); }
 });
 
 test("缓存只落在应用数据目录，不写进媒体所在目录", async () => {
@@ -50,7 +51,7 @@ test("缓存只落在应用数据目录，不写进媒体所在目录", async ()
     await wait(60);
     assert.ok(existsSync(join(f.root, ".faststart-cache")), "缓存应在应用数据根下");
     assert.equal(existsSync(join(f.dir, ".faststart-cache")), false, "媒体目录不应被写入");
-  } finally { f.cache.close(); rmSync(f.dir, { recursive: true, force: true }); }
+  } finally { f.cache.close(); cleanupDirSync(f.dir); }
 });
 
 test("没有 ffmpeg 时优雅降级：始终返回 null，也不起进程", async () => {
@@ -59,7 +60,7 @@ test("没有 ffmpeg 时优雅降级：始终返回 null，也不起进程", asyn
     assert.equal(f.cache.prefer(f.video, HASH, "DEFAULT"), null);
     await wait(40);
     assert.equal(f.calls.length, 0);
-  } finally { f.cache.close(); rmSync(f.dir, { recursive: true, force: true }); }
+  } finally { f.cache.close(); cleanupDirSync(f.dir); }
 });
 
 test("非 MP4 与无效内容哈希都直接跳过，不无谓起 ffmpeg", async () => {
@@ -71,7 +72,7 @@ test("非 MP4 与无效内容哈希都直接跳过，不无谓起 ffmpeg", async
     assert.equal(f.cache.prefer(f.video, "not-a-hash", "DEFAULT"), null);
     await wait(40);
     assert.equal(f.calls.length, 0);
-  } finally { f.cache.close(); rmSync(f.dir, { recursive: true, force: true }); }
+  } finally { f.cache.close(); cleanupDirSync(f.dir); }
 });
 
 test("生成失败绝不影响播放：不抛错，仍返回 null", async () => {
@@ -81,7 +82,7 @@ test("生成失败绝不影响播放：不抛错，仍返回 null", async () => 
     await wait(60);
     assert.equal(f.cache.prefer(f.video, HASH, "DEFAULT"), null, "失败后仍应安全降级");
     assert.equal(existsSync(join(f.root, ".faststart-cache", HASH, "DEFAULT.mp4")), false, "不该留下半成品");
-  } finally { f.cache.close(); rmSync(f.dir, { recursive: true, force: true }); }
+  } finally { f.cache.close(); cleanupDirSync(f.dir); }
 });
 
 test("同一目标不重复排队", async () => {
@@ -92,5 +93,5 @@ test("同一目标不重复排队", async () => {
     f.cache.prefer(f.video, HASH, "DEFAULT");
     await wait(80);
     assert.equal(f.calls.length, 1, "同一目标只能生成一次");
-  } finally { f.cache.close(); rmSync(f.dir, { recursive: true, force: true }); }
+  } finally { f.cache.close(); cleanupDirSync(f.dir); }
 });

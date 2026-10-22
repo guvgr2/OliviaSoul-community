@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
+import { readSourceText } from "./lib/read-source.mjs";
 import { createUpdateDownloadUI } from "../public/update-download-ui.js";
 import { createTabNotices } from "../public/tab-notices.js";
 import { createPatchLossNotice } from "../public/patch-loss-notice.js";
 
-const app = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+const app = await readSourceText(new URL("../public/app.js", import.meta.url));
 const mounted = { clientSelected: true, clientFound: true, clientExe: "fixture.exe", mounted: true,
   feappMounted: true, webplayerFound: true, webplayerMounted: true, port: 28111, servicePort: 28111 };
 const stopped = { ...mounted, mounted: false, feappMounted: false, webplayerMounted: false };

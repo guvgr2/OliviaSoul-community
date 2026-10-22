@@ -6,11 +6,11 @@
 // 修复后按服务端下发的 timeOfDay 把快照 URL 改写到当前时段，段号判断不了就交回官方 stop。
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import { readSourceText } from "./lib/read-source.mjs";
 
 const here = new URL(".", import.meta.url);
-const readTool = name => readFile(new URL(`../../tools/${name}`, here), "utf8");
+const readTool = name => readSourceText(new URL(`../../tools/${name}`, here));
 
 async function loadHelperProbe() {
   const source = await readTool("webplayer-pause.js");
@@ -133,7 +133,7 @@ test("恢复默认画面：有当前时段就换段重播，拿不准才走官�
 });
 
 test("服务端：GET /toy/player-command 下发 timeOfDay", async () => {
-  const server = await readFile(new URL("../server.js", here), "utf8");
+  const server = await readSourceText(new URL("../server.js", here));
   assert.match(server,
     /path === "\/toy\/player-command"[\s\S]{0,600}timeOfDay: playbackTimeOfDay\(options\.playbackNow\?\.\(\) \?\? new Date\(\)\)/u,
     "时段必须由服务端按 playback-clock.js 计算后下发，前端不另写一套边界");

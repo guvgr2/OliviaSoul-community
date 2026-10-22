@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync, readdirSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { cleanupFileSync } from "./lib/cleanup.mjs";
 
 // S1「渲染严格化」的护栏（2026-10-16，两端写信引擎同步方案 §7 验收 2）。
 //
@@ -81,7 +82,7 @@ function runPowerShell(body) {
     });
     return { status: r.status, stdout: (r.stdout ?? "").trim(), stderr: (r.stderr ?? "").trim(), error: r.error };
   } finally {
-    rmSync(tmp, { force: true });
+    cleanupFileSync(tmp);
   }
 }
 

@@ -128,13 +128,13 @@
 
   "consumers": [
     {
-      "who": "E:/linli-letters（OliviaSoul-community 独立版）",
+      "who": "OliviaSoul-community 独立版（姊妹项目）",
       "where": "app/behavior-params.mjs + app/core.mjs 的 baseInspect / inspectReply / inspectProactive",
       "state": "已接入（施工单 T8，2026-10-16 完成）",
       "note": "姊妹侧新增 app/behavior-params.mjs 只读本 JSON（无回退值），core.mjs 的 inspectReply / inspectProactive 阈值改为从它取；同时实现了 P2 的双条件（汉字数 < minChars 且 段落数 < 2 才拒），并在 minCharsWhenMultiParagraph 缺失时退回 minChars 而不是 0。本文件的数值最初就是从它侧的硬编码常量抄录（FORBIDDEN_REPLY 12 项 / inspectReply 240,10,8,7 / inspectProactive 200,20,3,5），接入后不再有手抄副本。"
     },
     {
-      "who": "E:/olivia-soul-community-kit（OliviaSoul）",
+      "who": "OliviaSoul（本仓库）",
       "where": "repo/source/local-service/test/harness-behavior-params.test.js",
       "state": "已接入（仅一致性断言）",
       "note": "断言本文件与真源规范文本（00-栏目.md:9 / 写法.md:78-80 / 主动来信.md 尺寸节）的目标值一致，并断言两处手抄副本（若日后出现）与本文件一致 —— 防止「规范改了、参数没改」的漂移。生产链路的机械自检（4 步链末尾的字数/段数兜底）尚未接，见 pending"

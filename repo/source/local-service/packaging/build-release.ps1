@@ -403,7 +403,15 @@ foreach ($name in @('ChineseSimplified.isl', 'English.isl', 'INNO-LICENSE.txt', 
 }
 $nodeModules = Join-Path $project "node_modules"
 if (Test-Path -LiteralPath $nodeModules) {
+    # 2026-10-18（审查报告-1 E3 处置）：本机为跑 UI 测试在 node_modules 里放了 playwright 手写包装与
+    # playwright-core 目录联接（开发/测试依赖，package.json 未声明）。它们绝不能进发布产物 ——
+    # 隐私门禁 package-safety.ps1 会拒绝包里的 playwright-core（真实踩过：coreBundle.js 被 [PRIVACY_CONTENT] 拒）。
+    # 排除式清单按「测试专用前缀」收敛为两个已知目录；新增 devDependency 时必须在此同步。
     Copy-Item -LiteralPath $nodeModules -Destination (Join-Path $stage "app\node_modules") -Recurse -Force
+    foreach ($devName in @('playwright', 'playwright-core')) {
+        $leaked = Join-Path $stage ("app\node_modules\" + $devName)
+        if (Test-Path -LiteralPath $leaked) { Remove-Item -LiteralPath $leaked -Recurse -Force }
+    }
 }
 Copy-Item -LiteralPath (Join-Path $project "public") -Destination (Join-Path $stage "app\public") -Recurse -Force
 Ensure-Directory (Join-Path $stage "app\midi")
@@ -415,7 +423,10 @@ $midiModules = @(
     "listen-naming.js", "time-of-day.js", "community-catalog.js", "fingerprint.js", "dependency-check.js", "logs.js",
     # --- g13 新增 ---
     "startup-report.js", "diagnostic-package.js", "crash-report.js", "game-log.js", "data-safety.js", "sqlite-snapshot.js", "game-stability.js",
-    "system-probe.js", "db-self-heal.js", "faststart-cache.js"
+    "system-probe.js", "db-self-heal.js", "faststart-cache.js",
+    # --- 2026-10-19 数据安全审计：API Key 落盘加密（DPAPI）---
+    # 漏了它 model-config.js 会 import 不到，打包出来的程序一打开「AI 模型」页就崩。
+    "secure-secret.js"
 )
 foreach ($name in $midiModules) {
     Copy-Item -LiteralPath (Join-Path (Join-Path $project "midi") $name) -Destination (Join-Path $stage "app\midi") -Force
@@ -595,6 +606,13 @@ if (-not $InstallerOnly) {
     Copy-VerifiedPackageFile -Source $auditedPortable -Destination (Join-Path $releaseCandidateDirectory "OliviaSoul-$version-Portable.zip") -ExpectedSha256 $portableReceipt.ArchiveSha256
 }
 Copy-VerifiedPackageFile -Source $setupCandidate -Destination (Join-Path $releaseCandidateDirectory "OliviaSoul-$version-Setup.exe") -ExpectedSha256 $setupHash
+
+# 反向断言：stage 里的 node_modules 不得残留测试专用目录（playwright/playwright-core）。
+# 上面复制后已删，这里再查一次 —— 排除清单若失效（例如目录改名、新增 devDependency），
+# 隐私门禁 package-safety.ps1 会拒整个构建，与其到时莫名失败，不如在这里直接点名。
+$devOnlyLeft = @(Get-ChildItem -LiteralPath (Join-Path $stage "app\node_modules") -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "playwright*" })
+if ($devOnlyLeft.Count -gt 0) { throw "打包 stage 里残留测试专用模块：$($devOnlyLeft.Name -join "; ")" }
+
 Step-Mark "copy-to-candidate"
 foreach ($name in @("使用说明.txt", "发布说明.md", "反馈指南.md", "API配置使用说明.md")) {
     $guideManifestValue = [string]$frozenReceipt.Manifest[$name]

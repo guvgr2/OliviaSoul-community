@@ -152,7 +152,13 @@ export async function withClientPatchRegistryLock(userData, run, { timeoutMs = 1
   while (!handle) {
     try { handle = await open(lockPath, "wx"); }
     catch (error) {
-      if (error.code !== "EEXIST") throw error;
+      // ★ 2026-10-19：原来只重试 EEXIST。实测（门禁默认并发 + 杀软在跑）`open(..., "wx")`
+      //   还会报 **EPERM**（共享冲突的一种表现），而 EPERM 直接抛出去就让「两个客户端并发注册」
+      //   这种正常场景失败。这把锁的语义是「本机互斥」，拿不到就等 —— 只有超时才叫问题。
+      //   EACCES/EBUSY 一并纳入，理由相同：都是「这会儿拿不到」，不是「永远拿不到」。
+      const retryable = error.code === "EEXIST" || error.code === "EPERM"
+        || error.code === "EACCES" || error.code === "EBUSY";
+      if (!retryable) throw error;
       if (Date.now() >= deadline) throw new Error("client patch registry is busy", { cause: error });
       await delay(10);
     }

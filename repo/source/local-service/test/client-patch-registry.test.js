@@ -1,7 +1,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -10,6 +10,7 @@ import {
   registerMountedClientPatch,
 } from "../desktop/client-patch-registry.js";
 import * as patchRegistry from "../desktop/client-patch-registry.js";
+import { cleanupDir, cleanupDirStrict } from "./lib/cleanup.mjs";
 
 const sha256 = value => createHash("sha256").update(value).digest("hex");
 
@@ -20,7 +21,7 @@ async function fixture(name = "a") {
     const target = resolve(root);
     if (dirname(target) !== tempRoot || !/^client-patch-registry-[A-Za-z0-9]+$/u.test(basename(target)))
       throw new Error("unsafe fixture cleanup target");
-    await rm(target, { recursive: true, force: true });
+    await cleanupDir(target);
   });
   const userData = join(root, "UserData");
   const clientRoot = join(root, `game-${name}`);
@@ -122,7 +123,7 @@ test("registration rejects a junction ancestor that escapes the selected client"
   const f = await fixture();
   const escaped = join(f.root, "escaped-resources");
   await mkdir(escaped, { recursive: true });
-  await rm(join(f.clientRoot, f.version, "resources"), { recursive: true });
+  await cleanupDirStrict(join(f.clientRoot, f.version, "resources"));
   await symlink(escaped, join(f.clientRoot, f.version, "resources"), "junction");
   for (const file of f.files) await writeFile(file.target, `escaped-${file.kind}-patched`);
   await assert.rejects(registerMountedClientPatch({

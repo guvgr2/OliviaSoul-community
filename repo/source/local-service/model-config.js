@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { isEncrypted, protectSecret, revealSecret, decodeConsoleText } from "./midi/secure-secret.js";
 
 export const DEFAULT_DEEPSEEK_PROFILE = Object.freeze({
   provider: "deepseek",
@@ -146,11 +148,114 @@ function serialize(config) {
   ].join("\n");
 }
 
+// ── 落盘加密（2026-10-19 数据安全审计）───────────────────────────────────────────────
+// 原来 `MODEL_DEEPSEEK_API_KEY=sk-...` 是**明文**写在 `<UserData>\.cursor\secrets\model.env` 里的。
+// 现在写盘前用 Windows DPAPI（CurrentUser）加密成 `dpapi-v1:<base64>`；读的时候解回来。
+// 对外行为不变（内存里仍是明文 apiKey），变的是**磁盘上没有明文密钥**。
+
+// 收紧 secrets 目录的 ACL：默认它继承了盘根的 `BUILTIN\Users:(RX)` / `Authenticated Users:(M)`
+// ⇒ 同机其他标准用户可以读（读到的是密文，价值不大），更麻烦的是**可以改写** `MODEL_*_BASE`
+// 这个明文公开字段，把你的信引到他的服务器上去。DPAPI 挡不住这种完整性攻击，ACL 才行。
+// 只授予：当前用户 + SYSTEM + Administrators。失败一律不阻断保存（先保证能用），但要留日志。
+// 幂等：目录已经保护过就走人，不重复起进程。
+const TIGHTEN_ACL_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+$d = $env:OLIVIA_SECRET_DIR
+$acl = Get-Acl -LiteralPath $d
+if ($acl.AreAccessRulesProtected) { 'ALREADY'; exit 0 }
+$backup = $acl
+try {
+  $acl.SetAccessRuleProtection($true, $false)
+  foreach ($r in @($acl.Access)) { if (-not $r.IsInherited) { [void]$acl.RemoveAccessRule($r) } }
+  $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+  foreach ($who in @($me, 'NT AUTHORITY\\SYSTEM', 'BUILTIN\\Administrators')) {
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($who, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+  }
+  Set-Acl -LiteralPath $d -AclObject $acl
+  $null = Get-ChildItem -LiteralPath $d -Force -ErrorAction Stop
+  'OK'
+} catch {
+  # 万一新 ACL 让自己都读不了，立刻把继承恢复回去 —— 宁可权限宽松，也不能让程序读不到自己的配置。
+  try { $backup.SetAccessRuleProtection($false, $true); Set-Acl -LiteralPath $d -AclObject $backup } catch {}
+  "FAILED: $($_.Exception.Message)"
+}
+`;
+
+function tightenSecretDirAcl(dir) {
+  if (process.platform !== "win32") return Promise.resolve();
+  return new Promise(resolve => {
+    execFile(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-Command", TIGHTEN_ACL_SCRIPT],
+      // 同上：PowerShell 的报错按 OEM 代码页写，按字节拿回来自己解，别让日志变乱码。
+      { encoding: "buffer", windowsHide: true, timeout: 20_000, env: { ...process.env, OLIVIA_SECRET_DIR: dir } },
+      (error, stdout, stderr) => {
+        const text = `${decodeConsoleText(stdout)}${decodeConsoleText(stderr)}`.trim();
+        if (error || /FAILED/u.test(text)) {
+          console.warn(`[model-config] 收紧 secrets 目录权限失败（不影响保存）：${text || error?.message || ""}`);
+        }
+        resolve();
+      },
+    );
+  });
+}
+
+/** 把内存里的明文密钥加密成落盘形态；DPAPI 不可用时**抛错**（绝不静默退回明文）。 */
+async function sealProfile(profile) {
+  const key = String(profile.apiKey ?? "");
+  if (!key || isEncrypted(key)) return { ...profile, apiKey: key };
+  try {
+    return { ...profile, apiKey: await protectSecret(key) };
+  } catch (error) {
+    throw new Error(`无法加密保存 API Key（本机 Windows DPAPI 不可用）：${error instanceof Error ? error.message : String(error)}。为避免把密钥明文写到磁盘，本次保存已拒绝。`);
+  }
+}
+
 async function persist(root, config) {
   const secrets = join(root, ".cursor", "secrets");
   await mkdir(secrets, { recursive: true });
-  await writeFile(join(secrets, "model.env"), serialize(config), "utf8");
+  // ① 写盘形态：密钥加密
+  const sealed = {
+    activeProvider: config.activeProvider,
+    profiles: {
+      deepseek: await sealProfile(config.profiles.deepseek),
+      local: await sealProfile(config.profiles.local),
+    },
+  };
+  // ② 原子写（tmp + rename）：半截文件会让下次启动读不到配置。
+  const target = join(secrets, "model.env");
+  const temporary = `${target}.tmp-${process.pid}`;
+  await writeFile(temporary, serialize(sealed), "utf8");
+  await rename(temporary, target);
+  // ③ 收紧目录权限（幂等、失败不阻断）
+  await tightenSecretDirAcl(secrets);
+  // ④ 返回**明文**配置：调用方要靠它构造 Authorization 头
   return config;
+}
+
+/**
+ * 老版本升级上来的兼容：把 model.env 里的**明文** Key 原地加密。
+ * 只在启动时调一次；没有明文就什么都不做（没有写入、没有进程）。
+ * DPAPI 不可用时只告警、**不删明文** —— 删了用户就再也用不了；
+ * 但新保存会被 persist() 拒绝（fail-closed），所以不会产生新的明文。
+ */
+export async function migratePlaintextSecrets({ root, log = () => {} }) {
+  const secrets = join(root, ".cursor", "secrets");
+  const file = join(secrets, "model.env");
+  const values = await readEnvFile(file);
+  const plain = ["MODEL_DEEPSEEK_API_KEY", "MODEL_LOCAL_API_KEY"]
+    .map(name => String(values[name] ?? "").trim())
+    .filter(value => value && !isEncrypted(value));
+  if (plain.length === 0) return { migrated: false, plaintext: 0 };
+  try {
+    const config = await readModelConfig({ root });
+    await persist(root, config);
+    log(`[model-config] 已把 ${plain.length} 个明文 API Key 加密（dpapi-v1）：${file}`);
+    return { migrated: true, plaintext: plain.length };
+  } catch (error) {
+    log(`[model-config] 明文 API Key 加密失败，本次保持原样（请在能运行 PowerShell 的环境重试）：${error instanceof Error ? error.message : error}`);
+    return { migrated: false, plaintext: plain.length, error: String(error?.message ?? error) };
+  }
 }
 
 export async function readModelConfig({ root, env = process.env }) {
@@ -160,13 +265,31 @@ export async function readModelConfig({ root, env = process.env }) {
     readEnvFile(join(secrets, "deepseek.env")),
   ]);
   const activeProvider = normalizeProvider(values.MODEL_ACTIVE_PROVIDER ?? "deepseek");
-  return {
+  const config = {
     activeProvider,
     profiles: {
       deepseek: persistedProfile("deepseek", values, legacy, env),
       local: persistedProfile("local", values, legacy, env),
     },
   };
+  // 密文的解一遍（revealSecret 内部按密文缓存，反复读不会反复起进程）。
+  for (const provider of ["deepseek", "local"]) {
+    const profile = config.profiles[provider];
+    if (isEncrypted(profile.apiKey)) {
+      try {
+        profile.apiKey = await revealSecret(profile.apiKey);
+        profile.keyConfigured = Boolean(profile.apiKey);
+      } catch (error) {
+        // 解不开（换了 Windows 账户 / 拷到别的机器）：当成「没配 Key」，由界面提示重填。
+        profile.apiKey = "";
+        profile.keyConfigured = false;
+        // 解不开的原因要能给人看：PowerShell 侧写的是 OEM 码页文本，必须按字节解回来
+        // （见 decodeConsoleText），否则界面上会是一整屏 `ʹá3á…`。
+        profile.keyError = decodeConsoleText(error instanceof Error ? error.message : String(error)).trim();
+      }
+    }
+  }
+  return config;
 }
 
 export async function resetModelConfig({ root }) {

@@ -4,6 +4,8 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createOliviaService } from "../server.js";
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 test("管理页 HTML、CSS 与 JS 每次升级后都重新读取", async t => {
   const root = await mkdtemp(join(tmpdir(), "olivia-admin-cache-"));
@@ -18,9 +20,9 @@ test("管理页 HTML、CSS 与 JS 每次升级后都重新读取", async t => {
   });
   t.after(async () => {
     await service.close();
-    await rm(root, { recursive: true, force: true });
+    await cleanupDir(root);
   });
-  const address = await service.listen(0, "127.0.0.1");
+  const address = await listenOnFetchablePort(service, "127.0.0.1");
 
   for (const pathname of ["/admin", "/admin/styles.css", "/admin/app.js", "/admin/song-editor.js"]) {
     const response = await fetch(`http://127.0.0.1:${address.port}${pathname}`);

@@ -16,10 +16,11 @@
 //      那一下绝不许自己滑回来（2026-10-08 第三轮真机反馈"我没点它，它自己从任务栏弹出来"）。
 // 行号会漂移，所以这里一律按「方法体 + 关键语句」断言，不按行号。
 import test from 'node:test';
+import { readSourceTextSync } from "./lib/read-source.mjs";
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 
-const source = readFileSync(new URL('../native-host/MainForm.cs', import.meta.url), 'utf8').replace(/\r/g, '');
+const source = readSourceTextSync(new URL('../native-host/MainForm.cs', import.meta.url)).replace(/\r/g, '');
 
 function method(name) {
   const lines = source.split('\n');

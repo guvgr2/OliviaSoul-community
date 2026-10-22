@@ -15,13 +15,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { cleanupDirSync } from "./lib/cleanup.mjs";
 
 import {
   DEFAULT_RULES,
@@ -126,7 +126,7 @@ after(() => {
       `测试污染了仓库里的真实文件：${relative}`,
     );
   }
-  for (const dir of TEMP_DIRS) rmSync(dir, { recursive: true, force: true });
+  for (const dir of TEMP_DIRS) cleanupDirSync(dir);
 });
 
 describe("规则表与单一来源", () => {

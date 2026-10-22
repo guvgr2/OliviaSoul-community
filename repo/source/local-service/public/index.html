@@ -61,7 +61,7 @@
 
           <details class="sideGroup" data-group="naming" open>
             <summary class="sideGroupTitle" data-tip="给曲库起名、设时段，以及试听与核对工具"><span>命名与试听</span><i class="sideGroupDot" hidden></i><i class="sideGroupChevron">▾</i></summary>
-            <button class="sideTab" type="button" data-tab="listen-naming" data-tip="曲名与时段：主要工作区 —— 听片段给曲库起名、标白天/傍晚/夜晚、批量命名表">曲名与时段</button>
+            <button class="sideTab" type="button" data-tab="listen-naming" data-tip="曲名与时段：主要工作区 —— 听片段给曲库起名、标白天/傍晚/夜晚、批量命名表、已命名作品改名纠错">曲名与时段</button>
             <button class="sideTab" type="button" data-tab="listen-tools" data-tip="试听工具：试听播放器 · 时段依据复核（能改时段）· 同款群核对">试听工具</button>
           </details>
 
@@ -94,6 +94,7 @@
             </summary>
             <ul class="guideMapList">
               <li><b>给曲库起名 / 标白天傍晚夜晚</b> → 「命名与试听 → <em>曲名与时段</em>」（主要工作区，第一次进去有「三步上手」）</li>
+              <li><b>曲名写错了要改</b> → 「曲名与时段 → <em>命名纠错</em>」：列出全部已命名的歌，每行右侧「修改命名」就地改（写库只补空位，已命名的名字只能在这里改）</li>
               <li><b>看官方曲目、改官方曲名与时段</b> → 「曲库与作品 → <em>官方作品</em>」</li>
               <li><b>先听一段再决定</b> → 「命名与试听 → <em>试听工具</em>」：试听播放器</li>
               <li><b>某个时段判定对不对 / 想改</b> → 「试听工具 → <em>时段依据复核</em>」：看画面与判定值，可「按画面判定重写」或手动指定</li>
@@ -204,6 +205,10 @@
                     </button>
                   </div>
                 </div>
+                <!-- ★ 2026-10-19 第四轮审查 N2：server 侧早就产出了 keyError（Key 解不开），
+                     但页面上没有任何消费方 ⇒ 隐私说明里那句「那时程序会提示你重新填 Key」是空头支票。
+                     解不开时把原因显示在这里。平时 hidden，不占版面。 -->
+                <p id="apiKeyError" class="keyErrorHint" role="status" hidden></p>
                 <label class="checkbox">
                   <input id="customModel" type="checkbox">
                   <span>自定义模型与地址</span>
@@ -267,6 +272,8 @@
                       </svg>
                     </button>
                   </div>
+                  <!-- 同上：本地档案解不开 Key 时的提示位 -->
+                  <p id="localApiKeyError" class="keyErrorHint" role="status" hidden></p>
                 </div>
               </div>
               <div class="actions">

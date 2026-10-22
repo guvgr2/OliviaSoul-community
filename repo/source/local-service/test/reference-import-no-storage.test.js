@@ -4,12 +4,14 @@ import {mkdtemp, mkdir, writeFile, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createOliviaService} from '../server.js';
+import { cleanupDir } from "./lib/cleanup.mjs";
+import { listenOnFetchablePort } from "./support/fetch-ports.js";
 
 test('reference library import succeeds without game storage path and never moves source', async t => {
   const root = await mkdtemp(join(tmpdir(), 'reference-no-storage-'));
   const service = await createOliviaService({root, dataDir:join(root,'data'), appData:join(root,'app'), runtimeDir:join(root,'runtime'), worker:false, runMemoryRefresh:false, midiDurationProbe:async()=>120000000, fetch:async()=>{throw Error('no network');}});
-  t.after(async()=>{await service.close(); await rm(root,{recursive:true,force:true});});
-  const {port} = await service.listen(0,'127.0.0.1');
+  t.after(async()=>{await service.close(); await cleanupDir(root);});
+  const {port} = await listenOnFetchablePort(service, "127.0.0.1");
   const json = async (path,body) => (await fetch(`http://127.0.0.1:${port}${path}`, body ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)} : {})).json();
   const library=join(root,'library'), song=join(library,'Song'); await mkdir(song,{recursive:true});
   const video=join(song,'DEFAULT.mp4'); await writeFile(video,'fixture');
